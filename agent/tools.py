@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from core.storage import (
@@ -12,7 +13,13 @@ from core.storage import (
     save_analysis_report,
 )
 from core.workflow import analyze_activity, import_fit
+from analysis.fatigue import analyze_fatigue_and_stability
 from analysis.indicators import INDICATOR_HANDLERS, indicator_catalog
+from analysis.intensity import analyze_intensity_distribution
+from analysis.quality import data_quality_from_analysis
+from analysis.recommendation import generate_training_recommendation
+from analysis.segments import detect_workout_segments
+from analysis.summary import get_activity_summary
 
 
 ToolHandler = Callable[[dict[str, Any]], Any]
@@ -27,8 +34,8 @@ def tool_catalog() -> dict[str, Any]:
         ),
         "categories": [
             {
-                "name": "activity_archive",
-                "description": "FIT 文件导入、归档、去重和本地活动索引。",
+                "name": "source_management",
+                "description": "数据导入和归档管理。通常由本地程序调用，模型需要导入新 FIT 时才使用。",
                 "tools": [
                     {
                         "name": "import_fit_file",
@@ -40,81 +47,26 @@ def tool_catalog() -> dict[str, Any]:
                         },
                         "returns": "activity row",
                     },
+                ],
+            },
+            {
+                "name": "history_records",
+                "description": "历史运动记录列表。每条活动只暴露基础摘要：时间、距离、卡路里、心率等。",
+                "tools": [
                     {
-                        "name": "list_activities",
-                        "description": "列出本地已归档活动，默认按开始时间倒序。",
+                        "name": "list_activity_history",
+                        "description": "列出本地活动历史摘要，不返回单次活动的详细时序或完整分析。",
                         "side_effect": False,
                         "params": {
                             "limit": {"type": "integer", "required": False, "default": 20},
                         },
-                        "returns": "activity rows",
-                    },
-                    {
-                        "name": "get_activity",
-                        "description": "读取单个活动的数据库摘要和 FIT 文件路径。",
-                        "side_effect": False,
-                        "params": {
-                            "activity_id": {"type": "integer|string", "required": True, "description": "活动 ID 或 latest"},
-                        },
-                        "returns": "activity row",
-                    },
-                ],
-            },
-            {
-                "name": "activity_raw_analysis",
-                "description": "单次活动的结构化原始分析数据。供模型分析使用，不包含训练建议。",
-                "tools": [
-                    {
-                        "name": "analyze_activity",
-                        "description": "解析 FIT 并计算详细原始指标，同时更新本地 activities.analysis_json。",
-                        "side_effect": True,
-                        "params": {
-                            "activity_id": {"type": "integer|string", "required": False, "default": "latest"},
-                            "make_plot": {"type": "boolean", "required": False, "default": True},
-                        },
-                        "returns": "summary, analysis, plot_path, report_path",
-                    },
-                    {
-                        "name": "get_activity_raw_analysis",
-                        "description": "返回 activity_raw_analysis.v1 结构，包含 activity/samples/laps/data_quality。",
-                        "side_effect": False,
-                        "params": {
-                            "activity_id": {"type": "integer|string", "required": False, "default": "latest"},
-                        },
-                        "returns": "llm_context object",
-                    },
-                    {
-                        "name": "get_activity_sample_statistics",
-                        "description": "只读取时序采样字段统计，如心率、功率、速度、海拔、温度。",
-                        "side_effect": False,
-                        "params": {
-                            "activity_id": {"type": "integer|string", "required": False, "default": "latest"},
-                        },
-                        "returns": "sample_statistics",
-                    },
-                    {
-                        "name": "get_activity_lap_summaries",
-                        "description": "只读取每圈摘要，适合模型比较前后半程或分段表现。",
-                        "side_effect": False,
-                        "params": {
-                            "activity_id": {"type": "integer|string", "required": False, "default": "latest"},
-                        },
-                        "returns": "lap_summaries",
-                    },
-                    {
-                        "name": "get_activity_data_quality",
-                        "description": "读取数据质量标记，例如零距离、功率全 0、超长测试活动。",
-                        "side_effect": False,
-                        "params": {
-                            "activity_id": {"type": "integer|string", "required": False, "default": "latest"},
-                        },
-                        "returns": "data_quality",
+                        "returns": "history summary rows",
                     },
                 ],
             },
             {
                 "name": "activity_indicators",
-                "description": "固定名称的单指标请求函数。模型需要哪个指标就调用对应 request_* 工具。",
+                "description": "低层指标请求函数。普通运动分析优先使用 activity_analysis_tools；只有明确询问单个指标时才调用 request_*。",
                 "tools": [
                     {
                         "name": "list_activity_indicators",
@@ -127,17 +79,67 @@ def tool_catalog() -> dict[str, Any]:
                 ],
             },
             {
-                "name": "training_history",
-                "description": "全局运动记录和近期训练历史。用于周总结、负荷趋势和计划上下文。",
+                "name": "activity_analysis_tools",
+                "description": "具体某一次活动的专业分析任务工具。普通表现分析、训练建议、结构判断优先使用这些工具。",
                 "tools": [
                     {
-                        "name": "get_recent_training_history",
-                        "description": "返回最近 N 天的活动列表和按运动类型聚合的训练总量。",
+                        "name": "get_activity_summary",
+                        "description": "返回活动基础摘要：时间、距离、速度、功率、心率、TSS、IF、VI、阈值配置等。",
+                        "side_effect": False,
+                        "params": _activity_id_params(),
+                        "returns": "activity summary",
+                    },
+                    {
+                        "name": "check_activity_data_quality",
+                        "description": "返回数据质量检查结果，说明是否有功率、心率、GPS、采样和异常限制。",
+                        "side_effect": False,
+                        "params": _activity_id_params(),
+                        "returns": "data quality report",
+                    },
+                    {
+                        "name": "analyze_intensity_distribution",
+                        "description": "分析功率区间、心率区间、高低强度占比和主要训练刺激。",
+                        "side_effect": False,
+                        "params": _activity_id_params(),
+                        "returns": "intensity distribution analysis",
+                    },
+                    {
+                        "name": "detect_workout_segments",
+                        "description": "按 10/30/60 秒分桶识别恢复、有氧、节奏、阈值、高强度、滑行/暂停等分段。",
                         "side_effect": False,
                         "params": {
-                            "days": {"type": "integer", "required": False, "default": 30},
+                            **_activity_id_params(),
+                            "bucket_seconds": {
+                                "type": "integer",
+                                "required": False,
+                                "default": 60,
+                                "enum": [10, 30, 60],
+                                "description": "按多少秒分桶。",
+                            },
                         },
-                        "returns": "history totals and activity rows",
+                        "returns": "workout segment analysis",
+                    },
+                    {
+                        "name": "analyze_fatigue_and_stability",
+                        "description": "分析前后半程功率/心率/踏频变化、心率漂移、有氧解耦和稳定性。",
+                        "side_effect": False,
+                        "params": _activity_id_params(),
+                        "returns": "fatigue and stability analysis",
+                    },
+                    {
+                        "name": "generate_training_recommendation",
+                        "description": "返回训练建议所需的结构化上下文、候选训练方向和限制条件；最终建议由大模型生成。",
+                        "side_effect": False,
+                        "params": {
+                            **_activity_id_params(),
+                            "goal": {
+                                "type": "string",
+                                "required": False,
+                                "default": "general_review",
+                                "description": "用户目标，如 general_review、base_endurance、ftp_improvement、vo2max、recovery、fat_loss。",
+                            },
+                        },
+                        "returns": "training recommendation context",
                     },
                 ],
             },
@@ -205,12 +207,19 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> Any:
     handlers: dict[str, ToolHandler] = {
         "import_fit_file": _import_fit_file,
         "list_activities": _list_activities,
+        "list_activity_history": _list_activity_history,
         "get_activity": _get_activity,
         "analyze_activity": _analyze_activity,
         "get_activity_raw_analysis": _get_activity_raw_analysis,
         "get_activity_sample_statistics": _get_activity_sample_statistics,
         "get_activity_lap_summaries": _get_activity_lap_summaries,
         "get_activity_data_quality": _get_activity_data_quality,
+        "get_activity_summary": _tool_get_activity_summary,
+        "check_activity_data_quality": _tool_check_activity_data_quality,
+        "analyze_intensity_distribution": _tool_analyze_intensity_distribution,
+        "detect_workout_segments": _tool_detect_workout_segments,
+        "analyze_fatigue_and_stability": _tool_analyze_fatigue_and_stability,
+        "generate_training_recommendation": _tool_generate_training_recommendation,
         "list_activity_indicators": _list_activity_indicators,
         **_indicator_handlers(),
         "get_recent_training_history": _get_recent_training_history,
@@ -248,6 +257,17 @@ def _list_activities(arguments: dict[str, Any]) -> list[dict[str, Any]]:
     return [_compact_activity(row) for row in list_activities(limit=int(arguments.get("limit", 20)))]
 
 
+def _list_activity_history(arguments: dict[str, Any]) -> dict[str, Any]:
+    limit = int(arguments.get("limit", 20))
+    rows = list_activities(limit=limit)
+    activities = [_history_activity(row) for row in rows]
+    return {
+        "schema_version": "activity_history.v1",
+        "limit": limit,
+        "activities": activities,
+    }
+
+
 def _get_activity(arguments: dict[str, Any]) -> dict[str, Any]:
     return get_activity(_resolve_activity_id(arguments.get("activity_id", "latest")))
 
@@ -277,6 +297,42 @@ def _get_activity_lap_summaries(arguments: dict[str, Any]) -> list[dict[str, Any
 def _get_activity_data_quality(arguments: dict[str, Any]) -> dict[str, Any]:
     analysis = _ensure_analysis(arguments.get("activity_id", "latest"))
     return analysis["data_quality"]
+
+
+def _tool_get_activity_summary(arguments: dict[str, Any]) -> dict[str, Any]:
+    analysis = _ensure_analysis(arguments.get("activity_id", "latest"))
+    return get_activity_summary(analysis)
+
+
+def _tool_check_activity_data_quality(arguments: dict[str, Any]) -> dict[str, Any]:
+    analysis = _ensure_analysis(arguments.get("activity_id", "latest"))
+    return data_quality_from_analysis(analysis)
+
+
+def _tool_analyze_intensity_distribution(arguments: dict[str, Any]) -> dict[str, Any]:
+    analysis = _ensure_analysis(arguments.get("activity_id", "latest"))
+    return analyze_intensity_distribution(analysis)
+
+
+def _tool_detect_workout_segments(arguments: dict[str, Any]) -> dict[str, Any]:
+    analysis = _ensure_analysis(arguments.get("activity_id", "latest"))
+    return detect_workout_segments(
+        analysis,
+        bucket_seconds=int(arguments.get("bucket_seconds", 60)),
+    )
+
+
+def _tool_analyze_fatigue_and_stability(arguments: dict[str, Any]) -> dict[str, Any]:
+    analysis = _ensure_analysis(arguments.get("activity_id", "latest"))
+    return analyze_fatigue_and_stability(analysis)
+
+
+def _tool_generate_training_recommendation(arguments: dict[str, Any]) -> dict[str, Any]:
+    analysis = _ensure_analysis(arguments.get("activity_id", "latest"))
+    return generate_training_recommendation(
+        analysis,
+        goal=str(arguments.get("goal") or "general_review"),
+    )
 
 
 def _list_activity_indicators(arguments: dict[str, Any]) -> list[dict[str, str]]:
@@ -315,6 +371,47 @@ def _compact_activity(row: dict[str, Any]) -> dict[str, Any]:
         "fit_path": row.get("fit_path"),
         "has_summary": bool(row.get("summary_json")),
         "has_analysis": bool(row.get("analysis_json")),
+    }
+
+
+def _history_activity(row: dict[str, Any]) -> dict[str, Any]:
+    analysis = _loads_json(row.get("analysis_json")) or {}
+    activity_metrics = analysis.get("activity_metrics", {})
+    return {
+        "activity_id": row.get("id"),
+        "sport_type": row.get("sport_type"),
+        "start_time": row.get("start_time"),
+        "duration_s": row.get("duration_s"),
+        "distance_m": row.get("distance_m"),
+        "distance_km": _round_or_none((row.get("distance_m") or 0) / 1000, 3)
+        if row.get("distance_m") is not None
+        else None,
+        "calories": activity_metrics.get("calories"),
+        "average_heart_rate": activity_metrics.get("avg_hr"),
+        "max_heart_rate": activity_metrics.get("max_hr"),
+        "has_analysis": bool(row.get("analysis_json")),
+    }
+
+
+def _loads_json(value: str | None) -> dict[str, Any] | None:
+    if not value:
+        return None
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _round_or_none(value: float | None, digits: int) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), digits)
+
+
+def _activity_id_params() -> dict[str, Any]:
+    return {
+        "activity_id": {"type": "integer|string", "required": False, "default": "latest"},
     }
 
 

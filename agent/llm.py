@@ -29,8 +29,8 @@ class AnthropicMessagesClient:
     def create_message(
         self,
         *,
-        system: str,
-        user: str,
+        system: str | None = None,
+        user: str | list[dict[str, Any]],
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> dict[str, Any]:
@@ -38,32 +38,17 @@ class AnthropicMessagesClient:
             "model": self.model,
             "max_tokens": max_tokens or self.config["max_tokens"],
             "temperature": self.config["temperature"] if temperature is None else temperature,
-            "system": system,
             "messages": [{"role": "user", "content": user}],
         }
+        if system:
+            payload["system"] = system
         return self._post_messages(payload)
 
     def build_message_payload(
         self,
         *,
-        system: str,
-        user: str,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-    ) -> dict[str, Any]:
-        return {
-            "model": self.model,
-            "max_tokens": max_tokens or self.config["max_tokens"],
-            "temperature": self.config["temperature"] if temperature is None else temperature,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }
-
-    def create_messages(
-        self,
-        *,
-        system: str,
-        messages: list[dict[str, str]],
+        system: str | None = None,
+        user: str | list[dict[str, Any]],
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> dict[str, Any]:
@@ -71,26 +56,47 @@ class AnthropicMessagesClient:
             "model": self.model,
             "max_tokens": max_tokens or self.config["max_tokens"],
             "temperature": self.config["temperature"] if temperature is None else temperature,
-            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if system:
+            payload["system"] = system
+        return payload
+
+    def create_messages(
+        self,
+        *,
+        system: str | None = None,
+        messages: list[dict[str, Any]],
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "model": self.model,
+            "max_tokens": max_tokens or self.config["max_tokens"],
+            "temperature": self.config["temperature"] if temperature is None else temperature,
             "messages": messages,
         }
+        if system:
+            payload["system"] = system
         return self._post_messages(payload)
 
     def build_messages_payload(
         self,
         *,
-        system: str,
-        messages: list[dict[str, str]],
+        system: str | None = None,
+        messages: list[dict[str, Any]],
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "model": self.model,
             "max_tokens": max_tokens or self.config["max_tokens"],
             "temperature": self.config["temperature"] if temperature is None else temperature,
-            "system": system,
             "messages": messages,
         }
+        if system:
+            payload["system"] = system
+        return payload
 
     def _post_messages(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = Request(

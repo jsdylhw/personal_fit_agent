@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Personal FIT Agent</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-title">Personal FIT Agent</div>
+          <div class="brand-subtitle">本地运动分析</div>
+        </div>
+        <div class="toolbar">
+          <button id="refreshBtn" class="icon-button" title="刷新活动列表">↻</button>
+          <button id="analyzeBtn" class="text-button">重新分析</button>
+        </div>
+        <div id="activityList" class="activity-list"></div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1 id="activityTitle">选择活动</h1>
+            <p id="activityMeta">从左侧选择一条 FIT 活动。</p>
+          </div>
+          <div id="status" class="status">ready</div>
+        </header>
+
+        <section class="metrics-grid" id="summaryGrid"></section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>活动分析</h2>
+            <div class="tabs">
+              <button class="tab active" data-tab="quality">质量</button>
+              <button class="tab" data-tab="intensity">强度</button>
+              <button class="tab" data-tab="segments">分段</button>
+              <button class="tab" data-tab="fatigue">稳定性</button>
+              <button class="tab" data-tab="reports">报告</button>
+              <button class="tab" data-tab="raw">数据</button>
+            </div>
+          </div>
+          <div id="tabContent" class="tab-content"></div>
+        </section>
+      </main>
+
+      <aside class="chat-panel">
+        <div class="chat-header">
+          <h2>活动对话</h2>
+          <label class="save-toggle">
+            <input id="saveReport" type="checkbox" />
+            保存报告
+          </label>
+        </div>
+        <div id="chatLog" class="chat-log"></div>
+        <form id="chatForm" class="chat-form">
+          <textarea id="questionInput" rows="4" placeholder="例如：分析这次骑行，并给下一次训练建议"></textarea>
+          <button type="submit" class="primary-button">发送</button>
+        </form>
+      </aside>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -722,7 +722,23 @@
     ]
   },
   "data_quality": {
+    "schema_version": "activity_data_quality.v1",
     "record_count": 1374,
+    "quality_score": 95,
+    "confidence": "high",
+    "has_power": true,
+    "has_heart_rate": true,
+    "has_speed": true,
+    "has_cadence": true,
+    "has_altitude": true,
+    "has_gps": true,
+    "sampling": {
+      "available": true,
+      "median_interval_seconds": 1.0,
+      "max_gap_seconds": 56.0,
+      "issue": "large_sampling_gap",
+      "message": "最大采样间隔约 56 秒，可能存在暂停或数据缺口。"
+    },
     "available_columns": [
       "accumulated_power",
       "cadence",
@@ -749,7 +765,25 @@
       "unknown_144",
       "unknown_90"
     ],
-    "flags": []
+    "flags": [
+      "large_sampling_gap"
+    ],
+    "issues": [
+      {
+        "type": "large_sampling_gap",
+        "severity": "low",
+        "message": "最大采样间隔约 56 秒，可能存在暂停或数据缺口。"
+      }
+    ],
+    "usable_for": [
+      "power_analysis",
+      "heart_rate_analysis",
+      "speed_or_pace_analysis",
+      "gps_route_analysis",
+      "elevation_analysis",
+      "cadence_analysis"
+    ],
+    "not_recommended_for": []
   }
 }
 ```

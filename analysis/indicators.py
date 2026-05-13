@@ -118,35 +118,34 @@ def get_time_series_summary(analysis: dict[str, Any], bucket_seconds: int = 60) 
         "enhanced_speed": "speed_mps",
         "speed": "speed_mps",
     }
-    buckets: list[dict[str, Any]] = []
+    series: dict[str, list[Any]] = {
+        "t": [],
+        "heart_rate_bpm": [],
+        "power_w": [],
+        "cadence_rpm": [],
+        "speed_mps": [],
+        "distance_delta_m": [],
+    }
     for bucket_index, group in df.groupby("bucket_index", sort=True):
         start_s = int(bucket_index) * bucket_seconds
-        item: dict[str, Any] = {
-            "start_s": start_s,
-            "end_s": start_s + bucket_seconds,
-            "sample_count": int(len(group)),
-        }
+        series["t"].append(start_s)
+        values: dict[str, Any] = {}
         for source_field, output_name in fields.items():
-            if source_field not in group.columns or output_name in item:
+            if source_field not in group.columns or output_name in values:
                 continue
-            stats = _bucket_stats(group[source_field])
-            if stats:
-                item[output_name] = stats
+            value = _bucket_avg(group[source_field])
+            if value is not None:
+                values[output_name] = value
         if "distance" in group.columns:
             distance = pd.to_numeric(group["distance"], errors="coerce").dropna()
             if not distance.empty:
-                item["distance_m"] = {
-                    "start": float(distance.iloc[0]),
-                    "end": float(distance.iloc[-1]),
-                    "delta": float(distance.iloc[-1] - distance.iloc[0]),
-                }
-        buckets.append(item)
+                values["distance_delta_m"] = round(float(distance.iloc[-1] - distance.iloc[0]), 1)
+        for key in ["heart_rate_bpm", "power_w", "cadence_rpm", "speed_mps", "distance_delta_m"]:
+            series[key].append(values.get(key))
 
     return {
         "bucket_seconds": bucket_seconds,
-        "bucket_count": len(buckets),
-        "fields": ["heart_rate_bpm", "power_w", "cadence_rpm", "speed_mps", "distance_m"],
-        "buckets": buckets,
+        "series": series,
     }
 
 
@@ -196,12 +195,8 @@ def _normalize_bucket_seconds(value: int) -> int:
     return value
 
 
-def _bucket_stats(series: pd.Series) -> dict[str, Any] | None:
+def _bucket_avg(series: pd.Series) -> float | None:
     numeric = pd.to_numeric(series, errors="coerce").dropna()
     if numeric.empty:
         return None
-    return {
-        "avg": float(numeric.mean()),
-        "min": float(numeric.min()),
-        "max": float(numeric.max()),
-    }
+    return round(float(numeric.mean()), 1)
