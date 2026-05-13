@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import socket
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -15,11 +17,11 @@ class AnthropicMessagesClient:
         self.api_key = str(self.config.get("api_key") or "")
         self.model = str(self.config.get("model") or "")
         if not self.base_url:
-            raise RuntimeError("请在 config.yaml 配置 agent.base_url")
+            raise RuntimeError("Please set agent.base_url in config.yaml")
         if not self.api_key:
-            raise RuntimeError("请在 config.yaml 配置 agent.api_key")
+            raise RuntimeError("Please set agent.api_key in config.yaml")
         if not self.model:
-            raise RuntimeError("请在 config.yaml 配置 agent.model")
+            raise RuntimeError("Please set agent.model in config.yaml")
 
     def _messages_url(self) -> str:
         if self.base_url.endswith("/v1/messages"):
@@ -109,14 +111,29 @@ class AnthropicMessagesClient:
             },
             method="POST",
         )
-        try:
-            with urlopen(request, timeout=120) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"LLM 请求失败: HTTP {exc.code}; body={body[:1000]}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"LLM 请求失败: {exc.reason}") from exc
+        timeout = float(self.config.get("timeout_seconds") or 300)
+        max_retries = max(1, int(self.config.get("max_retries") or 1))
+        last_error: BaseException | None = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                with urlopen(request, timeout=timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"LLM request failed: HTTP {exc.code}; body={body[:1000]}") from exc
+            except (TimeoutError, socket.timeout) as exc:
+                last_error = exc
+            except URLError as exc:
+                last_error = exc
+
+            if attempt < max_retries:
+                time.sleep(min(2 * attempt, 10))
+
+        raise RuntimeError(
+            f"LLM request timed out or failed after {max_retries} attempt(s); "
+            f"timeout_seconds={timeout}; error={last_error}"
+        ) from last_error
 
 
 def extract_text(message: dict[str, Any]) -> str:

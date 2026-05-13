@@ -1,27 +1,36 @@
 const state = {
-  activities: [],
-  selectedId: null,
-  detail: null,
-  tab: "quality",
+  files: [],
+  selectedPath: null,
 };
 
 const els = {
-  activityList: document.getElementById("activityList"),
-  activityTitle: document.getElementById("activityTitle"),
-  activityMeta: document.getElementById("activityMeta"),
-  summaryGrid: document.getElementById("summaryGrid"),
-  tabContent: document.getElementById("tabContent"),
   status: document.getElementById("status"),
+  fitDir: document.getElementById("fitDir"),
+  fitList: document.getElementById("fitList"),
+  detailTitle: document.getElementById("detailTitle"),
+  detailMeta: document.getElementById("detailMeta"),
+  summaryGrid: document.getElementById("summaryGrid"),
+  stravaSummary: document.getElementById("stravaSummary"),
+  reportText: document.getElementById("reportText"),
+  log: document.getElementById("log"),
+  connectGarminBtn: document.getElementById("connectGarminBtn"),
+  downloadCount: document.getElementById("downloadCount"),
+  downloadBtn: document.getElementById("downloadBtn"),
   refreshBtn: document.getElementById("refreshBtn"),
+  batchAnalyzeBtn: document.getElementById("batchAnalyzeBtn"),
   analyzeBtn: document.getElementById("analyzeBtn"),
-  chatLog: document.getElementById("chatLog"),
-  chatForm: document.getElementById("chatForm"),
-  questionInput: document.getElementById("questionInput"),
-  saveReport: document.getElementById("saveReport"),
+  viewReportBtn: document.getElementById("viewReportBtn"),
+  uploadStravaBtn: document.getElementById("uploadStravaBtn"),
 };
 
 function setStatus(text) {
   els.status.textContent = text;
+}
+
+function log(message, data) {
+  const time = new Date().toLocaleTimeString();
+  const suffix = data ? `\n${JSON.stringify(data, null, 2)}` : "";
+  els.log.textContent = `[${time}] ${message}${suffix}\n\n${els.log.textContent}`;
 }
 
 async function fetchJson(url, options = {}) {
@@ -31,275 +40,235 @@ async function fetchJson(url, options = {}) {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 300)}`);
+    throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 600)}`);
   }
   return response.json();
 }
 
-async function loadActivities() {
-  setStatus("loading activities");
-  const data = await fetchJson("/api/activities?limit=50");
-  state.activities = data.activities || [];
-  renderActivityList();
-  if (!state.selectedId && state.activities.length) {
-    await selectActivity(state.activities[0].id);
+async function refreshFiles() {
+  setStatus("读取本地 FIT");
+  const data = await fetchJson("/api/fit-files");
+  state.files = data.files || [];
+  els.fitDir.textContent = data.fit_dir || "";
+  renderList();
+  if (state.files.length && !state.files.some((file) => file.path === state.selectedPath)) {
+    state.selectedPath = state.files[0].path;
   }
-  setStatus("ready");
+  renderDetail();
+  setStatus("准备就绪");
 }
 
-function renderActivityList() {
-  if (!state.activities.length) {
-    els.activityList.innerHTML = `<div class="empty">还没有活动。先用 CLI 导入 FIT。</div>`;
+function renderList() {
+  if (!state.files.length) {
+    els.fitList.innerHTML = `<div class="empty">还没有本地 FIT。先连接 Garmin 并下载最近活动。</div>`;
     return;
   }
-  els.activityList.innerHTML = state.activities
-    .map((activity) => {
-      const active = Number(activity.id) === Number(state.selectedId) ? " active" : "";
-      const distance = activity.distance_m ? `${(activity.distance_m / 1000).toFixed(2)} km` : "无距离";
-      const duration = activity.duration_s ? `${Math.round(activity.duration_s / 60)} min` : "无时长";
+
+  els.fitList.innerHTML = state.files
+    .map((file) => {
+      const display = file.display_summary || {};
+      const active = file.path === state.selectedPath ? " active" : "";
+      const badge = file.has_summary ? "已分析" : "未分析";
+      const label = display.summary_label ? ` · ${display.summary_label}` : "";
       return `
-        <button class="activity-item${active}" data-id="${activity.id}">
-          <div class="activity-name">${escapeHtml(activity.file_name || `Activity ${activity.id}`)}</div>
-          <div class="activity-detail">#${activity.id} · ${escapeHtml(activity.sport_type || "unknown")} · ${distance} · ${duration}</div>
-          <div class="activity-detail">${escapeHtml(activity.start_time || "")}</div>
+        <button class="fit-item${active}" data-path="${escapeAttr(file.path)}">
+          <span class="fit-name">${escapeHtml(file.name)}</span>
+          <span class="fit-meta">${escapeHtml(formatDate(display.start_time))} ${formatKm(display.distance_km)} ${formatMin(display.duration_min)}${escapeHtml(label)}</span>
+          <span class="badge ${file.has_summary ? "done" : ""}">${badge}</span>
         </button>
       `;
     })
     .join("");
-  document.querySelectorAll(".activity-item").forEach((button) => {
-    button.addEventListener("click", () => selectActivity(button.dataset.id));
+
+  document.querySelectorAll(".fit-item").forEach((button) => {
+    button.addEventListener("click", () => selectFile(button.dataset.path));
   });
 }
 
-async function selectActivity(id) {
-  state.selectedId = id;
-  renderActivityList();
-  setStatus(`loading activity ${id}`);
-  state.detail = await fetchJson(`/api/activities/${id}`);
+function selectFile(path) {
+  state.selectedPath = path;
+  renderList();
   renderDetail();
-  setStatus("ready");
+}
+
+function selectedFile() {
+  return state.files.find((file) => file.path === state.selectedPath) || null;
 }
 
 function renderDetail() {
-  const detail = state.detail;
-  if (!detail) return;
-  const activity = detail.activity;
-  const summary = detail.summary || {};
-  els.activityTitle.textContent = activity.file_name || `Activity ${activity.id}`;
-  els.activityMeta.textContent = `#${activity.id} · ${activity.sport_type || "unknown"} · ${activity.start_time || ""}`;
-  renderSummary(summary);
-  renderTab();
+  const file = selectedFile();
+  if (!file) {
+    els.detailTitle.textContent = "选择一个 FIT 文件";
+    els.detailMeta.textContent = "";
+    els.summaryGrid.innerHTML = "";
+    els.stravaSummary.textContent = "分析后会显示。";
+    els.reportText.textContent = "点击“查看报告”后显示。";
+    setActionButtons(false);
+    return;
+  }
+
+  const display = file.display_summary || {};
+  els.detailTitle.textContent = file.name;
+  els.detailMeta.textContent = [
+    display.sport_type || "unknown",
+    display.sub_sport,
+    formatDate(display.start_time),
+  ].filter(Boolean).join(" · ");
+  els.stravaSummary.textContent = file.strava_summary || display.brief || "还没有分析结果。";
+  renderSummary(display, file);
+  setActionButtons(true);
 }
 
-function renderSummary(summary) {
+function renderSummary(display, file) {
   const items = [
-    ["时间", summary.duration_min ? `${summary.duration_min} min` : "-"],
-    ["距离", summary.distance_km ? `${summary.distance_km} km` : "-"],
-    ["均速", summary.average_speed_kmh ? `${summary.average_speed_kmh} km/h` : "-"],
-    ["功率", summary.average_power ? `${summary.average_power} W` : "-"],
-    ["NP", summary.normalized_power ? `${summary.normalized_power} W` : "-"],
-    ["心率", summary.average_heart_rate ? `${summary.average_heart_rate} bpm` : "-"],
-    ["IF", summary.intensity_factor ?? "-"],
-    ["TSS", summary.tss ?? "-"],
+    ["状态", file.has_summary ? "已分析" : "未分析"],
+    ["开始时间", formatDate(display.start_time)],
+    ["距离", formatKm(display.distance_km)],
+    ["时长", formatMin(display.duration_min)],
+    ["训练刺激", display.main_stimulus || "-"],
+    ["训练负荷", display.training_load || "-"],
+    ["活动标签", display.summary_label || "-"],
+    ["口吻", file.strava_summary_tone?.name || "-"],
   ];
   els.summaryGrid.innerHTML = items
-    .map(([label, value]) => `
+    .map(([label, val]) => `
       <div class="metric">
-        <div class="metric-label">${label}</div>
-        <div class="metric-value">${value}</div>
+        <div class="metric-label">${escapeHtml(label)}</div>
+        <div class="metric-value">${escapeHtml(val)}</div>
       </div>
     `)
     .join("");
 }
 
-function renderTab() {
-  document.querySelectorAll(".tab").forEach((button) => {
-    button.classList.toggle("active", button.dataset.tab === state.tab);
-  });
-  const detail = state.detail || {};
-  if (state.tab === "quality") {
-    renderQuality(detail.data_quality);
-  } else if (state.tab === "intensity") {
-    renderIntensity(detail.intensity_distribution);
-  } else if (state.tab === "segments") {
-    renderSegments(detail.workout_segments);
-  } else if (state.tab === "fatigue") {
-    renderFatigue(detail.fatigue_and_stability);
-  } else if (state.tab === "reports") {
-    renderReports(detail.reports || []);
-  } else {
-    renderRaw(detail);
+function setActionButtons(enabled) {
+  els.analyzeBtn.disabled = !enabled;
+  els.viewReportBtn.disabled = !enabled;
+  els.uploadStravaBtn.disabled = !enabled;
+}
+
+async function connectGarmin() {
+  setStatus("连接 Garmin");
+  try {
+    const result = await fetchJson("/api/garmin/connect", { method: "POST", body: "{}" });
+    log("Garmin 连接成功", result);
+    setStatus("Garmin 已连接");
+  } catch (error) {
+    log("Garmin 连接失败", { error: error.message });
+    setStatus("连接失败");
   }
 }
 
-function renderQuality(data = {}) {
-  const rows = [
-    ["质量评分", data.quality_score],
-    ["置信度", data.confidence],
-    ["功率", yesNo(data.has_power)],
-    ["心率", yesNo(data.has_heart_rate)],
-    ["速度", yesNo(data.has_speed)],
-    ["踏频", yesNo(data.has_cadence)],
-    ["GPS", yesNo(data.has_gps)],
-    ["采样间隔", data.sampling ? `${data.sampling.median_interval_seconds}s / max ${data.sampling.max_gap_seconds}s` : "-"],
-  ];
-  els.tabContent.innerHTML = table(rows) + issuesBlock(data.issues || []);
-}
-
-function renderIntensity(data = {}) {
-  const power = data.power_zones?.fractions || {};
-  const hr = data.heart_rate_zones?.fractions || {};
-  const rows = [
-    ["主要刺激", data.main_stimulus],
-    ["强度标签", data.intensity_label],
-    ["FTP", data.thresholds?.functional_threshold_power],
-    ["最大心率", data.thresholds?.max_heart_rate],
-  ];
-  els.tabContent.innerHTML = `
-    ${table(rows)}
-    <h3>功率区间</h3>
-    ${zoneTable(power, data.power_zones?.seconds_estimate)}
-    <h3>心率区间</h3>
-    ${zoneTable(hr, data.heart_rate_zones?.seconds_estimate)}
-  `;
-}
-
-function renderSegments(data = {}) {
-  const segments = data.segments || [];
-  if (!segments.length) {
-    els.tabContent.innerHTML = `<div class="empty">没有分段数据。</div>`;
-    return;
+async function downloadRecent() {
+  const count = Number(els.downloadCount.value || 5);
+  setStatus("下载中");
+  try {
+    const result = await fetchJson("/api/garmin/download", {
+      method: "POST",
+      body: JSON.stringify({ count }),
+    });
+    log("下载完成", result);
+    await refreshFiles();
+  } catch (error) {
+    log("下载失败", { error: error.message });
+    setStatus("下载失败");
   }
-  const rows = segments.map((s) => [
-    `${s.start_min}-${s.end_min} min`,
-    s.type,
-    `${s.duration_seconds}s`,
-    valueWithUnit(s.avg_power, "W"),
-    valueWithUnit(s.avg_heart_rate, "bpm"),
-    valueWithUnit(s.avg_cadence, "rpm"),
-  ]);
-  els.tabContent.innerHTML = `<p>${escapeHtml(data.structure_label || "")}</p>` + table(rows, ["时间", "类型", "时长", "功率", "心率", "踏频"]);
-}
-
-function renderFatigue(data = {}) {
-  const metrics = data.metrics || {};
-  const rows = [
-    ["功率变化", percent(metrics.power_change_percent)],
-    ["速度变化", percent(metrics.speed_change_percent)],
-    ["心率变化", valueWithUnit(metrics.heart_rate_change_bpm, "bpm")],
-    ["踏频变化", valueWithUnit(metrics.cadence_change_rpm, "rpm")],
-    ["HR/功率解耦", percent(metrics.hr_power_decoupling_percent)],
-    ["VI", metrics.variability_index],
-  ];
-  els.tabContent.innerHTML = `
-    ${table(rows)}
-    <h3>解释限制</h3>
-    ${(data.caveats || []).map((item) => `<p>${escapeHtml(item)}</p>`).join("") || "<p>无</p>"}
-  `;
-}
-
-function renderReports(reports) {
-  if (!reports.length) {
-    els.tabContent.innerHTML = `<div class="empty">还没有保存的大模型报告。勾选“保存报告”后发起对话可写入这里。</div>`;
-    return;
-  }
-  els.tabContent.innerHTML = reports
-    .map((report) => `
-      <div class="report-block">
-        <h3>#${report.id} · ${escapeHtml(report.report_type)} · ${escapeHtml(report.created_at)}</h3>
-        <pre class="report-block">${escapeHtml(report.markdown || "")}</pre>
-      </div>
-    `)
-    .join("");
-}
-
-function renderRaw(detail) {
-  els.tabContent.innerHTML = `<pre class="code-block">${escapeHtml(JSON.stringify(detail, null, 2))}</pre>`;
 }
 
 async function analyzeSelected() {
-  if (!state.selectedId) return;
-  setStatus("analyzing");
-  await fetchJson(`/api/activities/${state.selectedId}/analyze`, { method: "POST", body: "{}" });
-  await selectActivity(state.selectedId);
-  setStatus("analysis updated");
-}
-
-async function sendQuestion(event) {
-  event.preventDefault();
-  if (!state.selectedId) return;
-  const question = els.questionInput.value.trim();
-  if (!question) return;
-  appendMessage(question, "user");
-  els.questionInput.value = "";
-  setStatus("chatting");
+  const file = selectedFile();
+  if (!file) return;
+  setStatus("大模型分析中");
   try {
-    const result = await fetchJson("/api/chat/activity", {
+    const result = await fetchJson("/api/fit-files/analyze", {
       method: "POST",
-      body: JSON.stringify({
-        question,
-        activity_id: state.selectedId,
-        history_days: 30,
-        save_report: els.saveReport.checked,
-      }),
+      body: JSON.stringify({ path: file.path, history: true, force: true }),
     });
-    appendMessage(result.answer || "(empty)", "assistant");
-    if (els.saveReport.checked) {
-      await selectActivity(state.selectedId);
-    }
-    setStatus("ready");
+    log("分析完成", {
+      summary_path: result.summary_path,
+      report_path: result.report_path,
+      tone: result.strava_summary_tone,
+    });
+    await refreshFiles();
+    state.selectedPath = file.path;
+    renderList();
+    renderDetail();
   } catch (error) {
-    appendMessage(error.message, "error");
-    setStatus("error");
+    log("分析失败", { error: error.message });
+    setStatus("分析失败");
   }
 }
 
-function appendMessage(text, type) {
-  const div = document.createElement("div");
-  div.className = `message ${type}`;
-  div.textContent = text;
-  els.chatLog.appendChild(div);
-  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+async function batchAnalyze() {
+  setStatus("批量分析中");
+  try {
+    const result = await fetchJson("/api/fit-files/analyze-folder", {
+      method: "POST",
+      body: JSON.stringify({ history: true, force: false }),
+    });
+    log("批量分析完成", result);
+    await refreshFiles();
+  } catch (error) {
+    log("批量分析失败", { error: error.message });
+    setStatus("批量分析失败");
+  }
 }
 
-function table(rows, headers = ["项目", "值"]) {
-  const head = headers.map((item) => `<th>${escapeHtml(item)}</th>`).join("");
-  const body = rows
-    .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(format(cell))}</td>`).join("")}</tr>`)
-    .join("");
-  return `<table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+async function viewReport() {
+  const file = selectedFile();
+  if (!file || !file.report_path) {
+    els.reportText.textContent = "还没有报告，请先分析。";
+    return;
+  }
+  setStatus("读取报告");
+  try {
+    const response = await fetch(`/api/report?path=${encodeURIComponent(file.report_path)}`);
+    if (!response.ok) throw new Error(await response.text());
+    els.reportText.textContent = await response.text();
+    setStatus("准备就绪");
+  } catch (error) {
+    els.reportText.textContent = error.message;
+    setStatus("读取报告失败");
+  }
 }
 
-function zoneTable(fractions = {}, seconds = {}) {
-  const rows = Object.keys(fractions).map((key) => [
-    key,
-    `${(Number(fractions[key]) * 100).toFixed(1)}%`,
-    seconds?.[key] ? `${seconds[key]}s` : "-",
-  ]);
-  return table(rows, ["区间", "比例", "估算时长"]);
+async function uploadStrava() {
+  const file = selectedFile();
+  if (!file || !file.summary_path) {
+    log("上传失败", { error: "还没有 summary，请先分析。" });
+    return;
+  }
+  setStatus("上传 Strava");
+  try {
+    const result = await fetchJson("/api/strava/upload", {
+      method: "POST",
+      body: JSON.stringify({ summary_path: file.summary_path, wait: true }),
+    });
+    log("Strava 上传完成", result);
+    setStatus("上传完成");
+  } catch (error) {
+    log("Strava 上传失败", { error: error.message });
+    setStatus("上传失败");
+  }
 }
 
-function issuesBlock(issues) {
-  if (!issues.length) return "";
-  return `<h3>问题</h3>` + issues.map((item) => `<p>${escapeHtml(item.severity)} · ${escapeHtml(item.message)}</p>`).join("");
+function formatDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
-function yesNo(value) {
-  return value ? "有" : "无";
+function formatKm(value) {
+  return value === null || value === undefined ? "-" : `${Number(value).toFixed(2)} km`;
 }
 
-function valueWithUnit(value, unit) {
-  return value === null || value === undefined ? "-" : `${value} ${unit}`;
-}
-
-function percent(value) {
-  return value === null || value === undefined ? "-" : `${value}%`;
-}
-
-function format(value) {
-  if (value === null || value === undefined) return "-";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
+function formatMin(value) {
+  return value === null || value === undefined ? "-" : `${Number(value).toFixed(1)} min`;
 }
 
 function escapeHtml(value) {
@@ -311,17 +280,19 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-els.refreshBtn.addEventListener("click", loadActivities);
-els.analyzeBtn.addEventListener("click", analyzeSelected);
-els.chatForm.addEventListener("submit", sendQuestion);
-document.querySelectorAll(".tab").forEach((button) => {
-  button.addEventListener("click", () => {
-    state.tab = button.dataset.tab;
-    renderTab();
-  });
-});
+function escapeAttr(value) {
+  return escapeHtml(value);
+}
 
-loadActivities().catch((error) => {
-  setStatus("error");
-  els.activityList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+els.connectGarminBtn.addEventListener("click", connectGarmin);
+els.downloadBtn.addEventListener("click", downloadRecent);
+els.refreshBtn.addEventListener("click", refreshFiles);
+els.batchAnalyzeBtn.addEventListener("click", batchAnalyze);
+els.analyzeBtn.addEventListener("click", analyzeSelected);
+els.viewReportBtn.addEventListener("click", viewReport);
+els.uploadStravaBtn.addEventListener("click", uploadStrava);
+
+refreshFiles().catch((error) => {
+  log("初始化失败", { error: error.message });
+  setStatus("初始化失败");
 });

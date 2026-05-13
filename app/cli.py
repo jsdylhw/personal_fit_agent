@@ -5,8 +5,14 @@ import typer
 from agent.chat import ActivityChatSession, chat, preview_chat_payload
 from agent.tool_loop import run_tool_loop
 from agent.tools import call_tool, tool_catalog
+from core.file_workflow import analyze_fit_file, analyze_fit_folder
 from core.storage import list_activities
+from core.strava_workflow import (
+    update_strava_description_from_summary,
+    upload_summary_to_strava,
+)
 from core.workflow import analyze_activity, import_fit
+from sinks.strava import StravaSink
 
 
 app = typer.Typer(help="Personal FIT Agent CLI")
@@ -26,6 +32,68 @@ def list_command(limit: int = 20) -> None:
 @app.command("analyze")
 def analyze_command(activity_id: str = "latest", plot: bool = True) -> None:
     result = analyze_activity(activity_id, make_plot=plot)
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+@app.command("analyze-file")
+def analyze_file_command(
+    path: str,
+    history: bool = False,
+    plot: bool = False,
+    force: bool = False,
+) -> None:
+    result = analyze_fit_file(
+        path,
+        use_history=history,
+        make_plot=plot,
+        force=force,
+    )
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+@app.command("analyze-folder")
+def analyze_folder_command(
+    folder: str,
+    history: bool = True,
+    plot: bool = False,
+    force: bool = False,
+) -> None:
+    result = analyze_fit_folder(
+        folder,
+        use_history=history,
+        make_plot=plot,
+        force=force,
+    )
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+@app.command("upload-strava")
+def upload_strava_command(
+    summary_path: str,
+    title: str | None = None,
+    wait: bool = True,
+) -> None:
+    result = upload_summary_to_strava(summary_path, title=title, wait=wait)
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+@app.command("update-strava-description")
+def update_strava_description_command(activity_id: str, summary_path: str) -> None:
+    result = update_strava_description_from_summary(activity_id, summary_path)
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+@app.command("strava-auth-url")
+def strava_auth_url_command(
+    redirect_uri: str = "http://localhost",
+    scope: str = "activity:read_all,activity:write",
+) -> None:
+    typer.echo(StravaSink().build_authorize_url(redirect_uri=redirect_uri, scope=scope))
+
+
+@app.command("strava-exchange-code")
+def strava_exchange_code_command(code: str) -> None:
+    result = StravaSink().exchange_authorization_code(code)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 
@@ -60,9 +128,12 @@ def chat_command(
         save_report=save_report,
     )
     typer.echo(result["answer"])
+    if result.get("log_path"):
+        typer.echo("")
+        typer.echo(f"chat_log: {result['log_path']}")
     if result.get("report"):
         typer.echo("")
-        typer.echo(f"已保存报告: analysis_report_id={result['report']['id']}")
+        typer.echo(f"analysis_report_id={result['report']['id']}")
 
 
 @app.command("chat-shell")
@@ -71,8 +142,8 @@ def chat_shell_command(
     history_days: int = 30,
     save_report: bool = False,
 ) -> None:
-    typer.echo("进入多轮运动分析对话。输入 exit / quit 退出，Ctrl-D 也可以退出。")
-    typer.echo(f"活动: {activity_id}; 历史窗口: {history_days} 天")
+    typer.echo("Interactive chat started. Type exit / quit, or press Ctrl-D to leave.")
+    typer.echo(f"activity_id: {activity_id}; history_days: {history_days}")
     session = ActivityChatSession(
         activity_id=activity_id,
         history_days=history_days,
@@ -80,7 +151,7 @@ def chat_shell_command(
     )
     while True:
         try:
-            question = typer.prompt("你")
+            question = typer.prompt("You")
         except (EOFError, KeyboardInterrupt):
             typer.echo("")
             break
@@ -92,8 +163,10 @@ def chat_shell_command(
         typer.echo("")
         typer.echo("AI>")
         typer.echo(result["answer"])
+        if result.get("log_path"):
+            typer.echo(f"\nchat_log: {result['log_path']}")
         if result.get("report"):
-            typer.echo(f"\n已保存报告: analysis_report_id={result['report']['id']}")
+            typer.echo(f"\nanalysis_report_id={result['report']['id']}")
         typer.echo("")
 
 
@@ -137,6 +210,9 @@ def chat_tools_command(
     if result.get("answer"):
         typer.echo("\n=== final answer ===")
         typer.echo(result["answer"])
+    if result.get("log_path"):
+        typer.echo("\n=== chat log ===")
+        typer.echo(result["log_path"])
     if result.get("error"):
         typer.echo("\n=== error ===")
         typer.echo(result["error"])

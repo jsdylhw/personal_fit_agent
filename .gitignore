@@ -4,5 +4,8 @@ __pycache__/
 *$py.class
 
 .vscode
-/docs
+docs/
+data/
 config.yaml
+.garmin_cn_tokens/
+garmin_cn_fit_files/

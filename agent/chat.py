@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .chat_logger import append_chat_log, new_session_id
 from .llm import AnthropicMessagesClient, extract_text
 from .prompts import ACTIVITY_ANALYSIS_SKILL_PROMPT, SYSTEM_PROMPT
 from .tools import call_tool, tool_catalog
@@ -28,14 +29,33 @@ def build_plain_chat_user_message(question: str) -> str:
 
 def chat_plain(question: str) -> dict[str, Any]:
     client = AnthropicMessagesClient()
+    user_message = build_plain_chat_user_message(question)
     response = client.create_message(
         system=SYSTEM_PROMPT,
-        user=build_plain_chat_user_message(question),
+        user=user_message,
+    )
+    answer = extract_text(response)
+    session_id = new_session_id("chat_plain")
+    log_path = append_chat_log(
+        session_id,
+        {
+            "event": "chat_turn",
+            "mode": "plain",
+            "question": question,
+            "request": {
+                "system": SYSTEM_PROMPT,
+                "user": user_message,
+            },
+            "response": response,
+            "answer": answer,
+        },
     )
     return {
         "mode": "plain",
+        "session_id": session_id,
+        "log_path": str(log_path),
         "question": question,
-        "answer": extract_text(response),
+        "answer": answer,
         "raw_response": response,
     }
 
@@ -152,12 +172,34 @@ def chat_about_activity(
         history_days=history_days,
     )
     client = AnthropicMessagesClient()
+    user_content = build_activity_chat_user_content(context)
     response = client.create_message(
         system=SYSTEM_PROMPT,
-        user=build_activity_chat_user_content(context),
+        user=user_content,
     )
     answer = extract_text(response)
+    session_id = new_session_id("chat_activity")
+    log_path = append_chat_log(
+        session_id,
+        {
+            "event": "chat_turn",
+            "mode": "activity",
+            "activity_id": activity_id,
+            "resolved_activity_id": context["activity"].get("id"),
+            "history_days": history_days,
+            "question": question,
+            "context": context,
+            "request": {
+                "system": SYSTEM_PROMPT,
+                "user": user_content,
+            },
+            "response": response,
+            "answer": answer,
+        },
+    )
     result = {
+        "session_id": session_id,
+        "log_path": str(log_path),
         "activity_id": activity_id,
         "resolved_activity_id": context["activity"].get("id"),
         "history_days": history_days,
@@ -328,11 +370,13 @@ class ActivityChatSession:
         history_days: int = 30,
         save_report: bool = False,
         client: AnthropicMessagesClient | None = None,
+        session_id: str | None = None,
     ):
         self.activity_id = activity_id
         self.history_days = history_days
         self.save_report = save_report
         self.client = client or AnthropicMessagesClient()
+        self.session_id = session_id or new_session_id("chat_shell")
         self.context: dict[str, Any] | None = None
         self.messages: list[dict[str, Any]] = []
         self.turn_count = 0
@@ -355,6 +399,7 @@ class ActivityChatSession:
             )
 
         self.messages.append({"role": "user", "content": user_message})
+        request_messages = list(self.messages)
         response = self.client.create_messages(
             system=SYSTEM_PROMPT,
             messages=self.messages,
@@ -364,6 +409,7 @@ class ActivityChatSession:
 
         result = {
             "turn": self.turn_count,
+            "session_id": self.session_id,
             "activity_id": self.activity_id,
             "resolved_activity_id": (self.context or {}).get("activity", {}).get("id"),
             "history_days": self.history_days,
@@ -371,6 +417,26 @@ class ActivityChatSession:
             "answer": answer,
             "raw_response": response,
         }
+        log_path = append_chat_log(
+            self.session_id,
+            {
+                "event": "chat_shell_turn",
+                "turn": self.turn_count,
+                "activity_id": self.activity_id,
+                "resolved_activity_id": result["resolved_activity_id"],
+                "history_days": self.history_days,
+                "question": question,
+                "context": self.context if self.turn_count == 1 else None,
+                "request": {
+                    "system": SYSTEM_PROMPT,
+                    "messages": request_messages,
+                },
+                "response": response,
+                "answer": answer,
+                "messages_after_turn": self.messages,
+            },
+        )
+        result["log_path"] = str(log_path)
         if self.save_report and result["resolved_activity_id"] is not None:
             result["report"] = call_tool(
                 "save_activity_report",

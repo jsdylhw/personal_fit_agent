@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any
 
+from .chat_logger import append_chat_log, new_session_id
 from .llm import AnthropicMessagesClient, extract_text
 from .prompts import TOOL_LOOP_SYSTEM_PROMPT
 from .tools import call_tool, tool_catalog
@@ -15,9 +16,11 @@ class ToolLoopSession:
         *,
         max_steps: int = 8,
         client: AnthropicMessagesClient | None = None,
+        session_id: str | None = None,
     ):
         self.max_steps = max_steps
         self.client = client or AnthropicMessagesClient()
+        self.session_id = session_id or new_session_id("chat_tools")
         self.messages: list[dict[str, str]] = []
         self.logs: list[dict[str, Any]] = []
 
@@ -41,6 +44,7 @@ class ToolLoopSession:
                     "type": "llm_response",
                     "raw_text": response_text,
                     "parsed": action,
+                    "response": response,
                     "response_id": response.get("id"),
                     "model": response.get("model"),
                 }
@@ -48,8 +52,12 @@ class ToolLoopSession:
             self.messages.append({"role": "assistant", "content": response_text})
 
             if action.get("action") == "final":
+                answer = str(action.get("answer", ""))
+                log_path = self._write_session_log(question, answer=answer)
                 return {
-                    "answer": str(action.get("answer", "")),
+                    "answer": answer,
+                    "session_id": self.session_id,
+                    "log_path": str(log_path),
                     "logs": self.logs,
                     "messages": self.messages,
                 }
@@ -57,7 +65,7 @@ class ToolLoopSession:
             if action.get("action") != "tool":
                 tool_result = {
                     "error": "invalid_action",
-                    "message": "模型必须返回 action=tool 或 action=final 的 JSON object。",
+                    "message": "Model must return a JSON object with action=tool or action=final.",
                     "parsed": action,
                 }
             else:
@@ -90,18 +98,43 @@ class ToolLoopSession:
             self.messages.append(
                 {
                     "role": "user",
-                    "content": "工具返回：\n"
+                    "content": "Tool result:\n"
                     + json.dumps(tool_result, ensure_ascii=False, indent=2, default=str)
-                    + "\n请继续。若还需要数据，继续返回 tool JSON；若足够回答，返回 final JSON。",
+                    + "\nContinue. Return tool JSON if more data is needed, otherwise return final JSON.",
                 }
             )
 
+        error = f"exceeded max tool loop steps: {self.max_steps}"
+        log_path = self._write_session_log(question, error=error)
         return {
             "answer": "",
-            "error": f"超过最大工具循环步数: {self.max_steps}",
+            "session_id": self.session_id,
+            "log_path": str(log_path),
+            "error": error,
             "logs": self.logs,
             "messages": self.messages,
         }
+
+    def _write_session_log(
+        self,
+        question: str,
+        *,
+        answer: str | None = None,
+        error: str | None = None,
+    ):
+        return append_chat_log(
+            self.session_id,
+            {
+                "event": "chat_tools_session",
+                "question": question,
+                "max_steps": self.max_steps,
+                "system": TOOL_LOOP_SYSTEM_PROMPT,
+                "logs": self.logs,
+                "messages": self.messages,
+                "answer": answer,
+                "error": error,
+            },
+        )
 
 
 def run_tool_loop(question: str, *, max_steps: int = 8) -> dict[str, Any]:
@@ -130,12 +163,12 @@ def parse_tool_loop_action(text: str) -> dict[str, Any]:
 def _initial_user_message(question: str) -> str:
     return "\n".join(
         [
-            "用户问题：",
+            "User question:",
             question,
             "",
-            "可用工具目录：",
+            "Available tool catalog:",
             json.dumps(tool_catalog(), ensure_ascii=False, indent=2, default=str),
             "",
-            "请根据问题选择工具。每次只返回一个 JSON object。",
+            "Choose tools based on the question. Return exactly one JSON object each turn.",
         ]
     )

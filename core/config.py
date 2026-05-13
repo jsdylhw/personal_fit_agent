@@ -53,6 +53,8 @@ def get_agent_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         "max_tokens": int(agent_config.get("max_tokens", 1200)),
         "temperature": float(agent_config.get("temperature", 0.3)),
         "anthropic_version": agent_config.get("anthropic_version", "2023-06-01"),
+        "timeout_seconds": float(agent_config.get("timeout_seconds", 300)),
+        "max_retries": int(agent_config.get("max_retries", 2)),
     }
 
 

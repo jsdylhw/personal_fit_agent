@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+from core.file_workflow import analyze_fit_file
+from core.history import query_activity_history
 from core.storage import (
     get_activity,
     get_activity_analysis,
@@ -33,6 +35,34 @@ def tool_catalog() -> dict[str, Any]:
             "then use returned structured data for reasoning. Tools return data, not coaching advice."
         ),
         "categories": [
+            {
+                "name": "file_based_analysis",
+                "description": "File-based FIT analysis without SQLite. Use history only when the user asks to compare with past training.",
+                "tools": [
+                    {
+                        "name": "analyze_fit_file",
+                        "description": "Analyze one local FIT file, write a summary/report, and update JSONL training history.",
+                        "side_effect": True,
+                        "params": {
+                            "fit_path": {"type": "string", "required": True},
+                            "use_history": {"type": "boolean", "required": False, "default": False},
+                            "force": {"type": "boolean", "required": False, "default": False},
+                        },
+                        "returns": "file analysis result",
+                    },
+                    {
+                        "name": "get_file_training_history",
+                        "description": "Read compact JSONL training history before a given activity time. Call only when history or comparison is requested.",
+                        "side_effect": False,
+                        "params": {
+                            "before": {"type": "string", "required": False},
+                            "days": {"type": "integer", "required": False, "default": 90},
+                            "limit": {"type": "integer", "required": False, "default": 20},
+                        },
+                        "returns": "compact training history",
+                    },
+                ],
+            },
             {
                 "name": "source_management",
                 "description": "数据导入和归档管理。通常由本地程序调用，模型需要导入新 FIT 时才使用。",
@@ -206,6 +236,8 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> Any:
     arguments = arguments or {}
     handlers: dict[str, ToolHandler] = {
         "import_fit_file": _import_fit_file,
+        "analyze_fit_file": _analyze_fit_file,
+        "get_file_training_history": _get_file_training_history,
         "list_activities": _list_activities,
         "list_activity_history": _list_activity_history,
         "get_activity": _get_activity,
@@ -251,6 +283,22 @@ def _ensure_analysis(activity_id: int | str | None) -> dict[str, Any]:
 
 def _import_fit_file(arguments: dict[str, Any]) -> dict[str, Any]:
     return import_fit(arguments["path"], source=arguments.get("source", "manual"))
+
+
+def _analyze_fit_file(arguments: dict[str, Any]) -> dict[str, Any]:
+    return analyze_fit_file(
+        arguments["fit_path"],
+        use_history=bool(arguments.get("use_history", False)),
+        force=bool(arguments.get("force", False)),
+    )
+
+
+def _get_file_training_history(arguments: dict[str, Any]) -> dict[str, Any]:
+    return query_activity_history(
+        before=arguments.get("before"),
+        days=int(arguments.get("days", 90)) if arguments.get("days") is not None else None,
+        limit=int(arguments.get("limit", 20)),
+    )
 
 
 def _list_activities(arguments: dict[str, Any]) -> list[dict[str, Any]]:

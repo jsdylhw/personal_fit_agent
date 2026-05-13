@@ -7,61 +7,69 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-title">Personal FIT Agent</div>
-          <div class="brand-subtitle">本地运动分析</div>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Personal FIT Agent</h1>
+          <p>Garmin 下载、本地 FIT 分析、报告查看和 Strava 上传。</p>
         </div>
-        <div class="toolbar">
-          <button id="refreshBtn" class="icon-button" title="刷新活动列表">↻</button>
-          <button id="analyzeBtn" class="text-button">重新分析</button>
-        </div>
-        <div id="activityList" class="activity-list"></div>
-      </aside>
+        <div id="status" class="status">准备就绪</div>
+      </header>
 
-      <main class="main">
-        <header class="topbar">
-          <div>
-            <h1 id="activityTitle">选择活动</h1>
-            <p id="activityMeta">从左侧选择一条 FIT 活动。</p>
-          </div>
-          <div id="status" class="status">ready</div>
-        </header>
+      <section class="controls">
+        <button id="connectGarminBtn">连接 Garmin</button>
+        <label class="count-field">
+          下载最近
+          <input id="downloadCount" type="number" min="1" max="50" value="5" />
+          条
+        </label>
+        <button id="downloadBtn" class="primary">下载</button>
+        <button id="refreshBtn">刷新本地 FIT</button>
+        <button id="batchAnalyzeBtn">批量分析未分析</button>
+      </section>
 
-        <section class="metrics-grid" id="summaryGrid"></section>
-
+      <section class="layout">
         <section class="panel">
           <div class="panel-header">
-            <h2>活动分析</h2>
-            <div class="tabs">
-              <button class="tab active" data-tab="quality">质量</button>
-              <button class="tab" data-tab="intensity">强度</button>
-              <button class="tab" data-tab="segments">分段</button>
-              <button class="tab" data-tab="fatigue">稳定性</button>
-              <button class="tab" data-tab="reports">报告</button>
-              <button class="tab" data-tab="raw">数据</button>
+            <h2>本地 FIT</h2>
+            <span id="fitDir" class="muted"></span>
+          </div>
+          <div id="fitList" class="fit-list"></div>
+        </section>
+
+        <section class="panel detail-panel">
+          <div class="panel-header">
+            <div>
+              <h2 id="detailTitle">选择一个 FIT 文件</h2>
+              <p id="detailMeta" class="muted"></p>
             </div>
           </div>
-          <div id="tabContent" class="tab-content"></div>
-        </section>
-      </main>
 
-      <aside class="chat-panel">
-        <div class="chat-header">
-          <h2>活动对话</h2>
-          <label class="save-toggle">
-            <input id="saveReport" type="checkbox" />
-            保存报告
-          </label>
-        </div>
-        <div id="chatLog" class="chat-log"></div>
-        <form id="chatForm" class="chat-form">
-          <textarea id="questionInput" rows="4" placeholder="例如：分析这次骑行，并给下一次训练建议"></textarea>
-          <button type="submit" class="primary-button">发送</button>
-        </form>
-      </aside>
-    </div>
+          <div id="summaryGrid" class="summary-grid"></div>
+
+          <div class="action-row">
+            <button id="analyzeBtn" class="primary">大模型分析</button>
+            <button id="viewReportBtn">查看报告</button>
+            <button id="uploadStravaBtn">上传 Strava</button>
+          </div>
+
+          <section class="report-preview">
+            <h3>Strava 总结</h3>
+            <p id="stravaSummary" class="summary-text">分析后会显示。</p>
+          </section>
+
+          <section class="report-preview">
+            <h3>报告</h3>
+            <pre id="reportText" class="report-text">点击“查看报告”后显示。</pre>
+          </section>
+        </section>
+      </section>
+
+      <section class="log-panel">
+        <h2>操作日志</h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
     <script src="/static/app.js"></script>
   </body>
 </html>
