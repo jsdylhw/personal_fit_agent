@@ -1,0 +1,181 @@
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from sinks.strava import StravaSink, _missing_activity_write
+
+
+def _make_sink(config_overrides: dict | None = None) -> StravaSink:
+    """Create a StravaSink with a pre-set access_token, skipping real auth."""
+    config = {"strava": {"access_token": "test_token_123"}}
+    if config_overrides:
+        config["strava"].update(config_overrides)
+    return StravaSink(config)
+
+
+class TestMissingActivityWrite:
+    def test_detects_missing_permission(self):
+        error_data = {
+            "errors": [
+                {
+                    "resource": "AccessToken",
+                    "field": "activity:write_permission",
+                    "code": "missing",
+                }
+            ]
+        }
+        assert _missing_activity_write(error_data) is True
+
+    def test_no_errors_key(self):
+        assert _missing_activity_write({"message": "ok"}) is False
+
+    def test_errors_not_list(self):
+        assert _missing_activity_write({"errors": "some error"}) is False
+
+    def test_other_error_type(self):
+        assert _missing_activity_write({"errors": [{"resource": "Activity", "field": "name"}]}) is False
+
+
+class TestStravaSinkInit:
+    def test_uses_access_token_directly(self):
+        sink = StravaSink({"strava": {"access_token": "direct_token_123"}})
+        assert sink.access_token == "direct_token_123"
+
+    @patch("sinks.strava.requests.post")
+    def test_refreshes_with_client_credentials(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"access_token": "refreshed_token"}
+        mock_response.ok = True
+        mock_post.return_value = mock_response
+
+        config = {
+            "strava": {
+                "client_id": "123",
+                "client_secret": "abc",
+                "refresh_token": "refresh_old",
+            }
+        }
+        sink = StravaSink(config)
+        assert sink.access_token == "refreshed_token"
+
+    def test_raises_without_credentials(self):
+        config = {"strava": {}}
+        with pytest.raises(RuntimeError, match="access_token"):
+            StravaSink(config)
+
+
+class TestStravaSinkBuildAuthorizeUrl:
+    def test_builds_url(self):
+        sink = _make_sink({"client_id": "12345"})
+        url = sink.build_authorize_url()
+        assert "client_id=12345" in url
+        assert "response_type=code" in url
+        # URL-encoded scope
+        assert "activity%3Awrite" in url
+
+    def test_custom_scope(self):
+        sink = _make_sink({"client_id": "12345"})
+        url = sink.build_authorize_url(scope="activity:read_all")
+        assert "activity%3Aread_all" in url
+        assert "activity%3Awrite" not in url
+
+    def test_raises_without_client_id(self):
+        sink = _make_sink({"client_id": ""})
+        with pytest.raises(RuntimeError, match="client_id"):
+            sink.build_authorize_url()
+
+
+class TestStravaSinkUpload:
+    @patch("sinks.strava.requests.post")
+    def test_upload_fit_file(self, mock_post, tmp_path):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"id": 12345, "status": "pending"}
+        mock_response.ok = True
+        mock_post.return_value = mock_response
+
+        fit_file = tmp_path / "test_activity.fit"
+        fit_file.write_bytes(b"mock fit content")
+
+        sink = _make_sink()
+        result = sink.upload_fit(str(fit_file), title="Test Ride", description="Test desc")
+
+        assert result["id"] == 12345
+        mock_post.assert_called_once()
+
+    def test_upload_nonexistent_file(self):
+        sink = _make_sink()
+        with pytest.raises(FileNotFoundError):
+            sink.upload_fit("/tmp/nonexistent_activity.fit")
+
+    def test_upload_wrong_extension(self, tmp_path):
+        wrong_file = tmp_path / "test.txt"
+        wrong_file.write_text("not a fit")
+        sink = _make_sink()
+        with pytest.raises(ValueError, match=".fit"):
+            sink.upload_fit(str(wrong_file))
+
+
+class TestStravaSinkUpdateDescription:
+    @patch("sinks.strava.requests.put")
+    def test_update_description(self, mock_put):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"id": 98765, "description": "new desc"}
+        mock_response.ok = True
+        mock_put.return_value = mock_response
+
+        sink = _make_sink()
+        result = sink.update_description("98765", "Updated description")
+
+        assert result["id"] == 98765
+        mock_put.assert_called_once()
+
+
+class TestStravaSinkGetUpload:
+    @patch("sinks.strava.requests.get")
+    def test_get_upload_status(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"id": 12345, "activity_id": 98765, "status": "ready"}
+        mock_response.ok = True
+        mock_get.return_value = mock_response
+
+        sink = _make_sink()
+        result = sink.get_upload(12345)
+
+        assert result["status"] == "ready"
+        assert result["activity_id"] == 98765
+
+
+class TestStravaSinkApiError:
+    @patch("sinks.strava.requests.get")
+    def test_http_error(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"message": "Not Found"}
+        mock_response.ok = False
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        sink = _make_sink()
+        with pytest.raises(RuntimeError, match="HTTP 404"):
+            sink.get_upload(99999)
+
+    @patch("sinks.strava.requests.get")
+    def test_missing_activity_write_error(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "errors": [
+                {
+                    "resource": "AccessToken",
+                    "field": "activity:write_permission",
+                    "code": "missing",
+                }
+            ]
+        }
+        mock_response.ok = False
+        mock_response.status_code = 401
+        mock_get.return_value = mock_response
+
+        sink = _make_sink()
+        with pytest.raises(RuntimeError, match="activity:write"):
+            sink.get_upload(12345)
