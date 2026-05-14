@@ -17,7 +17,6 @@ const els = {
   downloadCount: document.getElementById("downloadCount"),
   downloadBtn: document.getElementById("downloadBtn"),
   refreshBtn: document.getElementById("refreshBtn"),
-  batchAnalyzeBtn: document.getElementById("batchAnalyzeBtn"),
   analyzeBtn: document.getElementById("analyzeBtn"),
   viewReportBtn: document.getElementById("viewReportBtn"),
   uploadStravaBtn: document.getElementById("uploadStravaBtn"),
@@ -198,21 +197,6 @@ async function analyzeSelected() {
   }
 }
 
-async function batchAnalyze() {
-  setStatus("批量分析中");
-  try {
-    const result = await fetchJson("/api/fit-files/analyze-folder", {
-      method: "POST",
-      body: JSON.stringify({ history: true, force: false }),
-    });
-    log("批量分析完成", result);
-    await refreshFiles();
-  } catch (error) {
-    log("批量分析失败", { error: error.message });
-    setStatus("批量分析失败");
-  }
-}
-
 async function viewReport() {
   const file = selectedFile();
   if (!file || !file.report_path) {
@@ -241,7 +225,7 @@ async function uploadStrava() {
   try {
     const result = await fetchJson("/api/strava/upload", {
       method: "POST",
-      body: JSON.stringify({ summary_path: file.summary_path, wait: true }),
+      body: JSON.stringify({ summary_path: file.summary_path, wait: false }),
     });
     log("Strava 上传完成", result);
     setStatus("上传完成");
@@ -287,7 +271,6 @@ function escapeAttr(value) {
 els.connectGarminBtn.addEventListener("click", connectGarmin);
 els.downloadBtn.addEventListener("click", downloadRecent);
 els.refreshBtn.addEventListener("click", refreshFiles);
-els.batchAnalyzeBtn.addEventListener("click", batchAnalyze);
 els.analyzeBtn.addEventListener("click", analyzeSelected);
 els.viewReportBtn.addEventListener("click", viewReport);
 els.uploadStravaBtn.addEventListener("click", uploadStrava);

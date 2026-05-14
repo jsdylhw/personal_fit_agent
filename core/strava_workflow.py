@@ -63,7 +63,7 @@ def update_strava_description_from_summary(
 
 
 def _default_title(fit_summary: dict[str, Any], fit_path: Path) -> str:
-    start_time = str(fit_summary.get("start_time") or "")[:10]
+    start_time = str(fit_summary.get("start_time_local") or fit_summary.get("start_time") or "")[:10]
     sport = fit_summary.get("sport_type") or "activity"
     if start_time:
         return f"{start_time} {sport}"

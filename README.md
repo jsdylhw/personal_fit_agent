@@ -5,21 +5,21 @@
 当前主流程：
 
 ```text
-Garmin 中国 -> 下载 FIT 文件 -> 按时间顺序分析 FIT -> 生成报告 / 总结 / 历史记录 -> 上传 FIT 和总结到 Strava
+Garmin 中国 -> 下载 FIT 文件 -> 单个 FIT 分析 / 对话分析 -> 生成报告 / 总结 / 历史记录 -> 上传 FIT 和总结到 Strava
 ```
 
-现在推荐使用文件式 workflow，不依赖本地数据库。程序会保留原始 FIT 文件、Markdown 报告、每条活动的 JSON summary、完整对话日志，以及一份 JSONL 训练历史。旧的 SQLite 命令还保留在代码里，但不是当前推荐路径。
+现在使用文件式 workflow，不依赖本地 SQLite 数据库。程序会保留原始 FIT 文件、Markdown 报告、每条活动的 JSON summary、完整对话日志，以及一份 JSONL 训练历史。
 
 ## 功能
 
 - 从 Garmin 中国下载最近的活动为 `.fit` 文件。
 - 如果本地已经存在对应 FIT，则跳过重复下载。
-- 支持分析单个 FIT 文件或整个 FIT 文件夹。
-- 文件夹分析会按 FIT 的 `start_time` 从早到晚执行。
+- 支持分析单个 FIT 文件。
+- 支持对 FIT 文件进行单轮直接提问，或进入多轮人为引导分析。
 - 分析走隐藏的大模型 tool loop：
   - 第一次只发送简短 FIT 摘要；
   - 模型需要更多信息时，再请求分段、数值统计、采样记录、训练元数据或历史记录；
-  - 完整隐藏交互会保存到 `data/chat_logs/`。
+- 完整隐藏交互会保存到 `data/chat_logs/`，同时生成同名 `.md` 可读日志。
 - 每次分析生成：
   - 完整 Markdown 活动报告；
   - 约 200 个中文字符、适合 Strava 的活动总结；口吻会加权随机选择，包含正常训练日志、专业教练、轻松骑友、简洁复盘、轻微自嘲和猫娘风格，其中猫娘概率会稍高；
@@ -81,7 +81,13 @@ strava:
 
 `agent.base_url` 需要兼容 Anthropic Messages API 的 `/v1/messages`。
 
-Strava 上传需要 token 具备 `activity:write` 权限。如果你已经有可用的短期 `access_token`，也可以在 `strava.access_token` 里直接配置。
+Strava 上传需要 token 具备 `activity:write` 权限。推荐配置 `client_id`、`client_secret` 和 `refresh_token`，程序会在请求前自动刷新短期 access token。
+
+检查 Strava 认证是否可用：
+
+```bash
+python -m app.cli strava-check-auth
+```
 
 如果上传时报 `activity:write_permission missing`，说明当前 Strava token 没有写入权限，需要重新授权：
 
@@ -115,25 +121,13 @@ python download_garmin_cn_fit.py --count 1 --output-dir garmin_cn_fit_files
 
 ## 分析 FIT
 
-按时间顺序分析下载目录中的所有 FIT：
-
-```bash
-python -m app.cli analyze-folder garmin_cn_fit_files --history --force
-```
-
-`--history` 表示后面的活动可以参考前面已经生成的紧凑历史。第一条活动没有历史可参考。`--force` 表示即使 summary 已经存在，也重新请求大模型分析。
-
-只分析还没有 summary 的文件：
-
-```bash
-python -m app.cli analyze-folder garmin_cn_fit_files --history
-```
-
 分析单个 FIT 文件：
 
 ```bash
 python -m app.cli analyze-file "garmin_cn_fit_files/path/to/activity.fit" --history --force
 ```
+
+`--history` 表示可以参考已经生成的紧凑历史。`--force` 表示即使 summary 已经存在，也重新请求大模型分析。
 
 ## 输出文件
 
@@ -142,7 +136,7 @@ garmin_cn_fit_files/          # 下载的原始 FIT 文件
 data/reports/                 # Markdown 报告，包含 Strava Summary 小节
 data/summaries/               # 每条活动的 JSON summary
 data/activity_history.jsonl   # 大模型生成的紧凑训练历史
-data/chat_logs/               # 完整大模型请求 / 响应 / tool loop 日志
+data/chat_logs/               # 完整大模型请求 / 响应 / tool loop 日志，含 jsonl 和 md
 ```
 
 `data/reports/*.md` 包含完整活动报告，以及 `## Strava Summary` 小节。
@@ -179,6 +173,14 @@ python -m app.cli update-strava-description STRAVA_ACTIVITY_ID "data/summaries/a
 
 `upload-strava` 会从 summary JSON 里读取 `fit_path` 和 `strava_summary`。默认会等待 Strava 处理上传结果；如果只想拿到上传请求返回，可以加 `--no-wait`。
 
+如果上传看起来“卡住”，通常是等待 Strava 处理上传状态。可以先用：
+
+```bash
+python -m app.cli upload-strava "data/summaries/activity.summary.json" --no-wait
+```
+
+本地 Web 界面的“上传 Strava”按钮默认不等待处理完成，只确认上传请求已提交。
+
 ## 隐藏分析工具
 
 FIT 分析 workflow 会把这些内部工具暴露给大模型：
@@ -190,26 +192,36 @@ FIT 分析 workflow 会把这些内部工具暴露给大模型：
 - `get_training_metadata`
 - `get_history`
 
-正常 CLI 分析时，这些工具调用不会展示给用户，但完整记录会保存在 `data/chat_logs/`，方便调试。
+正常 CLI 分析时，这些工具调用不会展示给用户，但完整记录会保存在 `data/chat_logs/`。其中 `.jsonl` 适合程序读取，`.md` 适合直接查看。
 
-## 常用命令
+## 对话式分析 FIT 文件
 
-预览普通聊天 payload：
-
-```bash
-python -m app.cli chat-payload "你好" --mode plain
-```
-
-运行交互式 tool-loop 聊天：
+单轮直接发送：程序会直接解析 FIT 文件，把摘要、数值统计、lap、采样记录、训练元数据和历史记录一起发给大模型，然后返回回答。
 
 ```bash
-python -m app.cli chat-tools "分析我的最新一次 FIT 活动"
+python -m app.cli fit-ask "garmin_cn_fit_files/path/to/activity.fit" "分析这次骑行，并给下一次训练建议"
 ```
 
-查看工具目录：
+多轮人为引导分析：程序先解析 FIT 文件，然后进入终端对话。你可以补充体感、目标、睡眠、补给、路况和下一次可训练时间，最后输入 `/final` 生成总结。
+
+默认行为：
+
+- 保存 guided report 到 `data/reports/`；
+- 同步写入对应的 `data/summaries/*.summary.json` 的 `guided_analysis` 字段；
+- 不覆盖自动分析生成的 `markdown_report` 和 `strava_summary`，因此 Strava 上传仍然使用自动分析的活动描述。
 
 ```bash
-python -m app.cli tools-catalog
+python -m app.cli fit-chat "garmin_cn_fit_files/path/to/activity.fit"
 ```
 
+也可以用最新的本地 FIT 文件启动：
 
+```bash
+python -m app.cli fit-chat latest
+```
+
+如果只想对话、不写回 summary：
+
+```bash
+python -m app.cli fit-chat latest --no-update-summary
+```

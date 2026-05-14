@@ -85,6 +85,14 @@ class StravaSink:
             last = self.get_upload(upload_id)
         return last
 
+    def get_athlete(self) -> dict[str, Any]:
+        response = requests.get(
+            f"{STRAVA_API_BASE}/athlete",
+            headers=self._headers(),
+            timeout=float(self.config.get("timeout_seconds", 120)),
+        )
+        return self._json_or_raise(response)
+
     def update_description(self, activity_id: str, markdown: str) -> dict[str, Any]:
         response = requests.put(
             f"{STRAVA_API_BASE}/activities/{activity_id}",
@@ -136,19 +144,28 @@ class StravaSink:
         return self._json_or_raise(response)
 
     def _access_token(self) -> str:
+        client_id = self.config.get("client_id")
+        client_secret = self.config.get("client_secret")
+        refresh_token = self.config.get("refresh_token")
+
+        if client_id and client_secret and refresh_token:
+            return self._refresh_access_token(client_id, client_secret, refresh_token)
+
         access_token = self.config.get("access_token")
         if access_token:
             return str(access_token)
 
-        client_id = self.config.get("client_id")
-        client_secret = self.config.get("client_secret")
-        refresh_token = self.config.get("refresh_token")
-        if not client_id or not client_secret or not refresh_token:
-            raise RuntimeError(
-                "Please configure strava.access_token or "
-                "strava.client_id/client_secret/refresh_token in config.yaml"
-            )
+        raise RuntimeError(
+            "Please configure strava.access_token or "
+            "strava.client_id/client_secret/refresh_token in config.yaml"
+        )
 
+    def _refresh_access_token(
+        self,
+        client_id: str,
+        client_secret: str,
+        refresh_token: str,
+    ) -> str:
         response = requests.post(
             STRAVA_OAUTH_TOKEN_URL,
             data={

@@ -1,1 +1,1 @@
-"""Agent-facing tool registry."""
+"""LLM clients, logs, and FIT-guided chat helpers."""

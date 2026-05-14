@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +90,9 @@ def summarize_fit(
         "sport_type": str(session.get("sport") or sport_msg.get("sport") or "unknown"),
         "sub_sport": str(session.get("sub_sport") or sport_msg.get("sub_sport") or ""),
         "start_time": _iso(start),
+        "start_time_utc": _utc_iso(start),
+        "start_time_local": _local_iso(start),
+        "timezone_note": "start_time is UTC; use start_time_local for user-facing reports.",
         "duration_s": _num(duration_s),
         "distance_m": _num(distance_m),
         "record_count": len(records),
@@ -262,6 +265,36 @@ def _iso(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value)
+
+
+def _utc_iso(value: Any) -> str | None:
+    dt = _parse_datetime(value)
+    if dt is None:
+        return _iso(value)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _local_iso(value: Any) -> str | None:
+    dt = _parse_datetime(value)
+    if dt is None:
+        return None
+    local_tz = datetime.now().astimezone().tzinfo
+    return dt.astimezone(local_tz).isoformat()
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _clean_value(value: Any) -> Any:

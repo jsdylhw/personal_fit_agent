@@ -11,13 +11,9 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from agent.chat import chat_about_activity
-from agent.tools import call_tool, tool_catalog
 from core.config import load_config
-from core.file_workflow import analyze_fit_file, analyze_fit_folder
-from core.storage import get_activity, list_activities, list_analysis_reports
+from core.file_workflow import analyze_fit_file
 from core.strava_workflow import upload_summary_to_strava
-from core.workflow import analyze_activity, import_fit
 from download_garmin_cn_fit import (
     DEFAULT_OUTPUT_DIR,
     activity_base_name,
@@ -34,39 +30,12 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-class ImportFitRequest(BaseModel):
-    path: str
-    source: str = "manual"
-
-
-class AnalyzeRequest(BaseModel):
-    activity_id: int | str = "latest"
-    make_plot: bool = True
-
-
-class ToolCallRequest(BaseModel):
-    name: str
-    arguments: dict = {}
-
-
-class ChatActivityRequest(BaseModel):
-    question: str
-    activity_id: int | str = "latest"
-    history_days: int = 30
-    save_report: bool = False
-
-
 class DownloadGarminRequest(BaseModel):
     count: int | None = None
 
 
 class AnalyzeFitRequest(BaseModel):
     path: str
-    history: bool = True
-    force: bool = False
-
-
-class AnalyzeFolderRequest(BaseModel):
     history: bool = True
     force: bool = False
 
@@ -172,11 +141,6 @@ def analyze_fit_endpoint(request: AnalyzeFitRequest) -> dict[str, Any]:
     return analyze_fit_file(request.path, use_history=request.history, force=request.force)
 
 
-@app.post("/api/fit-files/analyze-folder")
-def analyze_fit_folder_endpoint(request: AnalyzeFolderRequest) -> dict[str, Any]:
-    return analyze_fit_folder(_fit_output_dir(load_config()), use_history=request.history, force=request.force)
-
-
 @app.get("/api/report")
 def report_endpoint(path: str) -> PlainTextResponse:
     report_path = Path(path)
@@ -188,89 +152,6 @@ def report_endpoint(path: str) -> PlainTextResponse:
 @app.post("/api/strava/upload")
 def strava_upload_endpoint(request: UploadStravaRequest) -> dict[str, Any]:
     return upload_summary_to_strava(request.summary_path, title=request.title, wait=request.wait)
-
-
-@app.post("/tools/import_fit")
-def import_fit_endpoint(request: ImportFitRequest):
-    return import_fit(request.path, source=request.source)
-
-
-@app.get("/tools/list_activities")
-def list_activities_endpoint(limit: int = 20):
-    return {"activities": list_activities(limit)}
-
-
-@app.get("/api/activities")
-def activities_endpoint(limit: int = 50):
-    return {"activities": list_activities(limit)}
-
-
-@app.get("/api/activities/{activity_id}")
-def activity_detail_endpoint(activity_id: int):
-    return {
-        "activity": get_activity(activity_id),
-        "summary": call_tool("get_activity_summary", {"activity_id": activity_id}),
-        "data_quality": call_tool("check_activity_data_quality", {"activity_id": activity_id}),
-        "intensity_distribution": call_tool("analyze_intensity_distribution", {"activity_id": activity_id}),
-        "workout_segments": call_tool(
-            "detect_workout_segments",
-            {"activity_id": activity_id, "bucket_seconds": 60},
-        ),
-        "fatigue_and_stability": call_tool("analyze_fatigue_and_stability", {"activity_id": activity_id}),
-        "recommendation_context": call_tool(
-            "generate_training_recommendation",
-            {"activity_id": activity_id, "goal": "general_review"},
-        ),
-        "reports": list_analysis_reports(activity_id),
-    }
-
-
-@app.post("/api/activities/{activity_id}/analyze")
-def analyze_activity_api_endpoint(activity_id: int):
-    return analyze_activity(activity_id, make_plot=True)
-
-
-@app.get("/api/activities/{activity_id}/reports")
-def activity_reports_endpoint(activity_id: int):
-    return {"reports": list_analysis_reports(activity_id)}
-
-
-@app.post("/tools/analyze_activity")
-def analyze_activity_endpoint(request: AnalyzeRequest):
-    return analyze_activity(request.activity_id, make_plot=request.make_plot)
-
-
-@app.get("/tools/catalog")
-def tool_catalog_endpoint():
-    return tool_catalog()
-
-
-@app.post("/tools/call")
-def tool_call_endpoint(request: ToolCallRequest):
-    return {
-        "tool": request.name,
-        "result": call_tool(request.name, request.arguments),
-    }
-
-
-@app.post("/chat/activity")
-def chat_activity_endpoint(request: ChatActivityRequest):
-    return chat_about_activity(
-        request.question,
-        activity_id=request.activity_id,
-        history_days=request.history_days,
-        save_report=request.save_report,
-    )
-
-
-@app.post("/api/chat/activity")
-def chat_activity_api_endpoint(request: ChatActivityRequest):
-    return chat_about_activity(
-        request.question,
-        activity_id=request.activity_id,
-        history_days=request.history_days,
-        save_report=request.save_report,
-    )
 
 
 def _fit_output_dir(config: dict[str, Any]) -> Path:
@@ -322,7 +203,12 @@ def _display_summary_from_analysis(summary: dict[str, Any]) -> dict[str, Any]:
     fit_summary = summary.get("fit_summary") or {}
     history_entry = summary.get("history_entry") or {}
     return {
-        "start_time": history_entry.get("start_time") or fit_summary.get("start_time"),
+        "start_time": (
+            history_entry.get("start_time_local")
+            or fit_summary.get("start_time_local")
+            or history_entry.get("start_time")
+            or fit_summary.get("start_time")
+        ),
         "sport_type": history_entry.get("sport_type") or fit_summary.get("sport_type"),
         "sub_sport": history_entry.get("sub_sport") or fit_summary.get("sub_sport"),
         "distance_km": history_entry.get("distance_km") or _meters_to_km(fit_summary.get("distance_m")),
@@ -337,7 +223,7 @@ def _display_summary_from_analysis(summary: dict[str, Any]) -> dict[str, Any]:
 def _display_summary_from_fit(fit_summary: dict[str, Any] | None) -> dict[str, Any]:
     fit_summary = fit_summary or {}
     return {
-        "start_time": fit_summary.get("start_time"),
+        "start_time": fit_summary.get("start_time_local") or fit_summary.get("start_time"),
         "sport_type": fit_summary.get("sport_type"),
         "sub_sport": fit_summary.get("sub_sport"),
         "distance_km": _meters_to_km(fit_summary.get("distance_m")),

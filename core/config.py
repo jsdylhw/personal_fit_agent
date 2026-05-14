@@ -87,10 +87,7 @@ def ensure_data_dirs(data_dir: Path | None = None) -> dict[str, Path]:
     root = data_dir or get_data_dir()
     paths = {
         "root": root,
-        "fit": root / "fit",
-        "parsed": root / "parsed",
         "reports": root / "reports",
-        "plots": root / "reports" / "plots",
     }
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
