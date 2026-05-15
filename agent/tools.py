@@ -9,10 +9,13 @@ from __future__ import annotations
 from typing import Any
 
 from core.data_tools import (
+    analyze_fit_file_tool,
     get_activity_overview_tool,
     get_activity_summary_tool,
     get_distance_intervals_tool,
     get_time_intervals_tool,
+    sync_garmin_activities_tool,
+    upload_to_strava_tool,
 )
 from core.stats import prune_empty_values
 
@@ -20,13 +23,14 @@ from core.stats import prune_empty_values
 def fit_analysis_tool_catalog() -> list[dict[str, Any]]:
     """返回 LLM 可见的工具列表,每个工具包含 name,description,arguments.
 
-    这是工具定义的唯一权威来源.System prompt 不重复列工具,
+    这是工具定义的唯一权威来源.
     payload 中的 available_tools 由 build_initial_loop_payload 从这里取.
 
     Returns:
-        list[dict]: 5 个工具的定义.
+        list[dict]: 工具定义列表.
     """
     return [
+        # -- 数据查询工具 --
         {
             "name": "get_activity_overview",
             "description": "Return a compact high-level activity overview: sport, local start time, duration, distance, total ascent, calories, basic power/HR/cadence/speed metrics, TSS/IF, and data availability flags.",
@@ -34,7 +38,7 @@ def fit_analysis_tool_catalog() -> list[dict[str, Any]]:
         },
         {
             "name": "get_activity_summary",
-            "description": "Return structured objective activity summary by sections. Default returns 8 core sections. Use sections to pick specific ones, or 'all' for all 11. Core sections (power/heart_rate/cadence/speed/elevation) have available/stats/summary fields; other sections have their own shapes.",
+            "description": "Return structured objective activity summary by sections. Default returns 8 core sections. Use sections to pick specific ones, or 'all' for all 11. Core sections (power/heart_rate/cadence/speed/elevation) have available/stats/summary fields.",
             "arguments": {"sections": ["all"]},
         },
         {
@@ -52,6 +56,22 @@ def fit_analysis_tool_catalog() -> list[dict[str, Any]]:
             "description": "Return prior compact training history if history is enabled for this analysis.",
             "arguments": {},
         },
+        # -- 工作流工具 --
+        {
+            "name": "sync_garmin_activities",
+            "description": "Download recent FIT files from Garmin China. Auto-skips already-downloaded activities by filename comparison. Returns count of downloaded vs skipped.",
+            "arguments": {"count": 5},
+        },
+        {
+            "name": "analyze_fit_file",
+            "description": "Run local LLM analysis on a FIT file (hidden tool loop). Returns compact summary: sport_type, duration, distance, strava_summary. Use this after sync_garmin_activities to analyze downloaded files.",
+            "arguments": {"fit_path": "/path/to/file.fit", "force": False},
+        },
+        {
+            "name": "upload_to_strava",
+            "description": "Upload a FIT file to Strava with the generated Strava summary as description. REQUIRES CONFIRMATION: first call returns preview, then call again with confirmed=true to execute.",
+            "arguments": {"fit_path": "/path/to/file.fit", "confirmed": False},
+        },
     ]
 
 
@@ -59,48 +79,45 @@ def call_fit_analysis_tool(
     name: str,
     arguments: dict[str, Any],
     *,
-    parsed: dict[str, Any],
-    history_before: dict[str, Any] | None,
+    parsed: dict[str, Any] | None = None,
+    history_before: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """将 LLM 的工具调用路由到对应的数据工具实现.
+    """将 LLM 的工具调用路由到对应的实现.
 
     Args:
-        name: 工具名,对应 fit_analysis_tool_catalog 中的 name.
+        name: 工具名.
         arguments: LLM 传入的参数 dict.
-        parsed: parse_fit() 的返回值.
-        history_before: 历史活动数据(可选).
+        parsed: parse_fit() 的返回值(数据查询工具需要).
+        history_before: 历史活动数据(数据查询工具需要).
 
     Returns:
         dict: {tool, arguments, result} 或 {tool, arguments, error, message}.
     """
+    # 数据查询工具需要 parsed,工作流工具不需要
+    _data_tool_names = {"get_activity_overview", "get_activity_summary", "get_time_intervals", "get_distance_intervals"}
+    if name in _data_tool_names and parsed is None:
+        return {"tool": name, "arguments": arguments, "error": "missing_parsed", "message": "This tool requires a parsed FIT file."}
+
     try:
-        if name == "get_activity_overview":
+        if name == "sync_garmin_activities":
+            result = sync_garmin_activities_tool(count=int(arguments.get("count", 5)))
+        elif name == "analyze_fit_file":
+            result = analyze_fit_file_tool(str(arguments.get("fit_path", "")), force=bool(arguments.get("force", False)))
+        elif name == "upload_to_strava":
+            result = upload_to_strava_tool(str(arguments.get("fit_path", "")), confirmed=bool(arguments.get("confirmed", False)))
+        elif name == "get_activity_overview":
             result = get_activity_overview_tool(parsed)
         elif name == "get_activity_summary":
             result = get_activity_summary_tool(parsed, sections=arguments.get("sections"))
         elif name == "get_time_intervals":
-            result = get_time_intervals_tool(
-                parsed,
-                bucket_seconds=int(arguments.get("bucket_seconds", 60)),
-                start_s=arguments.get("start_s"),
-                end_s=arguments.get("end_s"),
-            )
+            result = get_time_intervals_tool(parsed, bucket_seconds=int(arguments.get("bucket_seconds", 60)), start_s=arguments.get("start_s"), end_s=arguments.get("end_s"))
         elif name == "get_distance_intervals":
-            result = get_distance_intervals_tool(
-                parsed,
-                bucket_distance_m=arguments.get("bucket_distance_m", 1000),
-                start_d=arguments.get("start_d"),
-                end_d=arguments.get("end_d"),
-            )
+            result = get_distance_intervals_tool(parsed, bucket_distance_m=arguments.get("bucket_distance_m", 1000), start_d=arguments.get("start_d"), end_d=arguments.get("end_d"))
         elif name == "get_history":
-            result = history_before or {
-                "schema_version": "file_training_history.v1",
-                "count": 0,
-                "activities": [],
-                "note": "History was not enabled or no previous activities exist.",
-            }
+            result = history_before or {"schema_version": "file_training_history.v1", "count": 0, "activities": [], "note": "History was not enabled or no previous activities exist."}
         else:
             return {"tool": name, "arguments": arguments, "error": "unknown_tool"}
+
         return {"tool": name, "arguments": arguments, "result": prune_empty_values(result)}
     except Exception as exc:
         return {"tool": name, "arguments": arguments, "error": type(exc).__name__, "message": str(exc)}

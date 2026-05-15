@@ -163,12 +163,13 @@ class TestChooseStravaSummaryTone:
 
 
 class TestFitAnalysisToolCatalog:
-    def test_returns_all_5_tools(self):
+    def test_returns_all_8_tools(self):
         tools = fit_analysis_tool_catalog()
         tool_names = {t["name"] for t in tools}
         assert tool_names == {
             "get_activity_overview", "get_activity_summary",
             "get_time_intervals", "get_distance_intervals", "get_history",
+            "sync_garmin_activities", "analyze_fit_file", "upload_to_strava",
         }
 
     def test_each_tool_has_description(self):
