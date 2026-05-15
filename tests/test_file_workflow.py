@@ -374,9 +374,66 @@ class TestUploadErrorStates:
         result = upload_to_strava_tool("/tmp/nonexistent_activity.fit")
         assert result["error"] == "no_summary"
 
-    def test_upload_tool_does_not_accept_string_confirmed(self):
-        """upload_to_strava_tool 的 confirmed 用 _parse_strict_bool,
-        字符串 "true" 被当作 False,不会执行上传."""
+    def test_string_confirmed_does_not_upload(self, tmp_path, monkeypatch):
+        """防御层:即使直接传 confirmed="true",内部用 _parse_strict_bool 转为 False.
+
+        用临时 summary 文件 + mock StravaSink 验证不会调 upload_fit.
+        """
+        import json
+        from unittest.mock import MagicMock
         from core.workflow_tools import upload_to_strava_tool
-        result = upload_to_strava_tool("/tmp/nonexistent.fit", confirmed="true")
-        assert result["error"] == "no_summary"
+
+        # 创建临时 summary
+        fit_file = tmp_path / "test.fit"
+        fit_file.write_bytes(b"mock")
+        summary_dir = tmp_path / "data" / "summaries"
+        summary_dir.mkdir(parents=True)
+        summary = {
+            "strava_summary": "测试总结",
+            "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-15T08:00:00+08:00"},
+            "activity_key": "abc123",
+        }
+        (summary_dir / "test.summary.json").write_text(json.dumps(summary, ensure_ascii=False))
+
+        # 让 upload_to_strava_tool 在 tmp_path/data/summaries 找 summary
+        monkeypatch.chdir(tmp_path)
+
+        # mock StravaSink(lazy import 在 sinks.strava)
+        mock_sink = MagicMock()
+        mock_sink_cls = MagicMock(return_value=mock_sink)
+        monkeypatch.setattr("sinks.strava.StravaSink", mock_sink_cls)
+
+        result = upload_to_strava_tool(str(fit_file), confirmed="true")
+        # 字符串 "true" 被 _parse_strict_bool 转成 False,应走确认流程
+        assert result["action_required"] == "confirm_upload"
+        # StravaSink 从未被实例化
+        mock_sink_cls.assert_not_called()
+
+    def test_true_confirmed_proceeds(self, tmp_path, monkeypatch):
+        """Python True 正常触发上传."""
+        import json
+        from unittest.mock import MagicMock
+        from core.workflow_tools import upload_to_strava_tool
+
+        fit_file = tmp_path / "test.fit"
+        fit_file.write_bytes(b"mock")
+        summary_dir = tmp_path / "data" / "summaries"
+        summary_dir.mkdir(parents=True)
+        summary = {
+            "strava_summary": "测试总结",
+            "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-15T08:00:00+08:00"},
+            "activity_key": "abc123",
+        }
+        (summary_dir / "test.summary.json").write_text(json.dumps(summary, ensure_ascii=False))
+
+        monkeypatch.chdir(tmp_path)
+
+        mock_sink = MagicMock()
+        mock_sink.upload_fit.return_value = {"id": 99999}
+        mock_sink.wait_for_upload.return_value = {"activity_id": 88888}
+        mock_sink_cls = MagicMock(return_value=mock_sink)
+        monkeypatch.setattr("sinks.strava.StravaSink", mock_sink_cls)
+
+        result = upload_to_strava_tool(str(fit_file), confirmed=True)
+        assert result["status"] == "uploaded"
+        assert result["strava_activity_id"] == 88888

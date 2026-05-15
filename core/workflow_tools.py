@@ -124,6 +124,8 @@ def upload_to_strava_tool(fit_path: str, *, confirmed: bool = False) -> dict[str
     if not strava_summary:
         return {"error": "no_strava_summary", "message": "Summary does not contain strava_summary"}
 
+    # 防御层:即使调用方绕过路由直接传字符串,也不会误触发上传
+    confirmed = _parse_strict_bool(confirmed)
     if not confirmed:
         return {
             "action_required": "confirm_upload",
