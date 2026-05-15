@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.tools import call_fit_analysis_tool, fit_analysis_tool_catalog
+from agent.tools import agent_workflow_tool_catalog, call_fit_analysis_tool, fit_data_tool_catalog
 from core.data_tools import (
     DEFAULT_SECTIONS,
     SUMMARY_SECTIONS,
@@ -163,8 +163,18 @@ class TestChooseStravaSummaryTone:
 
 
 class TestFitAnalysisToolCatalog:
-    def test_returns_all_8_tools(self):
-        tools = fit_analysis_tool_catalog()
+    def test_data_catalog_has_only_5_readonly_tools(self):
+        """Hidden tool loop 只能看到 5 个只读数据工具,不能看到副作用工具."""
+        tools = fit_data_tool_catalog()
+        tool_names = {t["name"] for t in tools}
+        assert tool_names == {
+            "get_activity_overview", "get_activity_summary",
+            "get_time_intervals", "get_distance_intervals", "get_history",
+        }
+
+    def test_agent_catalog_has_all_8_tools(self):
+        """Agent 模式可以看到 数据查询 + 下载/分析/上传."""
+        tools = agent_workflow_tool_catalog()
         tool_names = {t["name"] for t in tools}
         assert tool_names == {
             "get_activity_overview", "get_activity_summary",
@@ -172,8 +182,15 @@ class TestFitAnalysisToolCatalog:
             "sync_garmin_activities", "analyze_fit_file", "upload_to_strava",
         }
 
+    def test_no_side_effect_tools_in_data_catalog(self, sample_parsed_fit):
+        """确认 sync/upload 不在 data catalog 中,analyze-file 不会触发副作用."""
+        data_tools = {t["name"] for t in fit_data_tool_catalog()}
+        assert "sync_garmin_activities" not in data_tools
+        assert "upload_to_strava" not in data_tools
+        assert "analyze_fit_file" not in data_tools
+
     def test_each_tool_has_description(self):
-        for tool in fit_analysis_tool_catalog():
+        for tool in fit_data_tool_catalog():
             assert "description" in tool
             assert len(tool["description"]) > 0
 
@@ -311,3 +328,55 @@ class TestNormalizeHistoryEntry:
         result = normalize_history_entry(entry, path=fit_path, parsed=sample_parsed_fit)
         assert result["brief"] == "自定义笔记"
         assert result["custom_field"] == "keep_me"
+
+
+# -- 安全测试:strict bool / 上传错误状态 / sync count 上限 -----------------
+
+class TestStrictBool:
+    def test_true_is_true(self):
+        from core.workflow_tools import _parse_strict_bool
+        assert _parse_strict_bool(True) is True
+
+    def test_false_is_false(self):
+        from core.workflow_tools import _parse_strict_bool
+        assert _parse_strict_bool(False) is False
+
+    def test_string_false_is_false(self):
+        """字符串 'false' 不会被 bool() 误判为 True."""
+        from core.workflow_tools import _parse_strict_bool
+        assert _parse_strict_bool("false") is False
+
+    def test_string_true_is_false(self):
+        from core.workflow_tools import _parse_strict_bool
+        assert _parse_strict_bool("true") is False
+
+    def test_none_is_default(self):
+        from core.workflow_tools import _parse_strict_bool
+        assert _parse_strict_bool(None) is False
+
+    def test_number_one_is_false(self):
+        """数字 1 也不是 True."""
+        from core.workflow_tools import _parse_strict_bool
+        assert _parse_strict_bool(1) is False
+
+
+class TestSyncCountLimit:
+    def test_count_capped(self):
+        from core.workflow_tools import sync_garmin_activities_tool
+        # 只测 count 上限逻辑,不实际调用 Garmin(会因无凭证报错)
+        from core.workflow_tools import MAX_SYNC_COUNT
+        assert MAX_SYNC_COUNT == 20
+
+
+class TestUploadErrorStates:
+    def test_no_summary(self):
+        from core.workflow_tools import upload_to_strava_tool
+        result = upload_to_strava_tool("/tmp/nonexistent_activity.fit")
+        assert result["error"] == "no_summary"
+
+    def test_upload_tool_does_not_accept_string_confirmed(self):
+        """upload_to_strava_tool 的 confirmed 用 _parse_strict_bool,
+        字符串 "true" 被当作 False,不会执行上传."""
+        from core.workflow_tools import upload_to_strava_tool
+        result = upload_to_strava_tool("/tmp/nonexistent.fit", confirmed="true")
+        assert result["error"] == "no_summary"

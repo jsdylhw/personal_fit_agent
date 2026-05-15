@@ -1,7 +1,10 @@
 """LLM 工具目录与路由.
 
-fit_analysis_tool_catalog() 定义 LLM 可见的所有工具及其参数.
-call_fit_analysis_tool() 将 LLM 的工具调用请求路由到 core/data_tools.py 中的实现.
+两个 catalog:
+- fit_data_tool_catalog(): 5 个只读数据查询工具,给 analyze-file 的 hidden tool loop 用
+- agent_workflow_tool_catalog(): 8 个工具(数据查询 + 下载/分析/上传),给 agent 模式用
+
+call_fit_analysis_tool() 统一路由,根据 name 分发到 core/data_tools 或 core/workflow_tools.
 """
 
 from __future__ import annotations
@@ -9,28 +12,23 @@ from __future__ import annotations
 from typing import Any
 
 from core.data_tools import (
-    analyze_fit_file_tool,
     get_activity_overview_tool,
     get_activity_summary_tool,
     get_distance_intervals_tool,
     get_time_intervals_tool,
+)
+from core.stats import prune_empty_values
+from core.workflow_tools import (
+    _parse_strict_bool,
+    analyze_fit_file_tool,
     sync_garmin_activities_tool,
     upload_to_strava_tool,
 )
-from core.stats import prune_empty_values
 
 
-def fit_analysis_tool_catalog() -> list[dict[str, Any]]:
-    """返回 LLM 可见的工具列表,每个工具包含 name,description,arguments.
-
-    这是工具定义的唯一权威来源.
-    payload 中的 available_tools 由 build_initial_loop_payload 从这里取.
-
-    Returns:
-        list[dict]: 工具定义列表.
-    """
+def fit_data_tool_catalog() -> list[dict[str, Any]]:
+    """analyze-file 的 hidden tool loop 使用的只读数据查询工具."""
     return [
-        # -- 数据查询工具 --
         {
             "name": "get_activity_overview",
             "description": "Return a compact high-level activity overview: sport, local start time, duration, distance, total ascent, calories, basic power/HR/cadence/speed metrics, TSS/IF, and data availability flags.",
@@ -56,23 +54,32 @@ def fit_analysis_tool_catalog() -> list[dict[str, Any]]:
             "description": "Return prior compact training history if history is enabled for this analysis.",
             "arguments": {},
         },
-        # -- 工作流工具 --
+    ]
+
+
+def agent_workflow_tool_catalog() -> list[dict[str, Any]]:
+    """agent 模式使用的完整工具集(数据查询 + 下载/分析/上传)."""
+    return fit_data_tool_catalog() + [
         {
             "name": "sync_garmin_activities",
-            "description": "Download recent FIT files from Garmin China. Auto-skips already-downloaded activities by filename comparison. Returns count of downloaded vs skipped.",
+            "description": "Download recent FIT files from Garmin China. Auto-skips already-downloaded activities by filename comparison. Count is capped at 20.",
             "arguments": {"count": 5},
         },
         {
             "name": "analyze_fit_file",
-            "description": "Run local LLM analysis on a FIT file (hidden tool loop). Returns compact summary: sport_type, duration, distance, strava_summary. Use this after sync_garmin_activities to analyze downloaded files.",
+            "description": "Run local LLM analysis on a FIT file (hidden tool loop). Returns compact summary: sport_type, duration, distance, strava_summary. Use after sync_garmin_activities.",
             "arguments": {"fit_path": "/path/to/file.fit", "force": False},
         },
         {
             "name": "upload_to_strava",
-            "description": "Upload a FIT file to Strava with the generated Strava summary as description. REQUIRES CONFIRMATION: first call returns preview, then call again with confirmed=true to execute.",
+            "description": "Upload a FIT file to Strava with the generated Strava summary as description. REQUIRES CONFIRMATION: first call without confirmed returns preview, then call again with confirmed=true to execute. WARNING: confirmed ONLY accepts Python True, not strings.",
             "arguments": {"fit_path": "/path/to/file.fit", "confirmed": False},
         },
     ]
+
+
+# 向后兼容:analyze-file 仍在用
+fit_analysis_tool_catalog = fit_data_tool_catalog
 
 
 def call_fit_analysis_tool(
@@ -93,18 +100,20 @@ def call_fit_analysis_tool(
     Returns:
         dict: {tool, arguments, result} 或 {tool, arguments, error, message}.
     """
-    # 数据查询工具需要 parsed,工作流工具不需要
     _data_tool_names = {"get_activity_overview", "get_activity_summary", "get_time_intervals", "get_distance_intervals"}
     if name in _data_tool_names and parsed is None:
         return {"tool": name, "arguments": arguments, "error": "missing_parsed", "message": "This tool requires a parsed FIT file."}
 
     try:
+        # -- 工作流工具(副作用,仅 agent 模式) --
         if name == "sync_garmin_activities":
             result = sync_garmin_activities_tool(count=int(arguments.get("count", 5)))
         elif name == "analyze_fit_file":
-            result = analyze_fit_file_tool(str(arguments.get("fit_path", "")), force=bool(arguments.get("force", False)))
+            result = analyze_fit_file_tool(str(arguments.get("fit_path", "")), force=_parse_strict_bool(arguments.get("force")))
         elif name == "upload_to_strava":
-            result = upload_to_strava_tool(str(arguments.get("fit_path", "")), confirmed=bool(arguments.get("confirmed", False)))
+            result = upload_to_strava_tool(str(arguments.get("fit_path", "")), confirmed=_parse_strict_bool(arguments.get("confirmed")))
+
+        # -- 只读数据查询工具 --
         elif name == "get_activity_overview":
             result = get_activity_overview_tool(parsed)
         elif name == "get_activity_summary":

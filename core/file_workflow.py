@@ -15,7 +15,7 @@ from typing import Any
 from agent.chat_logger import append_chat_log, new_session_id, readable_chat_log_path
 from agent.llm import AnthropicMessagesClient, extract_text
 from agent.prompts import LLM_FIT_ANALYSIS_SYSTEM_PROMPT
-from agent.tools import call_fit_analysis_tool, fit_analysis_tool_catalog
+from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
 from fit.parser import parse_fit
 
 from .config import ensure_data_dirs
@@ -269,7 +269,7 @@ def build_initial_loop_payload(
         "fit_summary": parsed.get("summary", {}),
         "history_available": history_before is not None,
         # 工具列表从 catalog 取,不在 system prompt 中重复维护
-        "available_tools": fit_analysis_tool_catalog(),
+        "available_tools": fit_data_tool_catalog(),
     }
 
 
