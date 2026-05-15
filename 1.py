@@ -1,7 +1,7 @@
 
 import json
 from fit.parser import parse_fit
-from core.file_workflow import call_fit_analysis_tool
+from agent.tools import call_fit_analysis_tool
 
 parsed = parse_fit("594588818_ACTIVITY.fit")
 

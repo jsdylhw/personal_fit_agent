@@ -8,7 +8,7 @@ from typing import Any
 from agent.chat_logger import append_chat_log, new_session_id, readable_chat_log_path
 from agent.llm import AnthropicMessagesClient, extract_text
 from agent.prompts import DIRECT_FIT_ANALYSIS_SYSTEM_PROMPT, GUIDED_ACTIVITY_CHAT_SYSTEM_PROMPT
-from core.file_workflow import call_fit_analysis_tool
+from agent.tools import call_fit_analysis_tool
 from core.history import query_activity_history
 from fit.parser import parse_fit
 
@@ -247,54 +247,35 @@ def build_fit_activity_context(
         "fit_path": str(fit_path),
         "fit_name": fit_path.name,
         "fit_summary": parsed.get("summary", {}),
-        "available_tools": [
-            "get_activity_overview",
-            "get_activity_summary",
-            "get_time_intervals",
-            "get_distance_intervals",
-            "get_history",
-        ],
     }
     if not include_deep_data:
         return context
 
-    context["tool_results"] = {
-        "get_activity_overview": call_fit_analysis_tool(
-            "get_activity_overview",
-            {},
-            parsed=parsed,
-            history_before=history_before,
+    context["precomputed_data_views"] = {
+        "activity_overview": call_fit_analysis_tool(
+            "get_activity_overview", {}, parsed=parsed, history_before=history_before,
         ).get("result"),
-        "get_activity_summary": call_fit_analysis_tool(
+        "activity_summary": call_fit_analysis_tool(
             "get_activity_summary",
             {"sections": ["activity_identity", "duration_distance", "speed_pace", "power", "heart_rate", "cadence", "elevation", "energy_load", "data_availability"]},
-            parsed=parsed,
-            history_before=history_before,
+            parsed=parsed, history_before=history_before,
         ).get("result"),
-        "get_time_intervals_60s": call_fit_analysis_tool(
-            "get_time_intervals",
-            {"bucket_seconds": 60},
-            parsed=parsed,
-            history_before=history_before,
+        "time_intervals_60s": call_fit_analysis_tool(
+            "get_time_intervals", {"bucket_seconds": 60}, parsed=parsed, history_before=history_before,
         ).get("result"),
-        "get_distance_intervals_1km": call_fit_analysis_tool(
-            "get_distance_intervals",
-            {"bucket_distance_m": 1000},
-            parsed=parsed,
-            history_before=history_before,
+        "distance_intervals_1km": call_fit_analysis_tool(
+            "get_distance_intervals", {"bucket_distance_m": 1000}, parsed=parsed, history_before=history_before,
         ).get("result"),
-        "get_history": call_fit_analysis_tool(
-            "get_history",
-            {},
-            parsed=parsed,
-            history_before=history_before,
+        "history": call_fit_analysis_tool(
+            "get_history", {}, parsed=parsed, history_before=history_before,
         ).get("result"),
     }
     return {
         **context,
         "data_note": (
-            "这些 tool_results 是程序一次性提取出的客观数据。"
-            "模型可以基于它们分析，但不能声称调用了真实外部工具。"
+            "precomputed_data_views 是程序一次性预计算出的聚合数据视图（60s 时间窗口 + 1km 距离窗口）。"
+            "它们是静态快照，不是动态工具调用接口。"
+            "你可以基于这些数据分析，但不能声称调用了真实外部工具，也不能请求新的数据窗口。"
         ),
     }
 

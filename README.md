@@ -181,28 +181,29 @@ python -m app.cli upload-strava "data/summaries/activity.summary.json" --no-wait
 
 本地 Web 界面的“上传 Strava”按钮默认不等待处理完成，只确认上传请求已提交。
 
-## 隐藏分析工具
+## 分析工具
 
-FIT 分析 workflow 会把这些内部工具暴露给大模型：
+FIT 分析 workflow（`analyze-file`）通过隐藏的 LLM tool loop 工作：模型按需调用以下 5 个数据工具获取结构化信息，然后自行完成分析推理和报告写作。
 
-- `get_fit_summary`
-- `get_laps`
-- `get_numeric_stats`
-- `get_sampled_records`
-- `get_training_metadata`
-- `get_history`
+| 工具 | 用途 |
+|---|---|
+| `get_activity_overview` | 高层活动概览（运动类型、时长、距离、基础指标、数据可用性） |
+| `get_activity_summary` | 按模块获取结构化摘要（功率、心率、踏频、海拔、训练负荷等） |
+| `get_time_intervals` | 固定时间窗口的聚合平均值，支持按时间范围过滤 |
+| `get_distance_intervals` | 固定距离窗口的聚合平均值，支持按距离范围过滤 |
+| `get_history` | 获取历史训练记录用于纵向对比 |
 
 正常 CLI 分析时，这些工具调用不会展示给用户，但完整记录会保存在 `data/chat_logs/`。其中 `.jsonl` 适合程序读取，`.md` 适合直接查看。
 
 ## 对话式分析 FIT 文件
 
-单轮直接发送：程序会直接解析 FIT 文件，把摘要、数值统计、lap、采样记录、训练元数据和历史记录一起发给大模型，然后返回回答。
+`fit-ask`（单轮直接发送）：程序会预计算活动 overview、summary 和 60s/1km 区间聚合数据，作为静态背景上下文发送给模型，模型基于这些数据直接回答。
 
 ```bash
 python -m app.cli fit-ask "garmin_cn_fit_files/path/to/activity.fit" "分析这次骑行，并给下一次训练建议"
 ```
 
-多轮人为引导分析：程序先解析 FIT 文件，然后进入终端对话。你可以补充体感、目标、睡眠、补给、路况和下一次可训练时间，最后输入 `/final` 生成总结。
+`fit-chat`（多轮人为引导分析）：程序同样预计算数据视图，然后进入终端对话。你可以补充体感、目标、睡眠、补给、路况和下一次可训练时间，最后输入 `/final` 生成总结。
 
 默认行为：
 

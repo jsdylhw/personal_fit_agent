@@ -2,26 +2,24 @@ from __future__ import annotations
 
 import pytest
 
-from core.file_workflow import (
-    _extract_json_object,
-    _normalize_bucket_distance_m,
-    _normalize_bucket_seconds,
-    _normalize_summary_sections,
-    _round_float,
+from agent.tools import call_fit_analysis_tool, fit_analysis_tool_catalog
+from core.data_tools import (
     SUMMARY_SECTIONS,
-    _seconds_to_minutes,
-    call_fit_analysis_tool,
-    choose_strava_summary_tone,
-    fit_analysis_tool_catalog,
+    _normalize_summary_sections,
     get_activity_overview_tool,
     get_activity_summary_tool,
     get_distance_intervals_tool,
     get_sampled_records_tool,
     get_time_intervals_tool,
-    normalize_history_entry,
+)
+from core.file_workflow import _extract_json_object, choose_strava_summary_tone, normalize_history_entry
+from core.stats import (
+    _normalize_bucket_distance_m,
+    _normalize_bucket_seconds,
+    _round_float,
+    _seconds_to_minutes,
     prune_empty_values,
 )
-from core.history import query_activity_history
 
 
 class TestRoundFloat:
@@ -222,12 +220,6 @@ class TestCallFitAnalysisTool:
         history = {"schema_version": "v1", "count": 2, "activities": [{"start_time": "2026-05-10T00:00:00+00:00"}]}
         result = call_fit_analysis_tool("get_history", {}, parsed=sample_parsed_fit, history_before=history)
         assert result["result"]["count"] == 2
-
-    def test_get_sampled_records(self, sample_parsed_fit):
-        result = call_fit_analysis_tool("get_sampled_records", {"max_records": 20}, parsed=sample_parsed_fit, history_before=None)
-        assert result["result"]["record_count"] > 0
-        assert len(result["result"]["sampled_records"]) <= 20
-
 
 class TestGetActivityOverviewTool:
     def test_returns_expected_structure(self, sample_parsed_fit):
