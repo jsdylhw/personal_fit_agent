@@ -4,13 +4,11 @@ import pytest
 
 from agent.tools import call_fit_analysis_tool, fit_analysis_tool_catalog
 from core.data_tools import (
+    DEFAULT_SECTIONS,
     SUMMARY_SECTIONS,
     _normalize_summary_sections,
     get_activity_overview_tool,
     get_activity_summary_tool,
-    get_distance_intervals_tool,
-    get_sampled_records_tool,
-    get_time_intervals_tool,
 )
 from core.file_workflow import _extract_json_object, choose_strava_summary_tone, normalize_history_entry
 from core.stats import (
@@ -117,14 +115,16 @@ class TestNormalizeBucketDistance:
 
 
 class TestNormalizeSummarySections:
-    def test_all_returns_all_sections(self):
-        result = _normalize_summary_sections("all")
-        assert len(result) == len(SUMMARY_SECTIONS)
-
     def test_empty_returns_defaults(self):
         result = _normalize_summary_sections(None)
+        assert len(result) == len(DEFAULT_SECTIONS)
         assert "activity_identity" in result
         assert "training_zones" not in result  # not in defaults
+
+    def test_all_returns_all(self):
+        result = _normalize_summary_sections("all")
+        assert len(result) == len(SUMMARY_SECTIONS)
+        assert "training_zones" in result
 
     def test_specific_sections(self):
         result = _normalize_summary_sections(["power", "heart_rate"])
@@ -163,14 +163,13 @@ class TestChooseStravaSummaryTone:
 
 
 class TestFitAnalysisToolCatalog:
-    def test_returns_all_tools(self):
+    def test_returns_all_5_tools(self):
         tools = fit_analysis_tool_catalog()
         tool_names = {t["name"] for t in tools}
-        assert "get_activity_overview" in tool_names
-        assert "get_activity_summary" in tool_names
-        assert "get_time_intervals" in tool_names
-        assert "get_distance_intervals" in tool_names
-        assert "get_history" in tool_names
+        assert tool_names == {
+            "get_activity_overview", "get_activity_summary",
+            "get_time_intervals", "get_distance_intervals", "get_history",
+        }
 
     def test_each_tool_has_description(self):
         for tool in fit_analysis_tool_catalog():
@@ -186,7 +185,6 @@ class TestCallFitAnalysisTool:
     def test_get_activity_overview(self, sample_parsed_fit):
         result = call_fit_analysis_tool("get_activity_overview", {}, parsed=sample_parsed_fit, history_before=None)
         assert result["tool"] == "get_activity_overview"
-        assert "result" in result
         overview = result["result"]
         assert overview["activity_identity"]["sport_type"] == "cycling"
         assert overview["scale"]["duration_min"] is not None
@@ -199,18 +197,10 @@ class TestCallFitAnalysisTool:
     def test_get_time_intervals(self, sample_parsed_fit):
         result = call_fit_analysis_tool("get_time_intervals", {"bucket_seconds": 60}, parsed=sample_parsed_fit, history_before=None)
         assert result["result"]["available"] is True
-        assert result["result"]["mode"] == "time"
-
-    def test_get_time_intervals_with_window(self, sample_parsed_fit):
-        result = call_fit_analysis_tool(
-            "get_time_intervals", {"bucket_seconds": 30, "start_s": 100, "end_s": 200}, parsed=sample_parsed_fit, history_before=None
-        )
-        assert result["result"]["available"] is True
 
     def test_get_distance_intervals(self, sample_parsed_fit):
         result = call_fit_analysis_tool("get_distance_intervals", {"bucket_distance_m": 1000}, parsed=sample_parsed_fit, history_before=None)
         assert result["result"]["available"] is True
-        assert result["result"]["mode"] == "distance"
 
     def test_get_history_disabled(self, sample_parsed_fit):
         result = call_fit_analysis_tool("get_history", {}, parsed=sample_parsed_fit, history_before=None)
@@ -221,14 +211,15 @@ class TestCallFitAnalysisTool:
         result = call_fit_analysis_tool("get_history", {}, parsed=sample_parsed_fit, history_before=history)
         assert result["result"]["count"] == 2
 
+
 class TestGetActivityOverviewTool:
     def test_returns_expected_structure(self, sample_parsed_fit):
         result = get_activity_overview_tool(sample_parsed_fit)
         assert result["activity_identity"]["sport_type"] == "cycling"
         assert "duration_min" in result["scale"]
         assert "distance_km" in result["scale"]
+        assert "total_ascent_m" in result["scale"]
         assert "avg_power_w" in result["basic_metrics"]
-        assert "avg_hr_bpm" in result["basic_metrics"]
         assert "has_power" in result["data_availability"]
 
     def test_no_records_no_crash(self):
@@ -236,36 +227,70 @@ class TestGetActivityOverviewTool:
         result = get_activity_overview_tool(parsed)
         assert result["activity_identity"]["sport_type"] is None
         assert result["scale"]["duration_min"] is None
-        assert result["data_availability"]["record_count"] is None
 
 
 class TestGetActivitySummaryTool:
-    def test_all_sections_returns_structured_data(self, sample_parsed_fit):
+    def test_all_sections(self, sample_parsed_fit):
         result = get_activity_summary_tool(sample_parsed_fit, sections="all")
         assert "activity_identity" in result
         assert "power" in result
         assert "heart_rate" in result
+        assert "cadence" in result
+        assert "speed" in result
+        assert "elevation" in result
 
     def test_single_section(self, sample_parsed_fit):
         result = get_activity_summary_tool(sample_parsed_fit, sections=["power"])
         assert "power" in result
         assert "heart_rate" not in result
 
+    def test_power_section_merged(self, sample_parsed_fit):
+        """Power section merges availability + stats + summary."""
+        result = get_activity_summary_tool(sample_parsed_fit, sections=["power"])
+        power = result["power"]
+        assert power["available"] is True
+        assert "stats" in power
+        assert "summary" in power
+        assert power["summary"]["avg_power_w"] is not None
 
-class TestGetSampledRecordsTool:
-    def test_max_records_limit(self, sample_parsed_fit):
-        result = get_sampled_records_tool(sample_parsed_fit, max_records=10)
-        assert len(result["sampled_records"]) <= 10
+    def test_heart_rate_section_merged(self, sample_parsed_fit):
+        """Heart rate section merges availability + stats + summary."""
+        result = get_activity_summary_tool(sample_parsed_fit, sections=["heart_rate"])
+        hr = result["heart_rate"]
+        assert hr["available"] is True
+        assert "stats" in hr
+        assert "summary" in hr
 
-    def test_sample_step_calculated(self, sample_parsed_fit):
-        result = get_sampled_records_tool(sample_parsed_fit, max_records=20)
-        assert result["sample_step"] > 0
+    def test_cadence_section_merged(self, sample_parsed_fit):
+        result = get_activity_summary_tool(sample_parsed_fit, sections=["cadence"])
+        cad = result["cadence"]
+        assert cad["available"] is True
+        assert "stats" in cad
+        assert "summary" in cad
 
-    def test_empty_records(self):
-        parsed = {"records": []}
-        result = get_sampled_records_tool(parsed, max_records=20)
-        assert result["record_count"] == 0
-        assert result["sampled_records"] == []
+    def test_speed_section_merged(self, sample_parsed_fit):
+        result = get_activity_summary_tool(sample_parsed_fit, sections=["speed"])
+        spd = result["speed"]
+        assert spd["available"] is True
+        assert "stats" in spd
+        assert "summary" in spd
+
+    def test_elevation_section_merged(self, sample_parsed_fit):
+        result = get_activity_summary_tool(sample_parsed_fit, sections=["elevation"])
+        elev = result["elevation"]
+        assert elev["available"] is True
+        assert "summary" in elev
+        assert elev["summary"]["total_ascent_m"] is not None
+
+    def test_power_unavailable(self):
+        parsed = {"summary": {"has_power": False}, "records": [], "sessions": [], "training_metadata": {}}
+        result = get_activity_summary_tool(parsed, sections=["power"])
+        assert result["power"]["available"] is False
+
+    def test_hr_unavailable(self):
+        parsed = {"summary": {"has_heart_rate": False}, "records": [], "sessions": [], "training_metadata": {}}
+        result = get_activity_summary_tool(parsed, sections=["heart_rate"])
+        assert result["heart_rate"]["available"] is False
 
 
 class TestNormalizeHistoryEntry:

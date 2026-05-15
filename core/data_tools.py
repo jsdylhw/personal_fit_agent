@@ -25,18 +25,16 @@ from .stats import (
 )
 
 SUMMARY_SECTIONS = [
-    "activity_identity", "duration_distance", "speed_pace", "power",
-    "heart_rate", "cadence", "elevation", "energy_load",
-    "training_zones", "laps", "device_profile", "data_availability",
+    "activity_identity", "duration_distance",
+    "power", "heart_rate", "cadence", "speed", "elevation",
+    "energy_load", "training_zones", "laps", "device_profile",
 ]
 
-DEFAULT_SUMMARY_SECTIONS = [
-    "activity_identity", "duration_distance", "speed_pace", "power",
-    "heart_rate", "cadence", "elevation", "energy_load", "data_availability",
+DEFAULT_SECTIONS = [
+    "activity_identity", "duration_distance",
+    "power", "heart_rate", "cadence", "speed", "elevation",
+    "energy_load",
 ]
-
-MAX_SAMPLED_RECORDS = 300
-DEFAULT_SAMPLED_RECORDS = 80
 
 
 # -- tool implementations ---------------------------------------------------
@@ -55,6 +53,7 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
     max_hr = _first_number(session.get("max_heart_rate"), _stats_value(stats, "heart_rate", "max"))
     avg_cadence = _first_number(session.get("avg_cadence"), _stats_value(stats, "cadence", "avg"))
     avg_speed = _first_number(session.get("enhanced_avg_speed"), session.get("avg_speed"), _stats_value(stats, "enhanced_speed", "avg"))
+    total_ascent = _round_float(session.get("total_ascent"), 1)
 
     return {
         "schema_version": "activity_overview.v1",
@@ -67,16 +66,17 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
         "scale": {
             "duration_min": _seconds_to_minutes(duration_s),
             "distance_km": _meters_to_km(distance_m),
+            "total_ascent_m": total_ascent,
             "calories": _round_float(calories, 0),
         },
         "basic_metrics": {
             "avg_speed_kmh": _mps_to_kmh(avg_speed),
             "avg_power_w": _round_float(avg_power, 1),
             "max_power_w": _round_float(max_power, 1),
+            "normalized_power_w": _round_float(session.get("normalized_power"), 1),
             "avg_hr_bpm": _round_float(avg_hr, 1),
             "max_hr_bpm": _round_float(max_hr, 1),
             "avg_cadence_rpm": _round_float(avg_cadence, 1),
-            "normalized_power_w": _round_float(session.get("normalized_power"), 1),
             "tss": _round_float(session.get("training_stress_score"), 1),
             "intensity_factor": _round_float(session.get("intensity_factor"), 3),
         },
@@ -100,18 +100,17 @@ def get_activity_summary_tool(parsed: dict[str, Any], *, sections: Any = None) -
     stats = _numeric_field_stats(records_dataframe(parsed.get("records", [])))
 
     section_builders = {
-        "activity_identity": lambda: _summary_activity_identity(parsed, summary),
-        "duration_distance": lambda: _summary_duration_distance(summary, session),
-        "speed_pace": lambda: _summary_speed_pace(session, stats),
-        "power": lambda: _summary_power(session, stats, metadata),
-        "heart_rate": lambda: _summary_heart_rate(session, stats, metadata),
-        "cadence": lambda: _summary_cadence(session, stats),
-        "elevation": lambda: _summary_elevation(session, stats),
-        "energy_load": lambda: _summary_energy_load(session),
-        "training_zones": lambda: _summary_training_zones(metadata),
-        "laps": lambda: _summary_laps(parsed.get("laps") or []),
-        "device_profile": lambda: _summary_device_profile(metadata),
-        "data_availability": lambda: _summary_data_availability(summary, stats),
+        "activity_identity": lambda: _build_activity_identity(parsed, summary),
+        "duration_distance": lambda: _build_duration_distance(summary, session),
+        "power": lambda: _build_power(session, stats, metadata),
+        "heart_rate": lambda: _build_heart_rate(session, stats, metadata),
+        "cadence": lambda: _build_cadence(session, stats),
+        "speed": lambda: _build_speed(session, stats),
+        "elevation": lambda: _build_elevation(session, stats),
+        "energy_load": lambda: _build_energy_load(session),
+        "training_zones": lambda: _build_training_zones(metadata),
+        "laps": lambda: _build_laps(parsed.get("laps") or []),
+        "device_profile": lambda: _build_device_profile(metadata),
     }
 
     result: dict[str, Any] = {"schema_version": "activity_summary.v1", "sections": requested}
@@ -120,23 +119,6 @@ def get_activity_summary_tool(parsed: dict[str, Any], *, sections: Any = None) -
         if builder:
             result[section] = builder()
     return result
-
-
-def get_sampled_records_tool(parsed: dict[str, Any], *, max_records: int = DEFAULT_SAMPLED_RECORDS) -> dict[str, Any]:
-    records = parsed.get("records", [])
-    record_count = len(records)
-    max_records = max(1, min(int(max_records), MAX_SAMPLED_RECORDS))
-    sample_step = max(1, record_count // max_records) if record_count else 1
-    sampled_records = [
-        _compact_record(record)
-        for index, record in enumerate(records)
-        if index % sample_step == 0 or index == record_count - 1
-    ]
-    return {
-        "record_count": record_count,
-        "sample_step": sample_step,
-        "sampled_records": sampled_records[:max_records],
-    }
 
 
 def get_time_intervals_tool(
@@ -194,7 +176,6 @@ def get_distance_intervals_tool(
 # -- internal helpers --------------------------------------------------------
 
 def _build_interval_rows(working: Any, mode: str, bucket_size: int) -> list[dict[str, Any]]:
-    """Common row-building logic shared by time and distance interval tools."""
     column = "elapsed_s" if mode == "time" else "distance"
     start_key = "start_s" if mode == "time" else "start_d"
     end_key = "end_s" if mode == "time" else "end_d"
@@ -222,20 +203,11 @@ def _build_interval_rows(working: Any, mode: str, bucket_size: int) -> list[dict
     return rows
 
 
-def _compact_record(record: dict[str, Any]) -> dict[str, Any]:
-    fields = [
-        "timestamp", "elapsed_s", "distance", "enhanced_speed", "speed",
-        "heart_rate", "power", "cadence", "enhanced_altitude", "altitude",
-        "position_lat", "position_long",
-    ]
-    return prune_empty_values({field: record.get(field) for field in fields if field in record})
-
-
 # -- summary section builders ------------------------------------------------
 
 def _normalize_summary_sections(value: Any) -> list[str]:
     if value in (None, "", []):
-        return list(DEFAULT_SUMMARY_SECTIONS)
+        return list(DEFAULT_SECTIONS)
     if isinstance(value, str):
         raw_sections = [part.strip() for part in value.split(",") if part.strip()]
     elif isinstance(value, list):
@@ -247,7 +219,7 @@ def _normalize_summary_sections(value: Any) -> list[str]:
     return [section for section in SUMMARY_SECTIONS if section in raw_sections]
 
 
-def _summary_activity_identity(parsed: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
+def _build_activity_identity(parsed: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_file": parsed.get("path"),
         "sport_type": summary.get("sport_type"),
@@ -258,7 +230,7 @@ def _summary_activity_identity(parsed: dict[str, Any], summary: dict[str, Any]) 
     }
 
 
-def _summary_duration_distance(summary: dict[str, Any], session: dict[str, Any]) -> dict[str, Any]:
+def _build_duration_distance(summary: dict[str, Any], session: dict[str, Any]) -> dict[str, Any]:
     duration_s = _first_number(summary.get("duration_s"), session.get("total_timer_time"))
     elapsed_s = _first_number(session.get("total_elapsed_time"), duration_s)
     distance_m = _first_number(summary.get("distance_m"), session.get("total_distance"))
@@ -269,63 +241,91 @@ def _summary_duration_distance(summary: dict[str, Any], session: dict[str, Any])
     }
 
 
-def _summary_speed_pace(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    avg_speed = _first_number(session.get("enhanced_avg_speed"), session.get("avg_speed"), _stats_value(stats, "enhanced_speed", "avg"))
-    max_speed = _first_number(session.get("enhanced_max_speed"), session.get("max_speed"), _stats_value(stats, "enhanced_speed", "max"))
-    return {
-        "avg_speed_mps": _round_float(avg_speed, 3), "max_speed_mps": _round_float(max_speed, 3),
-        "avg_speed_kmh": _mps_to_kmh(avg_speed), "max_speed_kmh": _mps_to_kmh(max_speed),
-        "speed_stats_mps": _select_stats(stats, "enhanced_speed"),
-    }
+# -- data-type sections (stats + zones + availability merged) ----------------
 
-
-def _summary_power(session: dict[str, Any], stats: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
+def _build_power(session: dict[str, Any], stats: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
     zones_target = metadata.get("zones_target") or {}
+    power_stats = _select_stats(stats, "power")
     avg_power = _first_number(session.get("avg_power"), _stats_value(stats, "power", "avg"))
     normalized_power = _first_number(session.get("normalized_power"))
+
     return {
-        "avg_power_w": _round_float(avg_power, 1),
-        "max_power_w": _round_float(_first_number(session.get("max_power"), _stats_value(stats, "power", "max")), 1),
-        "normalized_power_w": _round_float(normalized_power, 1),
-        "threshold_power_w": _round_float(_first_number(session.get("threshold_power"), zones_target.get("functional_threshold_power")), 1),
-        "intensity_factor": _round_float(session.get("intensity_factor"), 3),
-        "variability_index": _round_float((normalized_power / avg_power) if avg_power and normalized_power else None, 3),
-        "total_work_kj": _round_float(_first_number(session.get("total_work")) / 1000 if _first_number(session.get("total_work")) is not None else None, 1),
-        "power_stats_w": _select_stats(stats, "power"),
+        "available": bool(power_stats),
+        "record_count_with_data": power_stats.get("count"),
+        "stats": power_stats,
+        "summary": {
+            "avg_power_w": _round_float(avg_power, 1),
+            "max_power_w": _round_float(_first_number(session.get("max_power"), _stats_value(stats, "power", "max")), 1),
+            "normalized_power_w": _round_float(normalized_power, 1),
+            "threshold_power_w": _round_float(_first_number(session.get("threshold_power"), zones_target.get("functional_threshold_power")), 1),
+            "intensity_factor": _round_float(session.get("intensity_factor"), 3),
+            "variability_index": _round_float((normalized_power / avg_power) if avg_power and normalized_power else None, 3),
+            "total_work_kj": _round_float(_first_number(session.get("total_work")) / 1000 if _first_number(session.get("total_work")) is not None else None, 1),
+        },
     }
 
 
-def _summary_heart_rate(session: dict[str, Any], stats: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
+def _build_heart_rate(session: dict[str, Any], stats: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
     zones_target = metadata.get("zones_target") or {}
     profile = metadata.get("user_profile") or {}
+    hr_stats = _select_stats(stats, "heart_rate")
+
     return {
-        "avg_hr_bpm": _round_float(_first_number(session.get("avg_heart_rate"), _stats_value(stats, "heart_rate", "avg")), 1),
-        "max_hr_bpm": _round_float(_first_number(session.get("max_heart_rate"), _stats_value(stats, "heart_rate", "max")), 1),
-        "resting_hr_bpm": _round_float(profile.get("resting_heart_rate"), 1),
-        "max_hr_setting_bpm": _round_float(_first_number(zones_target.get("max_heart_rate"), profile.get("default_max_biking_heart_rate"), profile.get("default_max_heart_rate")), 1),
-        "threshold_hr_bpm": _round_float(zones_target.get("threshold_heart_rate"), 1),
-        "heart_rate_stats_bpm": _select_stats(stats, "heart_rate"),
+        "available": bool(hr_stats),
+        "record_count_with_data": hr_stats.get("count"),
+        "stats": hr_stats,
+        "summary": {
+            "avg_hr_bpm": _round_float(_first_number(session.get("avg_heart_rate"), _stats_value(stats, "heart_rate", "avg")), 1),
+            "max_hr_bpm": _round_float(_first_number(session.get("max_heart_rate"), _stats_value(stats, "heart_rate", "max")), 1),
+            "resting_hr_bpm": _round_float(profile.get("resting_heart_rate"), 1),
+            "max_hr_setting_bpm": _round_float(_first_number(zones_target.get("max_heart_rate"), profile.get("default_max_biking_heart_rate"), profile.get("default_max_heart_rate")), 1),
+            "threshold_hr_bpm": _round_float(zones_target.get("threshold_heart_rate"), 1),
+        },
     }
 
 
-def _summary_cadence(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _build_cadence(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    cadence_stats = _select_stats(stats, "cadence")
     return {
-        "avg_cadence_rpm": _round_float(_first_number(session.get("avg_cadence"), _stats_value(stats, "cadence", "avg")), 1),
-        "max_cadence_rpm": _round_float(_first_number(session.get("max_cadence"), _stats_value(stats, "cadence", "max")), 1),
-        "cadence_stats_rpm": _select_stats(stats, "cadence"),
+        "available": "cadence" in stats,
+        "record_count_with_data": cadence_stats.get("count"),
+        "stats": cadence_stats,
+        "summary": {
+            "avg_cadence_rpm": _round_float(_first_number(session.get("avg_cadence"), _stats_value(stats, "cadence", "avg")), 1),
+            "max_cadence_rpm": _round_float(_first_number(session.get("max_cadence"), _stats_value(stats, "cadence", "max")), 1),
+        },
     }
 
 
-def _summary_elevation(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    altitude_stats = _select_stats(stats, "enhanced_altitude") or _select_stats(stats, "altitude")
+def _build_speed(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    speed_stats = _select_stats(stats, "enhanced_speed") or _select_stats(stats, "speed")
     return {
-        "total_ascent_m": _round_float(session.get("total_ascent"), 1),
-        "total_descent_m": _round_float(session.get("total_descent"), 1),
-        "altitude_stats_m": altitude_stats,
+        "available": bool(speed_stats),
+        "record_count_with_data": speed_stats.get("count"),
+        "stats": speed_stats,
+        "summary": {
+            "avg_speed_mps": _round_float(_first_number(session.get("enhanced_avg_speed"), session.get("avg_speed"), _stats_value(stats, "enhanced_speed", "avg")), 3),
+            "max_speed_mps": _round_float(_first_number(session.get("enhanced_max_speed"), session.get("max_speed"), _stats_value(stats, "enhanced_speed", "max")), 3),
+            "avg_speed_kmh": _mps_to_kmh(_first_number(session.get("enhanced_avg_speed"), session.get("avg_speed"), _stats_value(stats, "enhanced_speed", "avg"))),
+            "max_speed_kmh": _mps_to_kmh(_first_number(session.get("enhanced_max_speed"), session.get("max_speed"), _stats_value(stats, "enhanced_speed", "max"))),
+        },
     }
 
 
-def _summary_energy_load(session: dict[str, Any]) -> dict[str, Any]:
+def _build_elevation(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    alt_stats = _select_stats(stats, "enhanced_altitude") or _select_stats(stats, "altitude")
+    return {
+        "available": bool(alt_stats),
+        "record_count_with_data": alt_stats.get("count"),
+        "stats": alt_stats,
+        "summary": {
+            "total_ascent_m": _round_float(session.get("total_ascent"), 1),
+            "total_descent_m": _round_float(session.get("total_descent"), 1),
+        },
+    }
+
+
+def _build_energy_load(session: dict[str, Any]) -> dict[str, Any]:
     return {
         "calories": _round_float(session.get("total_calories"), 0),
         "tss": _round_float(session.get("training_stress_score"), 1),
@@ -335,12 +335,12 @@ def _summary_energy_load(session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _summary_training_zones(metadata: dict[str, Any]) -> dict[str, Any]:
+def _build_training_zones(metadata: dict[str, Any]) -> dict[str, Any]:
     zones_target = metadata.get("zones_target") or {}
     return {"zones_target": zones_target, "time_in_zone": metadata.get("time_in_zone")}
 
 
-def _summary_laps(laps: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_laps(laps: list[dict[str, Any]]) -> dict[str, Any]:
     compact_laps: list[dict[str, Any]] = []
     for index, lap in enumerate(laps, start=1):
         compact_laps.append({
@@ -361,24 +361,11 @@ def _summary_laps(laps: list[dict[str, Any]]) -> dict[str, Any]:
     return {"lap_count": len(laps), "laps": compact_laps}
 
 
-def _summary_device_profile(metadata: dict[str, Any]) -> dict[str, Any]:
+def _build_device_profile(metadata: dict[str, Any]) -> dict[str, Any]:
     devices = metadata.get("device_info") or []
     device = devices[-1] if isinstance(devices, list) and devices else {}
     return {
         "user_profile": metadata.get("user_profile"),
         "device": device,
         "device_settings": metadata.get("device_settings"),
-    }
-
-
-def _summary_data_availability(summary: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "record_count": summary.get("record_count"),
-        "lap_count": summary.get("lap_count"),
-        "has_power": summary.get("has_power"),
-        "has_heart_rate": summary.get("has_heart_rate"),
-        "has_position": summary.get("has_position"),
-        "has_cadence": "cadence" in stats,
-        "has_speed": "enhanced_speed" in stats or "speed" in stats,
-        "has_altitude": "enhanced_altitude" in stats or "altitude" in stats,
     }
