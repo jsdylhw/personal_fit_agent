@@ -16,6 +16,7 @@ from core.data_tools import (
     get_activity_summary_tool,
     get_distance_intervals_tool,
     get_time_intervals_tool,
+    llm_safe_history,
 )
 from core.stats import prune_empty_values
 from core.workflow_tools import (
@@ -123,7 +124,7 @@ def call_fit_analysis_tool(
         elif name == "get_distance_intervals":
             result = get_distance_intervals_tool(parsed, bucket_distance_m=arguments.get("bucket_distance_m", 1000), start_d=arguments.get("start_d"), end_d=arguments.get("end_d"))
         elif name == "get_history":
-            result = history_before or {"schema_version": "file_training_history.v1", "count": 0, "activities": [], "note": "History was not enabled or no previous activities exist."}
+            result = llm_safe_history(history_before) or {"schema_version": "file_training_history.v1", "count": 0, "activities": [], "note": "History was not enabled or no previous activities exist."}
         else:
             return {"tool": name, "arguments": arguments, "error": "unknown_tool"}
 

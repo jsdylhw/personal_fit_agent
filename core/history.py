@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -152,5 +152,6 @@ def _parse_datetime(value: Any) -> datetime | None:
         except ValueError:
             return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
+        return dt
+    local_tz = datetime.now().astimezone().tzinfo
+    return dt.astimezone(local_tz).replace(tzinfo=None)

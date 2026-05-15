@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from fit.parser import records_dataframe
@@ -80,8 +81,9 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
         "activity_identity": {
             "sport_type": summary.get("sport_type"),
             "sub_sport": summary.get("sub_sport"),
-            "start_time_local": summary.get("start_time_local"),
-            "start_time_utc": summary.get("start_time_utc") or summary.get("start_time"),
+            "start_time_local": local_time_without_timezone(
+                summary.get("start_time_local") or summary.get("start_time")
+            ),
         },
         "scale": {
             "duration_min": _seconds_to_minutes(duration_s),
@@ -292,10 +294,74 @@ def _build_activity_identity(parsed: dict[str, Any], summary: dict[str, Any]) ->
         "source_file": parsed.get("path"),
         "sport_type": summary.get("sport_type"),
         "sub_sport": summary.get("sub_sport"),
-        "start_time_local": summary.get("start_time_local"),
-        "start_time_utc": summary.get("start_time_utc") or summary.get("start_time"),
-        "timezone_note": summary.get("timezone_note"),
+        "start_time_local": local_time_without_timezone(
+            summary.get("start_time_local") or summary.get("start_time")
+        ),
     }
+
+
+def llm_safe_fit_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return the FIT summary shape shown to the LLM.
+
+    The model should only see local wall-clock time for activity identity. UTC
+    fields are useful internally, but they have caused the final report to mix
+    UTC and local ride times.
+    """
+    safe = {
+        key: value
+        for key, value in summary.items()
+        if key not in {"start_time", "start_time_utc", "timezone_note"}
+    }
+    safe["start_time_local"] = local_time_without_timezone(
+        summary.get("start_time_local") or summary.get("start_time")
+    )
+    return safe
+
+
+def llm_safe_history(history: dict[str, Any] | None) -> dict[str, Any] | None:
+    if history is None:
+        return None
+    safe = dict(history)
+    activities: list[dict[str, Any]] = []
+    for row in history.get("activities") or []:
+        if not isinstance(row, dict):
+            continue
+        activity = dict(row)
+        local_start = local_time_without_timezone(
+            activity.get("start_time_local") or activity.get("start_time")
+        )
+        activity.pop("start_time", None)
+        activity["start_time_local"] = local_start
+        activities.append(activity)
+    safe["activities"] = activities
+    return safe
+
+
+def local_time_without_timezone(value: Any) -> str | None:
+    """Normalize an ISO-ish time to local wall-clock format without +08:00/Z."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(datetime.now().astimezone().tzinfo)
+        return dt.replace(tzinfo=None).isoformat(timespec="seconds")
+    text = str(value)
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return _strip_timezone_suffix(text)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(datetime.now().astimezone().tzinfo)
+    return dt.replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def _strip_timezone_suffix(value: str) -> str:
+    if value.endswith("Z"):
+        return value[:-1]
+    if len(value) >= 6 and value[-6] in {"+", "-"} and value[-3] == ":":
+        return value[:-6]
+    return value
 
 
 def _build_duration_distance(summary: dict[str, Any], session: dict[str, Any]) -> dict[str, Any]:

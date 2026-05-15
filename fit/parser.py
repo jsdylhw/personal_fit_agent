@@ -262,7 +262,7 @@ def _local_iso(value: Any) -> str | None:
     if dt is None:
         return None
     local_tz = datetime.now().astimezone().tzinfo
-    return dt.astimezone(local_tz).isoformat()
+    return dt.astimezone(local_tz).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 def _parse_datetime(value: Any) -> datetime | None:

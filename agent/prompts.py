@@ -17,7 +17,7 @@ The available_tools list is provided in each user payload. Refer to the payload 
 
 Decision guidance:
 1. Start from the initial fit_summary. Request get_activity_overview when you need a compact first-pass activity portrait.
-2. For user-facing dates and time-of-day, use fit_summary.start_time_local. fit_summary.start_time is UTC and should not be described as the user's local ride time.
+2. For dates and time-of-day, use fit_summary.start_time_local only. It is a local wall-clock string without a timezone suffix; do not add +08:00/Z or infer UTC.
 3. Prefer get_activity_summary with sections when you need objective grouped data such as power, heart_rate, energy_load, laps, training_zones, or device_profile.
 4. Request get_time_intervals when you need time-based averages, such as every 1 minute, every 5 minutes, or the 100-200s window for a sprint. Use very small buckets like 3s only for focused short windows because full-activity output can be large.
 5. Request get_distance_intervals when you need distance-based averages, such as every 1km, every 3km, every 5km, or the 2km-3km window for a climb.
@@ -34,7 +34,7 @@ Final response must be exactly one JSON object:
   "strava_summary": "About 200 Chinese characters, suitable for Strava activity description. Follow strava_summary_style from the user payload. The tone may be normal, professional, playful, minimal, humorous, or occasionally catgirl; do not force catgirl wording unless that selected style asks for it. Avoid repeating basics Strava already displays, such as distance, duration, average speed, elevation gain, and route. Prefer training stimulus, perceived rhythm judgment, TSS/IF/NP or other metrics Strava may not show, data-quality reminders, and next-session advice.",
   "history_entry": {
     "schema_version": "llm_activity_history_entry.v1",
-    "start_time": "...",
+    "start_time": "Local wall-clock time copied from fit_summary.start_time_local, with no timezone suffix.",
     "sport_type": "...",
     "duration_min": 0,
     "distance_km": 0,

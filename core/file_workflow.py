@@ -19,6 +19,7 @@ from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
 from fit.parser import parse_fit
 
 from .config import ensure_data_dirs
+from .data_tools import llm_safe_fit_summary, llm_safe_history, local_time_without_timezone
 from .history import query_activity_history, upsert_activity_history
 
 STRAVA_SUMMARY_TONES: list[dict[str, str]] = [
@@ -80,6 +81,7 @@ def analyze_fit_file(
     if summary_path.exists() and not force:
         result = previous_summary
         if result.get("schema_version") == "llm_fit_file_analysis.v1":
+            _sanitize_result_times(result)
             result["summary_path"] = str(summary_path)
             result.setdefault("report_path", str(_report_path(path)))
             if update_history:
@@ -89,7 +91,11 @@ def analyze_fit_file(
 
     parsed = parse_fit(path)
     history_before = (
-        query_activity_history(before=parsed["summary"].get("start_time"), days=90, limit=50)
+        query_activity_history(
+            before=parsed["summary"].get("start_time_local") or parsed["summary"].get("start_time"),
+            days=90,
+            limit=50,
+        )
         if use_history
         else None
     )
@@ -105,7 +111,7 @@ def analyze_fit_file(
         "status": "analyzed",
         "activity_key": _activity_key(path),
         "fit_path": str(path),
-        "fit_summary": parsed["summary"],
+        "fit_summary": llm_safe_fit_summary(parsed["summary"]),
         "model": model_result.get("model"),
         "session_id": model_result.get("session_id"),
         "log_path": model_result.get("log_path"),
@@ -114,7 +120,7 @@ def analyze_fit_file(
         "markdown_report": model_result["markdown_report"],
         "strava_summary": model_result["strava_summary"],
         "history_entry": history_entry,
-        "history_before": history_before,
+        "history_before": llm_safe_history(history_before),
     }
     # 如果之前有过 guided 分析,保留不覆盖
     _preserve_guided_analysis(result, previous_summary)
@@ -266,7 +272,7 @@ def build_initial_loop_payload(
         },
         "strava_summary_style": strava_summary_tone,
         "fit_file": {"path": str(path), "name": path.name, "activity_key": _activity_key(path)},
-        "fit_summary": parsed.get("summary", {}),
+        "fit_summary": llm_safe_fit_summary(parsed.get("summary", {})),
         "history_available": history_before is not None,
         # 工具列表从 catalog 取,不在 system prompt 中重复维护
         "available_tools": fit_data_tool_catalog(),
@@ -290,8 +296,14 @@ def normalize_history_entry(entry: dict[str, Any], *, path: Path, parsed: dict[s
     normalized.setdefault("schema_version", "llm_activity_history_entry.v1")
     normalized["activity_key"] = _activity_key(path)
     normalized["file_path"] = str(path)
-    normalized.setdefault("start_time", summary.get("start_time"))
-    normalized.setdefault("start_time_local", summary.get("start_time_local"))
+    local_start = local_time_without_timezone(
+        summary.get("start_time_local")
+        or normalized.get("start_time_local")
+        or normalized.get("start_time")
+        or summary.get("start_time")
+    )
+    normalized["start_time"] = local_start
+    normalized["start_time_local"] = local_start
     normalized.setdefault("sport_type", summary.get("sport_type"))
     normalized.setdefault("sub_sport", summary.get("sub_sport"))
     normalized.setdefault("duration_s", summary.get("duration_s"))
@@ -339,6 +351,16 @@ def _preserve_guided_analysis(result: dict[str, Any], previous: dict[str, Any]) 
         result["guided_analysis"] = previous["guided_analysis"]
     if "guided_analysis_history" in previous:
         result["guided_analysis_history"] = previous["guided_analysis_history"]
+
+
+def _sanitize_result_times(result: dict[str, Any]) -> None:
+    fit_summary = result.get("fit_summary")
+    if isinstance(fit_summary, dict):
+        result["fit_summary"] = llm_safe_fit_summary(fit_summary)
+
+    history_before = result.get("history_before")
+    if isinstance(history_before, dict):
+        result["history_before"] = llm_safe_history(history_before)
 
 
 def _report_path(path: Path) -> Path:

@@ -10,7 +10,13 @@ from core.data_tools import (
     get_activity_overview_tool,
     get_activity_summary_tool,
 )
-from core.file_workflow import _extract_json_object, choose_strava_summary_tone, normalize_history_entry
+from core.file_workflow import (
+    _extract_json_object,
+    analyze_fit_file,
+    build_initial_loop_payload,
+    choose_strava_summary_tone,
+    normalize_history_entry,
+)
 from core.stats import (
     _normalize_bucket_distance_m,
     _normalize_bucket_seconds,
@@ -234,6 +240,8 @@ class TestGetActivityOverviewTool:
     def test_returns_expected_structure(self, sample_parsed_fit):
         result = get_activity_overview_tool(sample_parsed_fit)
         assert result["activity_identity"]["sport_type"] == "cycling"
+        assert result["activity_identity"]["start_time_local"] == "2026-05-14T16:00:00"
+        assert "start_time_utc" not in result["activity_identity"]
         assert "duration_min" in result["scale"]
         assert "distance_km" in result["scale"]
         assert "total_ascent_m" in result["scale"]
@@ -320,6 +328,8 @@ class TestNormalizeHistoryEntry:
         assert result["activity_key"] is not None
         assert result["schema_version"] == "llm_activity_history_entry.v1"
         assert result["sport_type"] == "cycling"
+        assert result["start_time"] == "2026-05-14T16:00:00"
+        assert result["start_time_local"] == "2026-05-14T16:00:00"
 
     def test_preserves_existing_fields(self, sample_parsed_fit, tmp_path):
         fit_path = tmp_path / "test_activity.fit"
@@ -329,8 +339,75 @@ class TestNormalizeHistoryEntry:
         assert result["brief"] == "自定义笔记"
         assert result["custom_field"] == "keep_me"
 
+    def test_strips_timezone_from_llm_history_time(self, sample_parsed_fit, tmp_path):
+        fit_path = tmp_path / "test_activity.fit"
+        fit_path.write_bytes(b"mock fit content")
+        entry = {"start_time": "2026-05-14T16:00:00+08:00"}
+        result = normalize_history_entry(entry, path=fit_path, parsed=sample_parsed_fit)
+        assert result["start_time"] == "2026-05-14T16:00:00"
+        assert result["start_time_local"] == "2026-05-14T16:00:00"
+
 
 # -- 安全测试:strict bool / 上传错误状态 / sync count 上限 -----------------
+
+class TestBuildInitialLoopPayload:
+    def test_llm_payload_only_exposes_local_start_time(self, sample_parsed_fit, tmp_path):
+        fit_path = tmp_path / "test_activity.fit"
+        fit_path.write_bytes(b"mock fit content")
+        payload = build_initial_loop_payload(
+            fit_path,
+            sample_parsed_fit,
+            history_before=None,
+            strava_summary_tone={"name": "minimal_brief", "description": "test"},
+        )
+        fit_summary = payload["fit_summary"]
+        assert fit_summary["start_time_local"] == "2026-05-14T16:00:00"
+        assert "start_time" not in fit_summary
+        assert "start_time_utc" not in fit_summary
+        assert "timezone_note" not in fit_summary
+
+
+class TestAnalyzeFitFileResultTimes:
+    def test_result_fit_summary_uses_only_local_time(
+        self, sample_parsed_fit, tmp_path, monkeypatch
+    ):
+        fit_path = tmp_path / "test_activity.fit"
+        fit_path.write_bytes(b"mock fit content")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("core.file_workflow.parse_fit", lambda path: sample_parsed_fit)
+        monkeypatch.setattr(
+            "core.file_workflow.query_activity_history",
+            lambda **kwargs: {
+                "schema_version": "file_training_history.v1",
+                "count": 1,
+                "activities": [
+                    {
+                        "start_time": "2026-05-13T00:00:00+00:00",
+                        "start_time_local": "2026-05-13T08:00:00+08:00",
+                    }
+                ],
+            },
+        )
+        monkeypatch.setattr(
+            "core.file_workflow.analyze_with_llm",
+            lambda path, parsed, history_before: {
+                "model": "test-model",
+                "markdown_report": "# Report",
+                "strava_summary": "summary",
+                "history_entry": {},
+            },
+        )
+
+        result = analyze_fit_file(fit_path, use_history=True, update_history=False, force=True)
+
+        assert result["fit_summary"]["start_time_local"] == "2026-05-14T16:00:00"
+        assert "start_time" not in result["fit_summary"]
+        assert "start_time_utc" not in result["fit_summary"]
+        assert "timezone_note" not in result["fit_summary"]
+        history_activity = result["history_before"]["activities"][0]
+        assert history_activity["start_time_local"] == "2026-05-13T08:00:00"
+        assert "start_time" not in history_activity
+
 
 class TestStrictBool:
     def test_true_is_true(self):
@@ -393,7 +470,9 @@ class TestUploadErrorStates:
             "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-15T08:00:00+08:00"},
             "activity_key": "abc123",
         }
-        (summary_dir / "test.summary.json").write_text(json.dumps(summary, ensure_ascii=False))
+        (summary_dir / "test.summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False), encoding="utf-8"
+        )
 
         # 让 upload_to_strava_tool 在 tmp_path/data/summaries 找 summary
         monkeypatch.chdir(tmp_path)
@@ -424,7 +503,9 @@ class TestUploadErrorStates:
             "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-15T08:00:00+08:00"},
             "activity_key": "abc123",
         }
-        (summary_dir / "test.summary.json").write_text(json.dumps(summary, ensure_ascii=False))
+        (summary_dir / "test.summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False), encoding="utf-8"
+        )
 
         monkeypatch.chdir(tmp_path)
 
