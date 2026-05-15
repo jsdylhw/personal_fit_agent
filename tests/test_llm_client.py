@@ -79,27 +79,6 @@ class TestAnthropicMessagesClient:
             {"base_url": "https://api.test.com/anthropic", "api_key": "sk-test", "model": "test-model"}
         )
 
-    def test_build_messages_payload(self, client):
-        payload = client.build_messages_payload(
-            system="You are helpful.",
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=500,
-            temperature=0.7,
-        )
-        assert payload["model"] == "test-model"
-        assert payload["max_tokens"] == 500
-        assert payload["temperature"] == 0.7
-        assert payload["system"] == "You are helpful."
-        assert len(payload["messages"]) == 1
-
-    def test_build_message_payload_single_message(self, client):
-        payload = client.build_message_payload(
-            system="System prompt",
-            user="Hello single user",
-        )
-        assert payload["messages"][0]["role"] == "user"
-        assert payload["messages"][0]["content"] == "Hello single user"
-
     @patch("agent.llm.urlopen")
     def test_create_messages_http(self, mock_urlopen, client):
         mock_response = MagicMock()

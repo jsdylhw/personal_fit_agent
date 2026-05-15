@@ -1,3 +1,8 @@
+"""CLI 入口:11 个命令,覆盖分析/上传/对话/Strava 认证等操作.
+
+通过 typer 注册,入口点为 python -m app.cli <command>.
+"""
+
 import json
 
 import typer

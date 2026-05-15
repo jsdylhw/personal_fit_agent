@@ -164,7 +164,7 @@ def sample_activity_history_entry():
         "sub_sport": "road",
         "duration_s": 600.0,
         "distance_m": 5000.0,
-        "brief": "30分钟恢复骑，Z1-Z2为主",
+        "brief": "30分钟恢复骑,Z1-Z2为主",
     }
 
 
@@ -229,7 +229,7 @@ def mock_final_llm_response():
                 "text": json.dumps({
                     "action": "final",
                     "markdown_report": "# Test Activity Report\n\nTest content.",
-                    "strava_summary": "测试 Strava 总结 200 字。",
+                    "strava_summary": "测试 Strava 总结 200 字.",
                     "history_entry": {
                         "schema_version": "llm_activity_history_entry.v1",
                         "start_time": "2026-05-14T08:00:00+00:00",

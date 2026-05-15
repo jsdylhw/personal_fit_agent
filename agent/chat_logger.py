@@ -1,3 +1,9 @@
+"""对话日志:将 LLM 交互记录写入 JSONL + 可读 Markdown.
+
+每次 LLM 调用都会追加一条日志.JSONL 适合程序读取,
+同步生成同名 .md 文件方便人工查看 tool loop 过程.
+"""
+
 from __future__ import annotations
 
 import json
@@ -6,28 +12,32 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-
 DEFAULT_CHAT_LOG_DIR = Path("data") / "chat_logs"
 
 
 def new_session_id(prefix: str = "chat") -> str:
+    """生成唯一 session ID:{prefix}_{UTC时间}_{随机8位hex}."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{prefix}_{timestamp}_{uuid4().hex[:8]}"
 
 
 def append_chat_log(
-    session_id: str,
-    event: dict[str, Any],
-    *,
-    log_dir: str | Path = DEFAULT_CHAT_LOG_DIR,
+    session_id: str, event: dict[str, Any], *, log_dir: str | Path = DEFAULT_CHAT_LOG_DIR,
 ) -> Path:
+    """追加一条事件记录到 session 的 JSONL 日志,同步更新 .md 可读日志.
+
+    Args:
+        session_id: new_session_id() 生成的会话标识.
+        event: 要记录的事件 dict.
+        log_dir: 日志目录.
+
+    Returns:
+        Path: JSONL 文件路径.
+    """
     target_dir = Path(log_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{session_id}.jsonl"
-    record = {
-        "logged_at": datetime.now(timezone.utc).isoformat(),
-        **event,
-    }
+    record = {"logged_at": datetime.now(timezone.utc).isoformat(), **event}
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     append_readable_chat_log(path, record)
@@ -35,23 +45,21 @@ def append_chat_log(
 
 
 def readable_chat_log_path(path: str | Path) -> Path:
+    """将 .jsonl 路径转为对应的 .md 路径."""
     source = Path(path)
     return source.with_suffix(".md")
 
 
 def append_readable_chat_log(jsonl_path: Path, record: dict[str, Any]) -> Path:
+    """追加一条可读事件到对应的 .md 日志."""
     path = readable_chat_log_path(jsonl_path)
     is_new = not path.exists()
     lines: list[str] = []
     if is_new:
-        lines.extend(
-            [
-                f"# Chat Log: {jsonl_path.stem}",
-                "",
-                f"- jsonl: `{jsonl_path}`",
-                "",
-            ]
-        )
+        lines.extend([
+            f"# Chat Log: {jsonl_path.stem}", "",
+            f"- jsonl: `{jsonl_path}`", "",
+        ])
     lines.extend(_format_record(record))
     with path.open("a", encoding="utf-8") as f:
         f.write("\n".join(lines).rstrip() + "\n\n")
@@ -61,13 +69,7 @@ def append_readable_chat_log(jsonl_path: Path, record: dict[str, Any]) -> Path:
 def _format_record(record: dict[str, Any]) -> list[str]:
     event = str(record.get("event") or "event")
     logged_at = record.get("logged_at")
-    lines = [
-        "---",
-        "",
-        f"## {event}",
-        "",
-        f"- logged_at: `{logged_at}`",
-    ]
+    lines = ["---", "", f"## {event}", "", f"- logged_at: `{logged_at}`"]
     for key in ["fit_path", "activity_key", "summary_path", "report_path", "session_id"]:
         if record.get(key):
             lines.append(f"- {key}: `{record[key]}`")
@@ -159,6 +161,7 @@ def _compact_json(value: Any) -> str:
 
 
 def _preview_json(value: Any, limit: int = 1800) -> str:
+    """JSON 预览,超长截断避免 .md 日志膨胀."""
     text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
     if len(text) > limit:
         text = text[:limit].rstrip() + "\n... truncated"

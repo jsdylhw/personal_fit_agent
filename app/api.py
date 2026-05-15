@@ -1,3 +1,9 @@
+"""FastAPI Web API:9 个接口,提供 Web UI 后端的活动管理能力.
+
+注意:所有接口是同步的,LLM 分析接口会阻塞事件循环(30-120s).
+后续应改为 async + run_in_executor.
+"""
+
 from __future__ import annotations
 
 import json

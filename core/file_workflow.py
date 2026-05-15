@@ -1,3 +1,9 @@
+"""FIT 文件分析工作流编排.
+
+analyze_fit_file() 是 CLI / API 的主入口:解析 FIT → LLM tool loop → 写报告 → 写历史.
+analyze_with_llm() 是隐藏 tool loop 的核心:多轮 LLM 调用工具 → 最终输出报告和 Strava 总结.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -18,22 +24,22 @@ from .history import query_activity_history, upsert_activity_history
 STRAVA_SUMMARY_TONES: list[dict[str, str]] = [
     {
         "name": "training_log",
-        "description": "正常训练日志口吻：朴素、克制、像 Strava 日志，重点写本次训练刺激、节奏和身体反馈。",
+        "description": "正常训练日志口吻:朴素,克制,像 Strava 日志,重点写本次训练刺激,节奏和身体反馈.",
         "weight": 2,
     },
     {
         "name": "professional_coach",
-        "description": "专业教练口吻：直接给训练判断和下一步建议，语气理性，尽量少用玩笑。",
+        "description": "专业教练口吻:直接给训练判断和下一步建议,语气理性,尽量少用玩笑.",
         "weight": 2,
     },
     {
         "name": "minimal_brief",
-        "description": "简洁复盘口吻：短句、高信息密度，读起来干净利落，适合直接贴到 Strava。",
+        "description": "简洁复盘口吻:短句,高信息密度,读起来干净利落,适合直接贴到 Strava.",
         "weight": 2,
     },
     {
         "name": "soft_catgirl",
-        "description": "猫娘口吻：可爱、轻快、带一点鼓励，但保持训练判断清楚，不要每句都卖萌。",
+        "description": "猫娘口吻:可爱,轻快,带一点鼓励,但保持训练判断清楚,不要每句都卖萌.",
         "weight": 10,
     },
 ]
@@ -48,6 +54,21 @@ def analyze_fit_file(
     update_history: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
+    """分析单个 FIT 文件的完整流程入口.
+
+    编排:解析 FIT → 查历史 → LLM tool loop → 写 summary/report → 写历史.
+    如果已有同文件的分析结果且 force=False,跳过 LLM 调用直接返回缓存.
+
+    Args:
+        fit_path: .fit 文件路径.
+        use_history: 是否查询历史活动作为分析上下文.
+        update_history: 是否将本次分析结果写入历史.
+        force: 是否强制重新分析(即使已有缓存).
+
+    Returns:
+        dict: 包含 activity_key, fit_summary, markdown_report, strava_summary,
+              history_entry, model, session_id 等字段的完整分析结果.
+    """
     path = Path(fit_path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(path)
@@ -95,6 +116,7 @@ def analyze_fit_file(
         "history_entry": history_entry,
         "history_before": history_before,
     }
+    # 如果之前有过 guided 分析,保留不覆盖
     _preserve_guided_analysis(result, previous_summary)
 
     report_path = write_brief_report(result)
@@ -116,6 +138,26 @@ def analyze_with_llm(
     *,
     history_before: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    """隐藏 tool loop:LLM 最多 MAX_TOOL_LOOP_STEPS 轮调用工具,最终输出报告.
+
+    每轮:
+    1. 发送 message history + system prompt 给 LLM
+    2. LLM 返回 tool 请求或 final 结果
+    3. 如果是 tool,本地执行并将结果追加到 message history
+    4. 如果是 final,提取 markdown_report 和 strava_summary
+
+    Args:
+        path: FIT 文件路径.
+        parsed: parse_fit() 的返回值.
+        history_before: 历史活动数据(可选).
+
+    Returns:
+        dict: {model, session_id, markdown_report, strava_summary,
+               history_entry, log_path, readable_log_path}
+
+    Raises:
+        RuntimeError: LLM 在 MAX_TOOL_LOOP_STEPS 轮内未返回 final,或返回的报告/总结为空.
+    """
     client = AnthropicMessagesClient()
     session_id = new_session_id("fit_analysis")
     strava_summary_tone = choose_strava_summary_tone()
@@ -203,6 +245,11 @@ def build_initial_loop_payload(
     history_before: dict[str, Any] | None,
     strava_summary_tone: dict[str, str],
 ) -> dict[str, Any]:
+    """构建 tool loop 首轮 user message 的 payload.
+
+    包含 FIT 摘要,工具列表(从 catalog 取,不和 prompt 重复维护),
+    Strava 风格要求,输出契约.
+    """
     return {
         "instruction": (
             "You are in a hidden FIT analysis tool loop. The user asked to analyze this activity. "
@@ -221,11 +268,13 @@ def build_initial_loop_payload(
         "fit_file": {"path": str(path), "name": path.name, "activity_key": _activity_key(path)},
         "fit_summary": parsed.get("summary", {}),
         "history_available": history_before is not None,
+        # 工具列表从 catalog 取,不在 system prompt 中重复维护
         "available_tools": fit_analysis_tool_catalog(),
     }
 
 
 def choose_strava_summary_tone() -> dict[str, str]:
+    """加权随机选择 Strava 总结口吻.catgirl 权重 10x."""
     tone = random.choices(
         STRAVA_SUMMARY_TONES,
         weights=[int(tone.get("weight", 1)) for tone in STRAVA_SUMMARY_TONES],
@@ -235,6 +284,7 @@ def choose_strava_summary_tone() -> dict[str, str]:
 
 
 def normalize_history_entry(entry: dict[str, Any], *, path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
+    """补全 LLM 返回的 history_entry 中的必要字段."""
     summary = parsed.get("summary", {})
     normalized = dict(entry)
     normalized.setdefault("schema_version", "llm_activity_history_entry.v1")
@@ -264,7 +314,7 @@ def write_brief_report(result: dict[str, Any]) -> Path:
     return report_path
 
 
-# -- internal helpers --------------------------------------------------------
+# -- helpers ------------------------------------------------------------------
 
 def _summary_path(path: Path) -> Path:
     ensure_data_dirs()
@@ -282,6 +332,7 @@ def _read_existing_summary(path: Path) -> dict[str, Any]:
 
 
 def _preserve_guided_analysis(result: dict[str, Any], previous: dict[str, Any]) -> None:
+    """如果之前 run 过 guided_chat,保留不覆盖."""
     if not previous:
         return
     if "guided_analysis" in previous:
@@ -296,6 +347,7 @@ def _report_path(path: Path) -> Path:
 
 
 def _activity_key(path: Path) -> str:
+    """SHA256 前 16 位 hex,用于 FIT 文件去重和关联."""
     digest = hashlib.sha256()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -304,6 +356,7 @@ def _activity_key(path: Path) -> str:
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
+    """从 LLM 响应中提取 JSON object,处理 markdown fence 和前后缀噪音."""
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`")

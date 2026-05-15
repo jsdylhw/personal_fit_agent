@@ -1,3 +1,10 @@
+"""FIT 数据工具:为 LLM tool loop 提供结构化活动数据.
+
+每个函数对应 LLM 可请求的一个数据查询,接收 parse_fit() 的输出,
+返回 LLM 可直接消费的结构化数据.
+被 agent/tools.py 的 call_fit_analysis_tool() 路由调用.
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -24,12 +31,14 @@ from .stats import (
     prune_empty_values,
 )
 
+# get_activity_summary 支持的全部 section
 SUMMARY_SECTIONS = [
     "activity_identity", "duration_distance",
     "power", "heart_rate", "cadence", "speed", "elevation",
     "energy_load", "training_zones", "laps", "device_profile",
 ]
 
+# 默认只返回核心 section,避免一次工具调用消耗过多 token
 DEFAULT_SECTIONS = [
     "activity_identity", "duration_distance",
     "power", "heart_rate", "cadence", "speed", "elevation",
@@ -37,9 +46,21 @@ DEFAULT_SECTIONS = [
 ]
 
 
-# -- tool implementations ---------------------------------------------------
+# =============================================================================
+# 工具入口(被 agent/tools.py 路由调用)
+# =============================================================================
 
 def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
+    """高层活动概览:运动类型,时长/距离/爬升,功率/心率/踏频均值,TSS/IF,数据可用性.
+
+    适合 LLM 第一眼快速了解活动规模和传感器覆盖情况.
+
+    Args:
+        parsed: parse_fit() 的返回值.
+
+    Returns:
+        dict: {activity_identity, scale, basic_metrics, data_availability}
+    """
     summary = parsed.get("summary") or {}
     session = _last_item(parsed.get("sessions")) or {}
     stats = _numeric_field_stats(records_dataframe(parsed.get("records", [])))
@@ -93,6 +114,19 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_activity_summary_tool(parsed: dict[str, Any], *, sections: Any = None) -> dict[str, Any]:
+    """按 section 返回结构化活动摘要,支持按需取用以减少 token.
+
+    不带参数返回 DEFAULT_SECTIONS(核心 8 项),"all" 返回全部 11 项.
+    数据类 section(power/heart_rate/cadence/speed/elevation)结构统一:
+        {available, record_count_with_data, stats, summary}
+
+    Args:
+        parsed: parse_fit() 的返回值.
+        sections: None/"all"/["power","heart_rate",...]
+
+    Returns:
+        dict: {schema_version, sections, <section_name>: {...}, ...}
+    """
     requested = _normalize_summary_sections(sections)
     summary = parsed.get("summary") or {}
     session = _last_item(parsed.get("sessions")) or {}
@@ -124,6 +158,20 @@ def get_activity_summary_tool(parsed: dict[str, Any], *, sections: Any = None) -
 def get_time_intervals_tool(
     parsed: dict[str, Any], *, bucket_seconds: int = 60, start_s: Any = None, end_s: Any = None,
 ) -> dict[str, Any]:
+    """固定时间窗口的聚合数据,返回 column_arrays 格式以节省 token.
+
+    用于让 LLM 检查冲刺,间歇,滑行,后半程掉速等时间维度的片段.
+    功率/踏频/速度的 avg_nonzero_* 和 *_zero_fraction 用于区分滑行/停车.
+
+    Args:
+        parsed: parse_fit() 的返回值.
+        bucket_seconds: 窗口秒数 [1, 600],默认 60.
+        start_s: 起始时间秒数(可选,用于聚焦短片段).
+        end_s: 结束时间秒数(可选).
+
+    Returns:
+        dict: available=False 时只有 reason;available=True 时包含 series.
+    """
     df = records_dataframe(parsed.get("records", []))
     if df.empty or "elapsed_s" not in df.columns:
         return {"available": False, "reason": "No records or elapsed_s data available."}
@@ -150,6 +198,20 @@ def get_time_intervals_tool(
 def get_distance_intervals_tool(
     parsed: dict[str, Any], *, bucket_distance_m: Any = 1000, start_d: Any = None, end_d: Any = None,
 ) -> dict[str, Any]:
+    """固定距离窗口的聚合数据,返回 column_arrays 格式以节省 token.
+
+    用于分析每公里配速变化,爬坡段功率/心率响应.
+    支持 start_d/end_d 聚焦特定路段.
+
+    Args:
+        parsed: parse_fit() 的返回值.
+        bucket_distance_m: 窗口米数(100/200/500/1000/3000/5000/10000),默认 1000.
+        start_d: 起始距离米数(可选).
+        end_d: 结束距离米数(可选).
+
+    Returns:
+        dict: available=False 时只有 reason;available=True 时包含 series.
+    """
     df = records_dataframe(parsed.get("records", []))
     if df.empty or "distance" not in df.columns:
         return {"available": False, "reason": "No records or distance data available."}
@@ -173,9 +235,12 @@ def get_distance_intervals_tool(
     }
 
 
-# -- internal helpers --------------------------------------------------------
+# =============================================================================
+# 内部 helper
+# =============================================================================
 
 def _build_interval_rows(working: Any, mode: str, bucket_size: int) -> list[dict[str, Any]]:
+    """time/distance intervals 共用的分组统计逻辑."""
     column = "elapsed_s" if mode == "time" else "distance"
     start_key = "start_s" if mode == "time" else "start_d"
     end_key = "end_s" if mode == "time" else "end_d"
@@ -194,6 +259,7 @@ def _build_interval_rows(working: Any, mode: str, bucket_size: int) -> list[dict
         }
         row.update(_distance_delta(group))
         row.update(_series_stats(group, "heart_rate", "hr_bpm"))
+        # 功率/踏频/速度的 0 值有训练含义(滑行,停踩,停车),保留占比
         row.update(_series_stats(group, "power", "power_w", include_zero_stats=True))
         row.update(_series_stats(group, "cadence", "cadence_rpm", include_zero_stats=True))
         row.update(_series_stats(group, "enhanced_speed", "speed_mps", include_zero_stats=True))
@@ -203,9 +269,8 @@ def _build_interval_rows(working: Any, mode: str, bucket_size: int) -> list[dict
     return rows
 
 
-# -- summary section builders ------------------------------------------------
-
 def _normalize_summary_sections(value: Any) -> list[str]:
+    """标准化 sections 参数.None → DEFAULT_SECTIONS,"all" → SUMMARY_SECTIONS."""
     if value in (None, "", []):
         return list(DEFAULT_SECTIONS)
     if isinstance(value, str):
@@ -218,6 +283,10 @@ def _normalize_summary_sections(value: Any) -> list[str]:
         return list(SUMMARY_SECTIONS)
     return [section for section in SUMMARY_SECTIONS if section in raw_sections]
 
+
+# =============================================================================
+# section builder — 每个 section 的构建函数
+# =============================================================================
 
 def _build_activity_identity(parsed: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -241,9 +310,8 @@ def _build_duration_distance(summary: dict[str, Any], session: dict[str, Any]) -
     }
 
 
-# -- data-type sections (stats + zones + availability merged) ----------------
-
 def _build_power(session: dict[str, Any], stats: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
+    """功率 section:{available, record_count_with_data, stats, summary}."""
     zones_target = metadata.get("zones_target") or {}
     power_stats = _select_stats(stats, "power")
     avg_power = _first_number(session.get("avg_power"), _stats_value(stats, "power", "avg"))
@@ -259,6 +327,7 @@ def _build_power(session: dict[str, Any], stats: dict[str, dict[str, Any]], meta
             "normalized_power_w": _round_float(normalized_power, 1),
             "threshold_power_w": _round_float(_first_number(session.get("threshold_power"), zones_target.get("functional_threshold_power")), 1),
             "intensity_factor": _round_float(session.get("intensity_factor"), 3),
+            # VI = NP / AP,> 1.05 通常表示节奏不稳定
             "variability_index": _round_float((normalized_power / avg_power) if avg_power and normalized_power else None, 3),
             "total_work_kj": _round_float(_first_number(session.get("total_work")) / 1000 if _first_number(session.get("total_work")) is not None else None, 1),
         },
@@ -266,9 +335,9 @@ def _build_power(session: dict[str, Any], stats: dict[str, dict[str, Any]], meta
 
 
 def _build_heart_rate(session: dict[str, Any], stats: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
+    hr_stats = _select_stats(stats, "heart_rate")
     zones_target = metadata.get("zones_target") or {}
     profile = metadata.get("user_profile") or {}
-    hr_stats = _select_stats(stats, "heart_rate")
 
     return {
         "available": bool(hr_stats),
@@ -336,6 +405,7 @@ def _build_energy_load(session: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_training_zones(metadata: dict[str, Any]) -> dict[str, Any]:
+    """FIT 文件中的原始区间定义和时间分布."""
     zones_target = metadata.get("zones_target") or {}
     return {"zones_target": zones_target, "time_in_zone": metadata.get("time_in_zone")}
 

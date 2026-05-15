@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""Garmin 中国区 FIT 文件下载器.
+
+独立可运行的模块,也可被 app/api.py 导入使用.
+通过 garminconnect 库登录 Garmin 中国区,下载原始活动文件(.fit 或 .zip),
+解压并去重后保存到本地目录.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -9,10 +16,10 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_OUTPUT_DIR = "garmin_cn_fit_files"
 DEFAULT_TOKENSTORE = ".garmin_cn_tokens"
+# Garmin 中国区使用独立的 OAuth 端点
 CN_DI_TOKEN_URL = "https://diauth.garmin.cn/di-oauth2-service/oauth/token"
 
 
@@ -93,6 +100,12 @@ def save_original_as_fit(raw_bytes: bytes, output_dir: Path, activity: dict[str,
 
 
 class GarminChinaDownloader:
+    """Garmin 中国区登录与活动下载.
+
+    封装 garminconnect 库,处理中国区 DI OAuth 端点覆盖,
+    代理设置和 token持久化.登录后才能调用 list_activities/download_original.
+    """
+
     def __init__(
         self,
         *,
@@ -111,6 +124,7 @@ class GarminChinaDownloader:
         self.Garmin = None
 
     def login(self) -> None:
+        # 代理通过全局环境变量设置,影响整个进程的网络请求
         if self.proxy:
             os.environ["HTTP_PROXY"] = self.proxy
             os.environ["HTTPS_PROXY"] = self.proxy

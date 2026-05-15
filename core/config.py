@@ -1,8 +1,12 @@
+"""配置加载:从 config.yaml 读取 Garmin/Strava/Agent/运动员 各项配置.
+
+config.yaml 在 .gitignore 中,不会提交到仓库.
+"""
+
 from pathlib import Path
 from typing import Any
 
 import yaml
-
 
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_CONFIG_PATH = Path("config.yaml")
@@ -13,6 +17,14 @@ def get_data_dir() -> Path:
 
 
 def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
+    """加载完整的 config.yaml.
+
+    Args:
+        path: 配置文件路径.
+
+    Returns:
+        dict: 解析后的配置.文件不存在返回 {}.
+    """
     config_path = Path(path)
     if not config_path.exists():
         return {}
@@ -23,6 +35,11 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
 
 
 def load_agent_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
+    """从 config.yaml 中提取 agent: 块.
+
+    用字符串行解析而非完整 YAML 再取 key,避免解析其他可能包含
+    敏感值或特殊字符的顶层块.
+    """
     config_path = Path(path)
     if not config_path.exists():
         return {}
@@ -40,6 +57,19 @@ def load_agent_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
 
 
 def get_agent_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """获取标准化的 agent 配置,补全默认值.
+
+    支持两种调用方式:
+    - 无参:从 config.yaml 加载 agent 块.
+    - 传 dict:从内存中的 config dict 提取 agent key.
+
+    Args:
+        config: 完整的 config dict(可选).
+
+    Returns:
+        dict: {provider, base_url, api_key, model, max_tokens, temperature,
+               anthropic_version, timeout_seconds, max_retries}
+    """
     agent_config = (
         (config.get("agent") or {}) if config is not None else load_agent_config()
     )
@@ -59,6 +89,7 @@ def get_agent_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def _extract_top_level_yaml_block(text: str, key: str) -> str:
+    """从 YAML 文本中按缩进提取顶层 block.不依赖完整 YAML 解析."""
     lines = text.splitlines()
     start = None
     for index, line in enumerate(lines):
@@ -84,11 +115,16 @@ def _extract_top_level_yaml_block(text: str, key: str) -> str:
 
 
 def ensure_data_dirs(data_dir: Path | None = None) -> dict[str, Path]:
+    """确保 data/ 和 data/reports/ 目录存在.
+
+    Returns:
+        dict: {root, reports} 路径映射.
+    """
     root = data_dir or get_data_dir()
     paths = {
         "root": root,
         "reports": root / "reports",
     }
-    for path in paths.values():
-        path.mkdir(parents=True, exist_ok=True)
+    for p in paths.values():
+        p.mkdir(parents=True, exist_ok=True)
     return paths

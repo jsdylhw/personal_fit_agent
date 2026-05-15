@@ -1,3 +1,10 @@
+"""引导式活动分析与单轮直接问答.
+
+和 core/file_workflow.py 的隐藏 tool loop 不同,这里的 guided/direct 模式不会
+动态调用工具——程序一次性预计算所有数据视图(overview/summary/60s/1km/history),
+作为静态背景上下文发给 LLM.LLM 只能基于这些预计算数据分析,不能再请求新窗口.
+"""
+
 from __future__ import annotations
 
 import json
@@ -35,8 +42,8 @@ class GuidedActivityChatSession:
                     {
                         "type": "background_context",
                         "instruction": (
-                            "下面是本地 FIT 文件解析出的客观数据，只作为对话背景。"
-                            "不要假装知道这里没有的数据；需要用户补充主观感受、目标或训练安排时直接询问。"
+                            "下面是本地 FIT 文件解析出的客观数据,只作为对话背景."
+                            "不要假装知道这里没有的数据;需要用户补充主观感受,目标或训练安排时直接询问."
                         ),
                         "activity_context": build_fit_activity_context(
                             self.fit_path,
@@ -54,9 +61,9 @@ class GuidedActivityChatSession:
 
     def start(self) -> dict[str, Any]:
         return self.ask(
-            "请开始一次人为引导的运动分析。先用很短的话说明你看到了哪次活动，"
-            "然后提出 2-4 个最关键的问题，帮助我补充主观感受、训练目标和下一次安排。"
-            "不要现在直接写完整报告。"
+            "请开始一次人为引导的运动分析.先用很短的话说明你看到了哪次活动,"
+            "然后提出 2-4 个最关键的问题,帮助我补充主观感受,训练目标和下一次安排."
+            "不要现在直接写完整报告."
         )
 
     def ask(self, message: str) -> dict[str, Any]:
@@ -93,13 +100,13 @@ class GuidedActivityChatSession:
         update_summary: bool = True,
     ) -> dict[str, Any]:
         final_instruction = (
-            "请基于本次多轮对话和活动背景，生成最终运动分析总结。"
-            "要求包含：总体评价、关键依据、主观信息如何影响判断、下一次训练建议、"
-            "本周安排建议、恢复/拉伸/交叉训练建议。"
-            "如果用户没有补充的信息不足，明确写出不确定性。"
+            "请基于本次多轮对话和活动背景,生成最终运动分析总结."
+            "要求包含:总体评价,关键依据,主观信息如何影响判断,下一次训练建议,"
+            "本周安排建议,恢复/拉伸/交叉训练建议."
+            "如果用户没有补充的信息不足,明确写出不确定性."
         )
         if instruction:
-            final_instruction += f"\n用户额外要求：{instruction}"
+            final_instruction += f"\n用户额外要求:{instruction}"
 
         result = self.ask(final_instruction)
         report_path = None
@@ -150,6 +157,20 @@ def direct_fit_analysis(
     save_report: bool = False,
     update_summary: bool = False,
 ) -> dict[str, Any]:
+    """单轮直接问答:预计算数据视图 → 发送给 LLM → 返回回答.
+
+    CLI fit-ask 命令的入口.
+
+    Args:
+        fit_path: FIT 文件路径或 "latest".
+        question: 用户问题.
+        use_history: 是否附带历史数据.
+        save_report: 是否保存报告到 data/reports/.
+        update_summary: 是否写入 summary JSON.
+
+    Returns:
+        dict: {answer, fit_path, session_id, log_path, report_path?, summary_path?}
+    """
     path = resolve_fit_path(fit_path)
     parsed = parse_fit(path)
     history_before = _history_for_parsed(parsed) if use_history else None
@@ -157,9 +178,9 @@ def direct_fit_analysis(
     session_id = new_session_id("direct_fit_chat")
     user_payload = {
         "instruction": (
-            "请基于下面的 FIT 文件客观数据直接回答用户问题。"
-            "这是单轮直接发送模式，不需要再要求用户必须进入多轮对话；"
-            "但如果关键信息缺失，需要明确写出不确定性。"
+            "请基于下面的 FIT 文件客观数据直接回答用户问题."
+            "这是单轮直接发送模式,不需要再要求用户必须进入多轮对话;"
+            "但如果关键信息缺失,需要明确写出不确定性."
         ),
         "user_question": question,
         "activity_context": build_fit_activity_context(
@@ -243,6 +264,20 @@ def build_fit_activity_context(
     history_before: dict[str, Any] | None,
     include_deep_data: bool,
 ) -> dict[str, Any]:
+    """构建 guided/direct 模式的静态背景上下文.
+
+    include_deep_data=True 时,预先计算所有数据视图(overview/summary/60s/1km/history)
+    放入 precomputed_data_views.LLM 收到的是一份静态快照,无法再请求新窗口.
+
+    Args:
+        fit_path: FIT 文件路径.
+        parsed: parse_fit() 的返回值.
+        history_before: 历史活动数据.
+        include_deep_data: 是否预计算完整数据视图.
+
+    Returns:
+        dict: {fit_path, fit_name, fit_summary, precomputed_data_views?, data_note?}
+    """
     context: dict[str, Any] = {
         "fit_path": str(fit_path),
         "fit_name": fit_path.name,
@@ -251,6 +286,7 @@ def build_fit_activity_context(
     if not include_deep_data:
         return context
 
+    # guided/direct 模式不会动态调用工具,一次性预计算所有数据视图作为静态快照
     context["precomputed_data_views"] = {
         "activity_overview": call_fit_analysis_tool(
             "get_activity_overview", {}, parsed=parsed, history_before=history_before,
@@ -273,9 +309,9 @@ def build_fit_activity_context(
     return {
         **context,
         "data_note": (
-            "precomputed_data_views 是程序一次性预计算出的聚合数据视图（60s 时间窗口 + 1km 距离窗口）。"
-            "它们是静态快照，不是动态工具调用接口。"
-            "你可以基于这些数据分析，但不能声称调用了真实外部工具，也不能请求新的数据窗口。"
+            "precomputed_data_views 是程序一次性预计算出的聚合数据视图(60s 时间窗口 + 1km 距离窗口)."
+            "它们是静态快照,不是动态工具调用接口."
+            "你可以基于这些数据分析,但不能声称调用了真实外部工具,也不能请求新的数据窗口."
         ),
     }
 

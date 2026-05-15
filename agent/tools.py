@@ -1,3 +1,9 @@
+"""LLM 工具目录与路由.
+
+fit_analysis_tool_catalog() 定义 LLM 可见的所有工具及其参数.
+call_fit_analysis_tool() 将 LLM 的工具调用请求路由到 core/data_tools.py 中的实现.
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -12,6 +18,14 @@ from core.stats import prune_empty_values
 
 
 def fit_analysis_tool_catalog() -> list[dict[str, Any]]:
+    """返回 LLM 可见的工具列表,每个工具包含 name,description,arguments.
+
+    这是工具定义的唯一权威来源.System prompt 不重复列工具,
+    payload 中的 available_tools 由 build_initial_loop_payload 从这里取.
+
+    Returns:
+        list[dict]: 5 个工具的定义.
+    """
     return [
         {
             "name": "get_activity_overview",
@@ -48,6 +62,17 @@ def call_fit_analysis_tool(
     parsed: dict[str, Any],
     history_before: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    """将 LLM 的工具调用路由到对应的数据工具实现.
+
+    Args:
+        name: 工具名,对应 fit_analysis_tool_catalog 中的 name.
+        arguments: LLM 传入的参数 dict.
+        parsed: parse_fit() 的返回值.
+        history_before: 历史活动数据(可选).
+
+    Returns:
+        dict: {tool, arguments, result} 或 {tool, arguments, error, message}.
+    """
     try:
         if name == "get_activity_overview":
             result = get_activity_overview_tool(parsed)

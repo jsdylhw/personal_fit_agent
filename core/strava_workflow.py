@@ -1,3 +1,8 @@
+"""Strava 上传工作流:从 summary JSON 读取分析结果,上传 FIT 并写描述.
+
+依赖 sinks/strava.py 的 StravaSink 做实际的 API 调用.
+"""
+
 from __future__ import annotations
 
 import json
@@ -8,11 +13,18 @@ from sinks.strava import StravaSink
 
 
 def upload_summary_to_strava(
-    summary_path: str | Path,
-    *,
-    title: str | None = None,
-    wait: bool = True,
+    summary_path: str | Path, *, title: str | None = None, wait: bool = True,
 ) -> dict[str, Any]:
+    """从 summary JSON 读取 strava_summary 和 fit_path,上传到 Strava.
+
+    Args:
+        summary_path: data/summaries/*.summary.json 路径.
+        title: 自定义活动标题,默认用日期+运动类型.
+        wait: 是否轮询等待 Strava 处理完成.
+
+    Returns:
+        dict: {summary_path, fit_path, title, description, upload, upload_status?}
+    """
     path = Path(summary_path)
     if not path.exists():
         raise FileNotFoundError(path)
@@ -29,18 +41,13 @@ def upload_summary_to_strava(
     upload_title = title or _default_title(fit_summary, Path(fit_path))
     sink = StravaSink()
     upload = sink.upload_fit(
-        fit_path,
-        title=upload_title,
-        description=strava_summary,
+        fit_path, title=upload_title, description=strava_summary,
         external_id=summary.get("activity_key"),
     )
 
     result: dict[str, Any] = {
-        "summary_path": str(path),
-        "fit_path": fit_path,
-        "title": upload_title,
-        "description": strava_summary,
-        "upload": upload,
+        "summary_path": str(path), "fit_path": fit_path,
+        "title": upload_title, "description": strava_summary, "upload": upload,
     }
     upload_id = upload.get("id")
     if wait and upload_id is not None:
@@ -49,9 +56,17 @@ def upload_summary_to_strava(
 
 
 def update_strava_description_from_summary(
-    activity_id: str,
-    summary_path: str | Path,
+    activity_id: str, summary_path: str | Path,
 ) -> dict[str, Any]:
+    """仅更新已上传活动的描述,不上传 FIT.
+
+    Args:
+        activity_id: Strava 活动 ID.
+        summary_path: summary JSON 路径.
+
+    Returns:
+        dict: Strava API 响应.
+    """
     path = Path(summary_path)
     if not path.exists():
         raise FileNotFoundError(path)

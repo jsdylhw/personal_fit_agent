@@ -1,3 +1,9 @@
+"""训练活动历史存储与查询.
+
+使用 JSONL 文件存储,每行一条活动记录.适合几十到几百条规模,
+超出后建议切到 SQLite.
+"""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from .config import ensure_data_dirs
-
 
 DEFAULT_HISTORY_PATH = Path("data") / "activity_history.jsonl"
 
@@ -19,6 +24,14 @@ def history_path(path: str | Path | None = None) -> Path:
 
 
 def load_activity_history(path: str | Path | None = None) -> list[dict[str, Any]]:
+    """加载全部历史活动,按 start_time 排序.
+
+    Args:
+        path: JSONL 文件路径,默认 data/activity_history.jsonl.
+
+    Returns:
+        list[dict]: 按时间升序排列的活动记录.文件不存在返回 [].
+    """
     target = history_path(path)
     if not target.exists():
         return []
@@ -38,6 +51,15 @@ def load_activity_history(path: str | Path | None = None) -> list[dict[str, Any]
 
 
 def save_activity_history(rows: list[dict[str, Any]], path: str | Path | None = None) -> Path:
+    """全量覆写历史文件.
+
+    Args:
+        rows: 要保存的活动记录列表.
+        path: 目标文件路径.
+
+    Returns:
+        Path: 写入的文件路径.
+    """
     target = history_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     rows = sorted(rows, key=lambda row: row.get("start_time") or "")
@@ -47,6 +69,15 @@ def save_activity_history(rows: list[dict[str, Any]], path: str | Path | None = 
 
 
 def upsert_activity_history(entry: dict[str, Any], path: str | Path | None = None) -> Path:
+    """按 activity_key 或 file_path 去重后插入/更新历史.
+
+    Args:
+        entry: 要 upsert 的活动记录.
+        path: 目标文件路径.
+
+    Returns:
+        Path: 写入的文件路径.
+    """
     rows = load_activity_history(path)
     activity_key = entry.get("activity_key")
     file_path = entry.get("file_path")
@@ -75,6 +106,17 @@ def query_activity_history(
     limit: int = 20,
     path: str | Path | None = None,
 ) -> dict[str, Any]:
+    """按时间窗口查询历史活动.
+
+    Args:
+        before: 截止时间(ISO 格式),不含该时间之后的活动.
+        days: 往回查的天数(配合 before 使用).
+        limit: 最多返回条数.
+        path: 历史文件路径.
+
+    Returns:
+        dict: {schema_version, before, days, limit, count, activities}
+    """
     rows = load_activity_history(path)
     before_dt = _parse_datetime(before) if before else None
     after_dt = before_dt - timedelta(days=int(days)) if before_dt and days else None
