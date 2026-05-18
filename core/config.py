@@ -115,16 +115,11 @@ def _extract_top_level_yaml_block(text: str, key: str) -> str:
 
 
 def ensure_data_dirs(data_dir: Path | None = None) -> dict[str, Path]:
-    """确保 data/ 和 data/reports/ 目录存在.
+    """确保 data/ 目录存在.
 
     Returns:
-        dict: {root, reports} 路径映射.
+        dict: {root} 路径映射.
     """
     root = data_dir or get_data_dir()
-    paths = {
-        "root": root,
-        "reports": root / "reports",
-    }
-    for p in paths.values():
-        p.mkdir(parents=True, exist_ok=True)
-    return paths
+    root.mkdir(parents=True, exist_ok=True)
+    return {"root": root}

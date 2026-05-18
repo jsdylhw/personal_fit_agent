@@ -83,7 +83,6 @@ def analyze_fit_file(
         if result.get("schema_version") == "llm_fit_file_analysis.v1":
             _sanitize_result_times(result)
             result["summary_path"] = str(summary_path)
-            result.setdefault("report_path", str(_report_path(path)))
             if update_history:
                 upsert_activity_history(result["history_entry"])
             result["status"] = "skipped_existing_summary"
@@ -125,9 +124,7 @@ def analyze_fit_file(
     # 如果之前有过 guided 分析,保留不覆盖
     _preserve_guided_analysis(result, previous_summary)
 
-    report_path = write_brief_report(result)
     result["summary_path"] = str(summary_path)
-    result["report_path"] = str(report_path)
 
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -239,7 +236,7 @@ def analyze_with_llm(
         "messages": messages,
         "turns": turns,
         "parsed_response": data,
-    })
+    }, file_stem=path.stem)
     data["session_id"] = session_id
     data["log_path"] = str(log_path)
     data["readable_log_path"] = str(readable_chat_log_path(log_path))
@@ -312,20 +309,6 @@ def normalize_history_entry(entry: dict[str, Any], *, path: Path, parsed: dict[s
     return normalized
 
 
-def write_brief_report(result: dict[str, Any]) -> Path:
-    report_path = _report_path(Path(result["fit_path"]))
-    lines = [
-        result["markdown_report"].strip(),
-        "",
-        "## Strava Summary",
-        "",
-        result.get("strava_summary", "").strip(),
-        "",
-    ]
-    report_path.write_text("\n".join(lines), encoding="utf-8")
-    return report_path
-
-
 # -- helpers ------------------------------------------------------------------
 
 def _summary_path(path: Path) -> Path:
@@ -361,11 +344,6 @@ def _sanitize_result_times(result: dict[str, Any]) -> None:
     history_before = result.get("history_before")
     if isinstance(history_before, dict):
         result["history_before"] = llm_safe_history(history_before)
-
-
-def _report_path(path: Path) -> Path:
-    paths = ensure_data_dirs()
-    return paths["reports"] / f"{path.stem}.md"
 
 
 def _activity_key(path: Path) -> str:

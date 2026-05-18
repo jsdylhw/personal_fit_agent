@@ -88,5 +88,5 @@ class TestEnsureDataDirs:
     def test_creates_directories(self, tmp_path):
         result = ensure_data_dirs(tmp_path)
         assert result["root"] == tmp_path
-        assert result["reports"].exists()
-        assert result["reports"].is_dir()
+        assert result["root"].exists()
+        assert result["root"].is_dir()

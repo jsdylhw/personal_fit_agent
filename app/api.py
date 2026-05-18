@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -147,12 +147,26 @@ def analyze_fit_endpoint(request: AnalyzeFitRequest) -> dict[str, Any]:
     return analyze_fit_file(request.path, use_history=request.history, force=request.force)
 
 
-@app.get("/api/report")
-def report_endpoint(path: str) -> PlainTextResponse:
-    report_path = Path(path)
-    if not report_path.exists():
-        raise FileNotFoundError(report_path)
-    return PlainTextResponse(report_path.read_text(encoding="utf-8"))
+@app.get("/api/summary")
+def summary_endpoint(path: str):
+    """读取 summary JSON,返回 markdown_report 用于前端展示.
+
+    只允许 data/summaries/ 下的 .summary.json 文件.
+    """
+    import json
+    from fastapi.responses import JSONResponse
+    allowed = Path("data/summaries").resolve()
+    requested = Path(path).resolve()
+    try:
+        requested.relative_to(allowed)
+    except ValueError:
+        return JSONResponse({"markdown_report": ""}, status_code=403)
+    if not requested.name.endswith(".summary.json"):
+        return JSONResponse({"markdown_report": ""}, status_code=403)
+    if not requested.exists():
+        raise FileNotFoundError(requested)
+    data = json.loads(requested.read_text(encoding="utf-8"))
+    return JSONResponse({"markdown_report": data.get("markdown_report", "")})
 
 
 @app.post("/api/strava/upload")
@@ -172,16 +186,13 @@ def _fit_files(output_dir: Path) -> list[Path]:
 
 def _fit_file_info(path: Path) -> dict[str, Any]:
     summary_path = _matching_summary_path(path)
-    report_path = _matching_report_path(path)
     info: dict[str, Any] = {
         "name": path.name,
         "path": str(path),
         "size_bytes": path.stat().st_size,
         "mtime": path.stat().st_mtime,
         "summary_path": str(summary_path) if summary_path.exists() else None,
-        "report_path": str(report_path) if report_path.exists() else None,
         "has_summary": summary_path.exists(),
-        "has_report": report_path.exists(),
     }
 
     if summary_path.exists():
@@ -258,18 +269,6 @@ def _matching_summary_path(path: Path) -> Path:
     activity_id = _activity_id_from_stem(path.stem)
     if activity_id:
         matches = sorted((Path("data") / "summaries").glob(f"*_{activity_id}.summary.json"))
-        if matches:
-            return matches[0]
-    return exact
-
-
-def _matching_report_path(path: Path) -> Path:
-    exact = Path("data") / "reports" / f"{path.stem}.md"
-    if exact.exists():
-        return exact
-    activity_id = _activity_id_from_stem(path.stem)
-    if activity_id:
-        matches = sorted((Path("data") / "reports").glob(f"*_{activity_id}.md"))
         if matches:
             return matches[0]
     return exact

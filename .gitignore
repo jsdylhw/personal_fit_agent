@@ -6,6 +6,7 @@ __pycache__/
 .vscode
 docs/
 data/
+log/
 config.yaml
 .garmin_cn_tokens/
 garmin_cn_fit_files/

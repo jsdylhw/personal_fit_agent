@@ -80,20 +80,12 @@ def fit_ask_command(
     fit_path: str,
     question: str,
     history: bool = True,
-    save_report: bool = False,
     update_summary: bool = False,
 ) -> None:
     result = direct_fit_analysis(
-        fit_path,
-        question,
-        use_history=history,
-        save_report=save_report,
-        update_summary=update_summary,
+        fit_path, question, use_history=history, update_summary=update_summary,
     )
     typer.echo(result["answer"])
-    if result.get("report_path"):
-        typer.echo("")
-        typer.echo(f"guided_report: {result['report_path']}")
     if result.get("log_path"):
         typer.echo("")
         _echo_log_paths(result["log_path"])
@@ -105,7 +97,6 @@ def fit_ask_command(
 def fit_chat_command(
     fit_path: str = typer.Argument("latest"),
     history: bool = True,
-    save_report: bool = True,
     update_summary: bool = True,
 ) -> None:
     resolved_fit = resolve_fit_path(fit_path)
@@ -138,13 +129,10 @@ def fit_chat_command(
             continue
         if text.lower().startswith("/final"):
             extra = text[len("/final") :].strip() or None
-            result = session.finalize(extra, save_report=save_report, update_summary=update_summary)
+            result = session.finalize(extra, update_summary=update_summary)
             typer.echo("")
             typer.echo("AI>")
             typer.echo(result["answer"])
-            if result.get("report_path"):
-                typer.echo("")
-                typer.echo(f"guided_report: {result['report_path']}")
             if result.get("log_path"):
                 _echo_log_paths(result["log_path"])
             if result.get("summary_path"):

@@ -1,7 +1,7 @@
-"""对话日志:将 LLM 交互记录写入 JSONL + 可读 Markdown.
+"""对话日志:将 LLM 交互记录写入 log/ 目录的 JSONL + 可读 Markdown.
 
-每次 LLM 调用都会追加一条日志.JSONL 适合程序读取,
-同步生成同名 .md 文件方便人工查看 tool loop 过程.
+每次 LLM 调用追加一条日志。JSONL 适合程序读取,
+同步生成同名 .md 文件方便人工查看 tool loop 过程。
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-DEFAULT_CHAT_LOG_DIR = Path("data") / "chat_logs"
+DEFAULT_CHAT_LOG_DIR = Path("log")
 
 
 def new_session_id(prefix: str = "chat") -> str:
@@ -23,20 +23,23 @@ def new_session_id(prefix: str = "chat") -> str:
 
 def append_chat_log(
     session_id: str, event: dict[str, Any], *, log_dir: str | Path = DEFAULT_CHAT_LOG_DIR,
+    file_stem: str | None = None,
 ) -> Path:
-    """追加一条事件记录到 session 的 JSONL 日志,同步更新 .md 可读日志.
+    """追加一条事件记录到 JSONL 日志,同步更新 .md 可读日志.
 
     Args:
-        session_id: new_session_id() 生成的会话标识.
+        session_id: 会话标识,记录在日志内容中.
         event: 要记录的事件 dict.
-        log_dir: 日志目录.
+        log_dir: 日志目录,默认 log/.
+        file_stem: 日志文件名(不含扩展名).有则用 {file_stem}.jsonl,无则用 {session_id}.jsonl.
 
     Returns:
         Path: JSONL 文件路径.
     """
     target_dir = Path(log_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    path = target_dir / f"{session_id}.jsonl"
+    name = file_stem or session_id
+    path = target_dir / f"{name}.jsonl"
     record = {"logged_at": datetime.now(timezone.utc).isoformat(), **event}
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
@@ -70,7 +73,7 @@ def _format_record(record: dict[str, Any]) -> list[str]:
     event = str(record.get("event") or "event")
     logged_at = record.get("logged_at")
     lines = ["---", "", f"## {event}", "", f"- logged_at: `{logged_at}`"]
-    for key in ["fit_path", "activity_key", "summary_path", "report_path", "session_id"]:
+    for key in ["fit_path", "activity_key", "summary_path", "session_id"]:
         if record.get(key):
             lines.append(f"- {key}: `{record[key]}`")
     lines.append("")

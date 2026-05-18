@@ -18,8 +18,8 @@ Garmin 中国 -> 下载 FIT 文件 -> 单个 FIT 分析 / 对话分析 -> 生成
 - 支持对 FIT 文件进行单轮直接提问,或进入多轮人为引导分析.
 - 分析走隐藏的大模型 tool loop:
   - 第一次只发送简短 FIT 摘要;
-  - 模型需要更多信息时,再请求分段,数值统计,采样记录,训练元数据或历史记录;
-- 完整隐藏交互会保存到 `data/chat_logs/`,同时生成同名 `.md` 可读日志.
+  - 模型按需请求活动概览,结构化摘要,时间/距离区间或历史记录;
+- 完整隐藏交互会保存到 `log/`,同时生成同名 `.md` 可读日志.
 - 每次分析生成:
   - 完整 Markdown 活动报告;
   - 约 200 个中文字符,适合 Strava 的活动总结;口吻会加权随机选择,包含正常训练日志,专业教练,轻松骑友,简洁复盘,轻微自嘲和猫娘风格,其中猫娘概率会稍高;
@@ -133,23 +133,22 @@ python -m app.cli analyze-file "garmin_cn_fit_files/path/to/activity.fit" --hist
 
 ```text
 garmin_cn_fit_files/          # 下载的原始 FIT 文件
-data/reports/                 # Markdown 报告,包含 Strava Summary 小节
-data/summaries/               # 每条活动的 JSON summary
+data/summaries/               # 每条活动的 JSON summary(包含 markdown_report + strava_summary)
 data/activity_history.jsonl   # 大模型生成的紧凑训练历史
-data/chat_logs/               # 完整大模型请求 / 响应 / tool loop 日志,含 jsonl 和 md
+log/                          # 完整大模型请求 / 响应 / tool loop 日志,含 jsonl 和 md
 ```
 
-`data/reports/*.md` 包含完整活动报告,以及 `## Strava Summary` 小节.
-
-`data/summaries/*.summary.json` 包含:
+`data/summaries/*.summary.json` 是分析结果的唯一权威数据源,包含:
 
 - FIT 摘要;
-- 完整 Markdown 报告;
-- Strava 总结;
+- 完整 Markdown 报告(`markdown_report`);
+- Strava 总结(`strava_summary`);
 - 本次随机选择的 Strava 总结口吻;
 - 大模型生成的历史条目;
 - 原始 FIT 文件路径;
-- 隐藏 tool loop 日志路径.
+- 工具循环日志路径.
+
+`log/*.jsonl` + `log/*.md` 保存完整 LLM 交互记录,每次分析生成一对同名文件.
 
 ## 上传到 Strava
 
@@ -193,7 +192,7 @@ FIT 分析 workflow(`analyze-file`)通过隐藏的 LLM tool loop 工作:模型�
 | `get_distance_intervals` | 固定距离窗口的聚合平均值,支持按距离范围过滤 |
 | `get_history` | 获取历史训练记录用于纵向对比 |
 
-正常 CLI 分析时,这些工具调用不会展示给用户,但完整记录会保存在 `data/chat_logs/`.其中 `.jsonl` 适合程序读取,`.md` 适合直接查看.
+正常 CLI 分析时,这些工具调用不会展示给用户,但完整记录会保存在 `log/`.其中 `.jsonl` 适合程序读取,`.md` 适合直接查看.
 
 ## 对话式分析 FIT 文件
 
@@ -205,11 +204,7 @@ python -m app.cli fit-ask "garmin_cn_fit_files/path/to/activity.fit" "分析这�
 
 `fit-chat`(多轮人为引导分析):程序同样预计算数据视图,然后进入终端对话.你可以补充体感,目标,睡眠,补给,路况和下一次可训练时间,最后输入 `/final` 生成总结.
 
-默认行为:
-
-- 保存 guided report 到 `data/reports/`;
-- 同步写入对应的 `data/summaries/*.summary.json` 的 `guided_analysis` 字段;
-- 不覆盖自动分析生成的 `markdown_report` 和 `strava_summary`,因此 Strava 上传仍然使用自动分析的活动描述.
+最终总结写入 `data/summaries/*.summary.json` 的 `guided_analysis` 字段,不覆盖自动分析生成的 `markdown_report` 和 `strava_summary`.
 
 ```bash
 python -m app.cli fit-chat "garmin_cn_fit_files/path/to/activity.fit"

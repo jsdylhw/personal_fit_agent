@@ -96,7 +96,6 @@ class GuidedActivityChatSession:
         self,
         instruction: str | None = None,
         *,
-        save_report: bool = True,
         update_summary: bool = True,
     ) -> dict[str, Any]:
         final_instruction = (
@@ -109,22 +108,6 @@ class GuidedActivityChatSession:
             final_instruction += f"\n用户额外要求:{instruction}"
 
         result = self.ask(final_instruction)
-        report_path = None
-        if save_report:
-            report_path = write_guided_report(
-                self.fit_path,
-                result["answer"],
-                session_id=self.session_id,
-            )
-            self._log_event(
-                {
-                    "event": "guided_activity_final_report",
-                    "fit_path": str(self.fit_path),
-                    "report_path": str(report_path),
-                }
-            )
-
-        result["report_path"] = str(report_path) if report_path else None
         if update_summary:
             summary_path = update_guided_summary(
                 self.fit_path,
@@ -133,7 +116,6 @@ class GuidedActivityChatSession:
                 session_id=self.session_id,
                 log_path=result.get("log_path"),
                 readable_log_path=result.get("readable_log_path"),
-                report_path=report_path,
                 source="fit-chat",
             )
             result["summary_path"] = str(summary_path)
@@ -154,7 +136,6 @@ def direct_fit_analysis(
     question: str,
     *,
     use_history: bool = True,
-    save_report: bool = False,
     update_summary: bool = False,
 ) -> dict[str, Any]:
     """单轮直接问答:预计算数据视图 → 发送给 LLM → 返回回答.
@@ -165,11 +146,10 @@ def direct_fit_analysis(
         fit_path: FIT 文件路径或 "latest".
         question: 用户问题.
         use_history: 是否附带历史数据.
-        save_report: 是否保存报告到 data/reports/.
         update_summary: 是否写入 summary JSON.
 
     Returns:
-        dict: {answer, fit_path, session_id, log_path, report_path?, summary_path?}
+        dict: {answer, fit_path, session_id, log_path, summary_path?}
     """
     path = resolve_fit_path(fit_path)
     parsed = parse_fit(path)
@@ -206,9 +186,6 @@ def direct_fit_analysis(
             "response": response,
         },
     )
-    report_path = None
-    if save_report:
-        report_path = write_guided_report(path, answer, session_id=session_id)
     summary_path = None
     if update_summary:
         summary_path = update_guided_summary(
@@ -218,7 +195,6 @@ def direct_fit_analysis(
             session_id=session_id,
             log_path=log_path,
             readable_log_path=readable_chat_log_path(log_path),
-            report_path=report_path,
             source="fit-ask",
             user_question=question,
         )
@@ -228,7 +204,6 @@ def direct_fit_analysis(
         "session_id": session_id,
         "log_path": str(log_path),
         "readable_log_path": str(readable_chat_log_path(log_path)),
-        "report_path": str(report_path) if report_path else None,
         "summary_path": str(summary_path) if summary_path else None,
     }
 
@@ -316,24 +291,6 @@ def build_fit_activity_context(
     }
 
 
-def write_guided_report(fit_path: Path, markdown: str, *, session_id: str) -> Path:
-    reports_dir = Path("data") / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    report_path = reports_dir / f"{fit_path.stem}.guided.{timestamp}.md"
-    lines = [
-        markdown.strip(),
-        "",
-        "## Guided Chat Metadata",
-        "",
-        f"- source_fit: `{fit_path}`",
-        f"- session_id: `{session_id}`",
-        "",
-    ]
-    report_path.write_text("\n".join(lines), encoding="utf-8")
-    return report_path
-
-
 def update_guided_summary(
     fit_path: Path,
     parsed: dict[str, Any],
@@ -342,7 +299,6 @@ def update_guided_summary(
     session_id: str,
     log_path: str | Path | None,
     readable_log_path: str | Path | None,
-    report_path: str | Path | None,
     source: str,
     user_question: str | None = None,
 ) -> Path:
@@ -361,7 +317,6 @@ def update_guided_summary(
         "session_id": session_id,
         "log_path": str(log_path) if log_path else None,
         "readable_log_path": str(readable_log_path) if readable_log_path else None,
-        "report_path": str(report_path) if report_path else None,
         "user_question": user_question,
         "markdown_report": markdown,
     }
@@ -377,7 +332,6 @@ def update_guided_summary(
             "session_id": session_id,
             "log_path": str(log_path) if log_path else None,
             "readable_log_path": str(readable_log_path) if readable_log_path else None,
-            "report_path": str(report_path) if report_path else None,
             "user_question": user_question,
         }
     )

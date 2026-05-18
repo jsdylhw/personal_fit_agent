@@ -184,7 +184,6 @@ async function analyzeSelected() {
     });
     log("分析完成", {
       summary_path: result.summary_path,
-      report_path: result.report_path,
       tone: result.strava_summary_tone,
     });
     await refreshFiles();
@@ -199,15 +198,16 @@ async function analyzeSelected() {
 
 async function viewReport() {
   const file = selectedFile();
-  if (!file || !file.report_path) {
-    els.reportText.textContent = "还没有报告，请先分析。";
+  if (!file || !file.summary_path) {
+    els.reportText.textContent = "还没有 summary，请先分析。";
     return;
   }
   setStatus("读取报告");
   try {
-    const response = await fetch(`/api/report?path=${encodeURIComponent(file.report_path)}`);
+    const response = await fetch(`/api/summary?path=${encodeURIComponent(file.summary_path)}`);
     if (!response.ok) throw new Error(await response.text());
-    els.reportText.textContent = await response.text();
+    const summary = await response.json();
+    els.reportText.textContent = summary.markdown_report || "(报告为空)";
     setStatus("准备就绪");
   } catch (error) {
     els.reportText.textContent = error.message;
