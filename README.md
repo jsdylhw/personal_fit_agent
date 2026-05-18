@@ -129,11 +129,28 @@ python -m app.cli analyze-file "garmin_cn_fit_files/path/to/activity.fit" --hist
 
 `--history` 表示可以参考已经生成的紧凑历史.`--force` 表示即使 summary 已经存在,也重新请求大模型分析.
 
+## Agent 工作流模式
+
+如果希望让大模型自己决定调用下载 / 分析 / 上传工具,可以使用完整工具集 agent:
+
+```bash
+python -m app.cli agent "下载最近 3 条 Garmin 活动,分析最新一条,先不要上传 Strava"
+```
+
+如果要让 agent 围绕某个本地 FIT 文件继续查询细节,传入 `--fit`:
+
+```bash
+python -m app.cli agent "看一下 100-200 秒是不是有短冲刺,然后给训练建议" --fit latest
+```
+
+`agent` 模式会暴露 11 个工具:5 个单活动只读数据工具 + 3 个活动发现工具 + `sync_garmin_activities`,`analyze_fit_file`,`upload_to_strava`.上传 Strava 仍然需要二次确认,第一次只返回预览.
+
 ## 输出文件
 
 ```text
 garmin_cn_fit_files/          # 下载的原始 FIT 文件
 data/summaries/               # 每条活动的 JSON summary(包含 markdown_report + strava_summary)
+data/activity_index.json      # 本地活动索引,用于按日期/范围发现活动
 data/activity_history.jsonl   # 大模型生成的紧凑训练历史
 log/                          # 完整大模型请求 / 响应 / tool loop 日志,含 jsonl 和 md
 ```
@@ -193,6 +210,17 @@ FIT 分析 workflow(`analyze-file`)通过隐藏的 LLM tool loop 工作:模型�
 | `get_history` | 获取历史训练记录用于纵向对比 |
 
 正常 CLI 分析时,这些工具调用不会展示给用户,但完整记录会保存在 `log/`.其中 `.jsonl` 适合程序读取,`.md` 适合直接查看.
+
+完整 `agent` 模式在上面 5 个数据工具之外,还会暴露:
+
+| 工具 | 用途 |
+|---|---|
+| `list_activities` | 列出 `data/activity_index.json` 中的本地活动 |
+| `resolve_activity` | 按日期、文件名、activity_key、运动类型解析单条活动 |
+| `get_activities_in_range` | 获取一段日期范围内的活动,用于周/月总结 |
+| `sync_garmin_activities` | 下载 Garmin 中国最近活动,自动跳过已有 FIT |
+| `analyze_fit_file` | 批处理生成/刷新 summary JSON 和 Strava 总结 |
+| `upload_to_strava` | 上传 FIT 到 Strava,并写入生成的 Strava 总结;需要二次确认 |
 
 ## 对话式分析 FIT 文件
 
