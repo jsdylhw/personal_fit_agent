@@ -57,7 +57,7 @@ def tool_call_command(
 
 
 @app.command("inspect-fit")
-def inspect_fit_command(fit_path: str = "latest") -> None:
+def inspect_fit_command(fit_path: str = typer.Argument("latest")) -> None:
     """解析 FIT 并输出基础 summary/training metadata 概况."""
     fit = resolve_fit_path(fit_path)
     parsed = parse_fit(fit)
@@ -74,7 +74,7 @@ def inspect_fit_command(fit_path: str = "latest") -> None:
 
 
 @app.command("index-fit")
-def index_fit_command(fit_path: str = "latest", source: str = "manual") -> None:
+def index_fit_command(fit_path: str = typer.Argument("latest"), source: str = "manual") -> None:
     """把一个 FIT 文件登记到 data/activity_index.json."""
     fit = resolve_fit_path(fit_path)
     _echo_json(upsert_activity_from_fit(fit, source=source))
