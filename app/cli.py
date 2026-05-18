@@ -9,6 +9,7 @@ import typer
 
 from agent.chat_logger import readable_chat_log_path
 from agent.guided_chat import GuidedActivityChatSession, direct_fit_analysis, resolve_fit_path
+from agent.workflow_chat import run_workflow_agent
 from core.file_workflow import analyze_fit_file
 from core.strava_workflow import (
     update_strava_description_from_summary,
@@ -18,6 +19,32 @@ from sinks.strava import StravaSink
 
 
 app = typer.Typer(help="Personal FIT Agent CLI")
+
+
+@app.command("agent")
+def agent_command(
+    message: str,
+    fit_path: str | None = typer.Option(
+        None,
+        "--fit",
+        help="可选:当前 FIT 文件路径或 latest.提供后可调用数据查询工具.",
+    ),
+    history: bool = True,
+    max_steps: int = 8,
+) -> None:
+    """运行完整工具集 agent:数据查询 + Garmin 下载 + FIT 分析 + Strava 上传."""
+    result = run_workflow_agent(
+        message,
+        fit_path=fit_path,
+        use_history=history,
+        max_steps=max_steps,
+    )
+    typer.echo(result["answer"])
+    if result.get("log_path"):
+        typer.echo("")
+        _echo_log_paths(result["log_path"])
+    if result.get("current_fit_file"):
+        typer.echo(f"current_fit_file: {result['current_fit_file']}")
 
 
 @app.command("analyze-file")

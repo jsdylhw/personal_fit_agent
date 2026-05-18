@@ -83,6 +83,11 @@ def analyze_fit_file(
         if result.get("schema_version") == "llm_fit_file_analysis.v1":
             _sanitize_result_times(result)
             result["summary_path"] = str(summary_path)
+            try:
+                from core.activity_index import upsert_activity_from_summary
+                upsert_activity_from_summary(summary_path)
+            except Exception:
+                pass
             if update_history:
                 upsert_activity_history(result["history_entry"])
             result["status"] = "skipped_existing_summary"
@@ -128,6 +133,11 @@ def analyze_fit_file(
 
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    try:
+        from core.activity_index import upsert_activity_from_summary
+        upsert_activity_from_summary(summary_path)
+    except Exception:
+        pass
 
     if update_history:
         upsert_activity_history(result["history_entry"])
