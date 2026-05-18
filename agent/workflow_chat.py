@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.chat_logger import append_chat_log, new_session_id, readable_chat_log_path
+from agent.context import AgentContext
 from agent.llm import AnthropicMessagesClient, extract_text
 from agent.prompts import WORKFLOW_AGENT_SYSTEM_PROMPT
 from agent.tools import agent_workflow_tool_catalog, call_fit_analysis_tool
@@ -46,21 +47,30 @@ def run_workflow_agent(
         if fit_path is not None
         else _infer_fit_path_from_message(user_message)
     )
-    parsed = parse_fit(current_fit) if current_fit else None
-    history_before = _history_for_parsed(parsed) if parsed and use_history else None
+    session_id = new_session_id("workflow_agent")
+    context = AgentContext(
+        session_id=session_id,
+        current_fit_file=current_fit,
+        history_enabled=use_history,
+        parsed=parse_fit(current_fit) if current_fit else None,
+    )
+    context.history_before = (
+        _history_for_parsed(context.parsed)
+        if context.parsed and context.history_enabled
+        else None
+    )
 
     client = AnthropicMessagesClient()
-    session_id = new_session_id("workflow_agent")
-    messages: list[dict[str, Any]] = [
+    context.messages = [
         {
             "role": "user",
             "content": json.dumps(
                 {
                     "instruction": "请根据用户请求决定是否调用工具.普通聊天直接回答即可.",
                     "user_message": user_message,
-                    "current_fit_file": str(current_fit) if current_fit else None,
-                    "current_fit_source": "argument_or_message_match" if current_fit else None,
-                    "history_enabled": bool(history_before),
+                    "current_fit_file": _context_fit_path_text(context),
+                    "current_fit_source": "argument_or_message_match" if context.current_fit_file else None,
+                    "history_enabled": bool(context.history_before),
                     "available_tools": agent_workflow_tool_catalog(),
                 },
                 ensure_ascii=False,
@@ -76,7 +86,7 @@ def run_workflow_agent(
     for step in range(1, max(1, int(max_steps)) + 1):
         response = client.create_messages(
             system=WORKFLOW_AGENT_SYSTEM_PROMPT,
-            messages=messages,
+            messages=context.messages,
             max_tokens=2600,
         )
         last_response = response
@@ -89,7 +99,7 @@ def run_workflow_agent(
             "parsed": action,
             "response": response,
         })
-        messages.append({"role": "assistant", "content": response_text})
+        context.messages.append({"role": "assistant", "content": response_text})
 
         if action.get("action") == "final" or action.get("answer"):
             final_answer = str(action.get("answer") or action.get("text") or response_text).strip()
@@ -106,24 +116,23 @@ def run_workflow_agent(
             tool_result = call_fit_analysis_tool(
                 tool_name,
                 arguments,
-                parsed=parsed,
-                history_before=history_before,
+                parsed=context.parsed,
+                history_before=context.history_before,
             )
-            current_fit, parsed, history_before = _refresh_current_fit_after_tool(
+            _refresh_current_fit_after_tool(
                 tool_name,
                 tool_result,
-                current_fit=current_fit,
-                parsed=parsed,
-                use_history=use_history,
+                context=context,
             )
 
+        context.last_tool_result = tool_result
         turns.append({"step": step, "type": "tool_result", **tool_result})
-        messages.append({
+        context.messages.append({
             "role": "user",
             "content": json.dumps(
                 {
                     "tool_result": tool_result,
-                    "current_fit_file": str(current_fit) if current_fit else None,
+                    "current_fit_file": _context_fit_path_text(context),
                     "instruction": "继续.如需更多信息可继续调用工具,否则返回 action=final.",
                 },
                 ensure_ascii=False,
@@ -140,9 +149,9 @@ def run_workflow_agent(
         {
             "event": "workflow_agent",
             "user_message": user_message,
-            "current_fit_file": str(current_fit) if current_fit else None,
+            "current_fit_file": _context_fit_path_text(context),
             "system": WORKFLOW_AGENT_SYSTEM_PROMPT,
-            "messages": messages,
+            "messages": context.messages,
             "turns": turns,
             "answer": final_answer,
             "model": (last_response or {}).get("model"),
@@ -153,7 +162,7 @@ def run_workflow_agent(
         "session_id": session_id,
         "log_path": str(log_path),
         "readable_log_path": str(readable_chat_log_path(log_path)),
-        "current_fit_file": str(current_fit) if current_fit else None,
+        "current_fit_file": _context_fit_path_text(context),
         "turns": turns,
     }
 
@@ -212,34 +221,62 @@ def _history_for_parsed(parsed: dict[str, Any]) -> dict[str, Any]:
     return query_activity_history(before=before, days=90, limit=50)
 
 
+def _context_fit_path_text(context: AgentContext) -> str | None:
+    return str(context.current_fit_file) if context.current_fit_file else None
+
+
 def _refresh_current_fit_after_tool(
     tool_name: str,
     tool_result: dict[str, Any],
     *,
-    current_fit: Path | None,
-    parsed: dict[str, Any] | None,
-    use_history: bool,
-) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None]:
+    context: AgentContext,
+) -> None:
     """分析工具返回 fit_path 后,把它设为 current_fit,方便后续数据查询工具使用."""
     if tool_name not in {"analyze_fit_file", "resolve_activity"} or "result" not in tool_result:
-        history_before = _history_for_parsed(parsed) if parsed and use_history else None
-        return current_fit, parsed, history_before
+        context.history_before = (
+            _history_for_parsed(context.parsed)
+            if context.parsed and context.history_enabled
+            else None
+        )
+        return
 
     result = tool_result.get("result") or {}
     if tool_name == "resolve_activity":
         activity = result.get("activity") if isinstance(result.get("activity"), dict) else {}
         candidate = activity.get("fit_path")
+        activity_key = activity.get("activity_key")
+        summary_path = activity.get("summary_path")
+        if summary_path:
+            context.current_summary_path = Path(summary_path)
     else:
         candidate = result.get("fit_path")
+        activity_key = None
+        summary_path = result.get("summary_path")
+        if summary_path:
+            context.current_summary_path = Path(summary_path)
     if not candidate:
-        history_before = _history_for_parsed(parsed) if parsed and use_history else None
-        return current_fit, parsed, history_before
+        context.history_before = (
+            _history_for_parsed(context.parsed)
+            if context.parsed and context.history_enabled
+            else None
+        )
+        return
 
     path = Path(candidate)
     if not path.exists():
-        history_before = _history_for_parsed(parsed) if parsed and use_history else None
-        return current_fit, parsed, history_before
+        context.history_before = (
+            _history_for_parsed(context.parsed)
+            if context.parsed and context.history_enabled
+            else None
+        )
+        return
 
-    new_parsed = parse_fit(path)
-    history_before = _history_for_parsed(new_parsed) if use_history else None
-    return path.resolve(), new_parsed, history_before
+    context.current_fit_file = path.resolve()
+    if activity_key:
+        context.current_activity_key = str(activity_key)
+    context.parsed = parse_fit(path)
+    context.history_before = (
+        _history_for_parsed(context.parsed)
+        if context.history_enabled
+        else None
+    )
