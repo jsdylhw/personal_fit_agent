@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agent.activity_comparison import compare_selected_activities
+from agent.activity_report import show_selected_activity_report
 from agent.activity_resolution import execute_activity_resolution_step
 from agent.context import AgentContext
 from agent.plan_schema import WorkflowPlan, WorkflowPlanStep
@@ -111,6 +112,8 @@ def execute_workflow_plan(
         )
         step_results.append(step_result)
         context.last_tool_result = step_result.to_dict()
+        if step_result.result and step_result.result.get("answer"):
+            final_response = str(step_result.result["answer"])
         if selected.execution.executor_type == "response" and step_result.result:
             final_response = str(step_result.result.get("answer") or "")
         if step_result.status == "failed" and stop_on_error:
@@ -186,6 +189,10 @@ def _execute_default_handler(
         return execute_activity_resolution_step(step, context)
     if executor_type == "response":
         return _build_final_response(context)
+    if step.name == "casual_chat":
+        return _execute_casual_chat(step)
+    if step.name == "ask_user_clarification":
+        return _execute_user_clarification(step)
     if step.name == "sync_garmin_activities":
         return _execute_sync_garmin(step)
     if step.name == "analyze_new_fit_files":
@@ -200,6 +207,8 @@ def _execute_default_handler(
         return _execute_confirm_strava_upload(context)
     if step.name == "compare_activities":
         return compare_selected_activities(step, context)
+    if step.name == "analyze_single_activity":
+        return show_selected_activity_report(step, context)
     if executor_type in {"conversation", "analysis", "coaching", "subworkflow"}:
         return {
             "error": "handler_not_implemented",
@@ -215,6 +224,32 @@ def _execute_sync_garmin(step: WorkflowPlanStep) -> dict[str, Any]:
     count = int(step.arguments.get("count") or 5)
     result = sync_garmin_activities_tool(count=count)
     return {"step": step.name, "result": result}
+
+
+def _execute_casual_chat(step: WorkflowPlanStep) -> dict[str, Any]:
+    answer = str(
+        step.arguments.get("answer")
+        or step.arguments.get("message")
+        or "你好，我在。可以帮你分析活动、比较报告、规划训练，或者处理 Garmin / Strava 相关流程。"
+    )
+    return {
+        "step": step.name,
+        "status": "completed",
+        "answer": answer,
+    }
+
+
+def _execute_user_clarification(step: WorkflowPlanStep) -> dict[str, Any]:
+    question = str(
+        step.arguments.get("question")
+        or step.arguments.get("clarifying_question")
+        or "我需要再确认一下你的活动范围或目标。"
+    )
+    return {
+        "step": step.name,
+        "status": "completed",
+        "answer": question,
+    }
 
 
 def _execute_analyze_new_fit_files(context: AgentContext) -> dict[str, Any]:

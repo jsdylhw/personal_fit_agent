@@ -52,6 +52,35 @@ def test_executor_runs_activity_resolution_and_final_response():
     assert result.final_response == "resolve_current_activity 已完成."
 
 
+def test_executor_runs_casual_chat_without_dedicated_handler():
+    context = AgentContext(session_id="executor-test")
+    plan = _plan(
+        WorkflowPlanStep(name="casual_chat", reason="普通问候"),
+    )
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.step_results[0].step_name == "casual_chat"
+    assert "你好" in (result.final_response or "")
+
+
+def test_executor_runs_user_clarification_without_dedicated_handler():
+    context = AgentContext(session_id="executor-test")
+    plan = _plan(
+        WorkflowPlanStep(
+            name="ask_user_clarification",
+            reason="缺少日期范围",
+            arguments={"question": "你想分析哪一天的活动？"},
+        )
+    )
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.final_response == "你想分析哪一天的活动？"
+
+
 def test_executor_can_use_injected_step_handler():
     context = AgentContext(
         session_id="executor-test",
@@ -83,6 +112,34 @@ def test_executor_can_use_injected_step_handler():
     assert result.final_response == "活动分析完成"
 
 
+def test_executor_runs_single_activity_report_from_existing_summary(tmp_path):
+    summary = tmp_path / "latest.summary.json"
+    summary.write_text(
+        json.dumps(
+            {
+                "activity_key": "a1",
+                "fit_summary": {"start_time_local": "2026-05-18T21:00:00", "sport_type": "cycling"},
+                "markdown_report": "# 最新骑行报告\n\n已有报告内容。",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    context = AgentContext(
+        session_id="executor-test",
+        selected_activities=[{"activity_key": "a1", "summary_path": str(summary)}],
+    )
+    plan = _plan(
+        WorkflowPlanStep(name="analyze_single_activity", reason="展示报告"),
+    )
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.final_response is not None
+    assert result.final_response.startswith("# 最新骑行报告")
+
+
 def test_executor_reports_unimplemented_default_handler():
     context = AgentContext(
         session_id="executor-test",
@@ -96,7 +153,7 @@ def test_executor_reports_unimplemented_default_handler():
 
     assert result.status == "failed"
     assert result.step_results[0].status == "failed"
-    assert result.step_results[0].error == "handler_not_implemented"
+    assert result.step_results[0].error == "missing_activity_summary"
 
 
 def test_executor_can_continue_after_step_error_when_requested():

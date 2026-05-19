@@ -85,7 +85,7 @@ def validate_workflow_plan(
         missing = [
             requirement
             for requirement in spec.requires
-            if requirement not in available_state and requirement not in produced_state
+            if not _requirement_satisfied(requirement, available_state, produced_state)
         ]
         if missing:
             errors.append(
@@ -98,6 +98,18 @@ def validate_workflow_plan(
     _validate_confirmation_flow(plan, context, errors)
     _validate_final_response(plan, warnings)
     return PlanValidationResult(errors=errors, warnings=warnings)
+
+
+def _requirement_satisfied(
+    requirement: str,
+    available_state: set[str],
+    produced_state: set[str],
+) -> bool:
+    if requirement in available_state or requirement in produced_state:
+        return True
+    if requirement == "current_fit_file":
+        return "selected_activities" in available_state or "selected_activities" in produced_state
+    return False
 
 
 def _context_state(context: AgentContext) -> set[str]:

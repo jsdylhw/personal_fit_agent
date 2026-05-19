@@ -113,7 +113,7 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
         name="resolve_recent_activities",
         description="当用户提到最近活动时,定位最新的本地骑行或训练记录.",
         category="activity_resolution",
-        produces=["selected_activities"],
+        produces=["selected_activities", "current_fit_file"],
     ),
     WorkflowStepSpec(
         name="analyze_single_activity",

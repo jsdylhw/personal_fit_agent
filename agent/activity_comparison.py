@@ -68,6 +68,20 @@ def compare_selected_activities(
     }
 
 
+def read_activity_summary(activity: dict[str, Any]) -> tuple[Path | None, dict[str, Any] | None, str | None]:
+    """读取单条活动已有 summary,返回 path/data/error."""
+    summary_path = _resolve_summary_path(activity)
+    if not summary_path:
+        return None, None, "missing_activity_summary"
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return summary_path, None, f"summary_read_failed: {exc}"
+    if not isinstance(summary, dict):
+        return summary_path, None, "summary_must_be_object"
+    return summary_path, summary, None
+
+
 def _resolve_summary_path(activity: dict[str, Any]) -> Path | None:
     summary_path = activity.get("summary_path")
     if summary_path:

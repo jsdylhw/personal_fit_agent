@@ -10,6 +10,7 @@ import typer
 from agent.chat_logger import readable_chat_log_path
 from agent.guided_chat import GuidedActivityChatSession, direct_fit_analysis, resolve_fit_path
 from agent.workflow_chat import run_workflow_agent
+from agent.workflow_runner import run_planned_workflow
 from core.file_workflow import analyze_fit_file
 from core.strava_workflow import (
     update_strava_description_from_summary,
@@ -43,6 +44,38 @@ def agent_command(
     if result.get("log_path"):
         typer.echo("")
         _echo_log_paths(result["log_path"])
+    if result.get("current_fit_file"):
+        typer.echo(f"current_fit_file: {result['current_fit_file']}")
+
+
+@app.command("workflow")
+def workflow_command(
+    message: str,
+    fit_path: str | None = typer.Option(
+        None,
+        "--fit",
+        help="可选:当前 FIT 文件路径或 latest.",
+    ),
+    history: bool = True,
+    max_tokens: int = typer.Option(4096, "--max-tokens", help="planner LLM 最大输出 token 数."),
+    json_output: bool = typer.Option(False, "--json", help="输出完整 plan/execution JSON."),
+    include_details: bool = typer.Option(False, "--include-details", help="JSON 输出中包含 planner 原文和 payload."),
+) -> None:
+    """运行新规划执行链路:Planner -> Validator -> Selector -> Executor."""
+    result = run_planned_workflow(
+        message,
+        fit_path=fit_path,
+        use_history=history,
+        max_tokens=max_tokens,
+        include_details=include_details,
+    )
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
+
+    typer.echo(result["answer"])
+    typer.echo("")
+    typer.echo(f"workflow_status: {result['status']}")
     if result.get("current_fit_file"):
         typer.echo(f"current_fit_file: {result['current_fit_file']}")
 
