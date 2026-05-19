@@ -1,7 +1,7 @@
 """LLM API 客户端:Anthropic Messages API 兼容接口.
 
 当前通过 DeepSeek 的 /anthropic 端点使用,兼容 Anthropic Messages API 格式.
-重试仅针对 timeout/URLError,HTTP 错误直接抛出(不做无意义重试).
+重试仅针对 timeout/URLError/IncompleteRead,HTTP 错误直接抛出(不做无意义重试).
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import socket
 import time
+from http.client import IncompleteRead
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -74,7 +75,7 @@ class AnthropicMessagesClient:
         """发送 POST 请求到 Messages API.
 
         HTTP 错误(4xx/5xx)直接抛出——说明 API key/参数有问题,重试无意义.
-        仅对 timeout 和 URLError 做指数退避重试.
+        仅对 timeout,URLError 和响应体中断做指数退避重试.
         """
         request = Request(
             self._messages_url(),
@@ -98,6 +99,8 @@ class AnthropicMessagesClient:
                 body = exc.read().decode("utf-8", errors="replace")
                 raise RuntimeError(f"LLM request failed: HTTP {exc.code}; body={body[:1000]}") from exc
             except (TimeoutError, socket.timeout) as exc:
+                last_error = exc
+            except IncompleteRead as exc:
                 last_error = exc
             except URLError as exc:
                 last_error = exc

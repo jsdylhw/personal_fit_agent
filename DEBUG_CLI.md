@@ -54,6 +54,26 @@ python -m app.debug_cli tool-call get_time_intervals --fit latest --args '{"buck
 python -m app.debug_cli tool-call get_distance_intervals --fit latest --args '{"bucket_distance_m":1000}'
 ```
 
+## 初始工作流规划
+
+调用 LLM planner 生成粗粒度步骤计划,只输出计划,不执行任何工具:
+
+```bash
+python -m app.debug_cli plan-workflow "帮我同步最近两条 Garmin 活动并分析"
+```
+
+如果当前请求涉及当前 FIT,可以传 `--fit`:
+
+```bash
+python -m app.debug_cli plan-workflow "分析这次骑行并给明天建议" --fit latest
+```
+
+调试 planner 输入 payload:
+
+```bash
+python -m app.debug_cli plan-workflow "最近一周训练怎么样" --include-payload
+```
+
 ## 检查 FIT 解析
 
 ```bash

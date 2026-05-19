@@ -1,0 +1,48 @@
+{
+  "schema_version": "activity_index.v1",
+  "updated_at": "2026-05-18T22:17:32+08:00",
+  "activities": [
+    {
+      "activity_key": "117593614384dfb6",
+      "fit_path": "C:\\codes\\personal_fit_agent\\garmin_cn_fit_files\\2026-05-18 08_36_17_青浦区 公路骑行_595970565.fit",
+      "summary_path": "C:\\codes\\personal_fit_agent\\data\\summaries\\2026-05-18 08_36_17_青浦区 公路骑行_595970565.summary.json",
+      "file_name": "2026-05-18 08_36_17_青浦区 公路骑行_595970565.fit",
+      "sport_type": "cycling",
+      "sub_sport": "road",
+      "start_time_local": "2026-05-18T08:36:17",
+      "date_local": "2026-05-18",
+      "duration_s": 1614.044,
+      "distance_m": 9380.8,
+      "duration_min": 26.9,
+      "distance_km": 9.38,
+      "source": "manual",
+      "has_summary": true,
+      "has_strava_summary": true,
+      "status": "analyzed",
+      "summary_label": "晨间轻松骑",
+      "main_stimulus": "低强度耐力",
+      "training_load": "非常轻 (TSS 8.5, IF 0.438)"
+    },
+    {
+      "activity_key": "218947bcb0600b16",
+      "fit_path": "C:\\codes\\personal_fit_agent\\garmin_cn_fit_files\\2026-05-18 21_10_56_青浦区 公路骑行_596192785.fit",
+      "summary_path": "C:\\codes\\personal_fit_agent\\data\\summaries\\2026-05-18 21_10_56_青浦区 公路骑行_596192785.summary.json",
+      "file_name": "2026-05-18 21_10_56_青浦区 公路骑行_596192785.fit",
+      "sport_type": "cycling",
+      "sub_sport": "road",
+      "start_time_local": "2026-05-18T21:10:56",
+      "date_local": "2026-05-18",
+      "duration_s": 2569.761,
+      "distance_m": 15793.1,
+      "duration_min": 42.8,
+      "distance_km": 15.79,
+      "source": "manual",
+      "has_summary": true,
+      "has_strava_summary": true,
+      "status": "analyzed",
+      "summary_label": "低强度恢复骑",
+      "main_stimulus": "有氧基础/恢复",
+      "training_load": "极低"
+    }
+  ]
+}

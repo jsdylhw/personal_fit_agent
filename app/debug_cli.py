@@ -11,7 +11,9 @@ from typing import Any
 
 import typer
 
+from agent.context import AgentContext
 from agent.guided_chat import resolve_fit_path
+from agent.planner import plan_initial_workflow
 from agent.tools import agent_workflow_tool_catalog, call_fit_analysis_tool, fit_data_tool_catalog
 from core.activity_index import (
     get_activities_in_range,
@@ -31,6 +33,31 @@ def list_tools_command(all_tools: bool = True) -> None:
     """列出 LLM 可用工具."""
     tools = agent_workflow_tool_catalog() if all_tools else fit_data_tool_catalog()
     _echo_json({"count": len(tools), "tools": tools})
+
+
+@app.command("plan-workflow")
+def plan_workflow_command(
+    message: str,
+    fit_path: str | None = typer.Option(None, "--fit", help="可选:当前 FIT 文件路径或 latest."),
+    history: bool = True,
+    include_payload: bool = False,
+    max_tokens: int = typer.Option(4096, "--max-tokens", help="planner LLM 最大输出 token 数."),
+) -> None:
+    """调用 LLM planner 生成初始工作流计划,不执行任何步骤."""
+    current_fit = resolve_fit_path(fit_path) if fit_path else None
+    context = AgentContext(
+        session_id="debug_planner",
+        current_fit_file=current_fit,
+        history_enabled=history,
+    )
+    result = plan_initial_workflow(message, context, max_tokens=max_tokens)
+    output = {
+        "plan": result["plan_json"],
+        "raw_text": result["raw_text"],
+    }
+    if include_payload:
+        output["payload"] = result["payload"]
+    _echo_json(output)
 
 
 @app.command("tool-call")

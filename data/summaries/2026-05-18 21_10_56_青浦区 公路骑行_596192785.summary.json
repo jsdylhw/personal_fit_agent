@@ -1,0 +1,59 @@
+{
+  "schema_version": "llm_fit_file_analysis.v1",
+  "status": "analyzed",
+  "activity_key": "218947bcb0600b16",
+  "fit_path": "C:\\codes\\personal_fit_agent\\garmin_cn_fit_files\\2026-05-18 21_10_56_青浦区 公路骑行_596192785.fit",
+  "fit_summary": {
+    "sport_type": "cycling",
+    "sub_sport": "road",
+    "start_time_local": "2026-05-18T21:10:56",
+    "duration_s": 2569.761,
+    "distance_m": 15793.06,
+    "record_count": 2577,
+    "lap_count": 4,
+    "has_power": true,
+    "has_heart_rate": true,
+    "has_position": true
+  },
+  "model": "deepseek-v4-flash",
+  "session_id": "fit_analysis_20260518T141529Z_2e76c010",
+  "log_path": "log\\2026-05-18 21_10_56_青浦区 公路骑行_596192785.jsonl",
+  "readable_log_path": "log\\2026-05-18 21_10_56_青浦区 公路骑行_596192785.md",
+  "strava_summary_tone": {
+    "name": "soft_catgirl",
+    "description": "猫娘口吻:可爱,轻快,带一点鼓励,但保持训练判断清楚,不要每句都卖萌."
+  },
+  "markdown_report": "# 🚴 夜间公路恢复骑行分析\n\n**活动概述**\n\n- 时间：2026-05-18 21:10:56 晚间\n- 类型：公路骑行\n- 时长：42.8分钟\n- 距离：15.79 km\n- 总爬升：64 m\n\n**功率数据**\n- 平均功率：102 W\n- 标准化功率(NP)：121 W\n- 强度因子(IF)：0.478\n- TSS：16.1（极低训练负荷）\n- 最大功率：264 W\n\n**心率数据**\n- 平均心率：141 bpm\n- 最大心率：162 bpm\n- 心率区间：大部分时间在Z1~Z2（130-163 bpm）\n\n**踏频与速度**\n- 平均踏频：80 rpm\n- 平均速度：22.1 km/h\n- 最大速度：32.6 km/h\n\n**分段表现**\n| 分段 | 距离 | 平均功率 | 平均心率 | 平均速度 |\n|------|------|----------|----------|----------|\n| 1 | 5 km | 97 W | 138 bpm | 20.9 km/h |\n| 2 | 5 km | 111 W | 145 bpm | 20.5 km/h |\n| 3 | 5 km | 103 W | 141 bpm | 25.3 km/h |\n| 4 | 0.79 km | 65 W | 139 bpm | 23.6 km/h |\n\n**训练效果**\n- 有氧训练效果：2.2（维持有氧基础）\n- 无氧训练效果：0.0（无无氧刺激）\n- 功率分布：Z1 1879s，Z2 590s，几乎无高强度\n\n**总结**\n这是一次典型的低强度夜间恢复骑行。功率输出极低（IF<0.5），心率稳定在Zone2以下，TSS仅16，几乎不会产生疲劳积累。第三段速度略高（25.3 km/h）但功率仅103W，推测为缓下坡路段；最后一段无数据中断，功率计和心率带全程记录完整。适合在高强度训练日之后或作为主动恢复日安排。\n\n**建议**\n- 若以恢复为目的，此活动非常合适。\n- 若想提高训练效果，可适当增加间歇或爬坡路段。\n- 数据质量良好，功率计和心率带功能正常。",
+  "strava_summary": "呜喵～今晚是趟超轻松的恢复骑哦！(＾ω＾) 全程42分钟15.8km，平均功率才102W，NP 121W，IF只有0.48，TSS才16，妥妥的Zone1~Zone2溜达~ 心率稳稳140上下，踏频80很舒适～中间有一小段踩到111W，但也完全没压力呢。最后几百米来了个246W的小冲刺，不过整体就是饭后消食骑啦～(>ω<) 适合第二天有强度训练前放放松！注意数据记录很完整，功率计和心率带都正常~ 下次可以试试加点间歇或爬坡喵！",
+  "history_entry": {
+    "schema_version": "llm_activity_history_entry.v1",
+    "start_time": "2026-05-18T21:10:56",
+    "sport_type": "cycling",
+    "duration_min": 42.8,
+    "distance_km": 15.79,
+    "summary_label": "低强度恢复骑",
+    "main_stimulus": "有氧基础/恢复",
+    "training_load": "极低",
+    "quality_notes": [
+      "数据完整，功率/心率记录正常",
+      "夜间骑行，路面平坦",
+      "TSS 16，极低训练负荷"
+    ],
+    "brief": "晚间42分钟恢复骑，平均102W，IF 0.48，心率140，踏频80，全程轻松，适合恢复日。",
+    "activity_key": "218947bcb0600b16",
+    "file_path": "C:\\codes\\personal_fit_agent\\garmin_cn_fit_files\\2026-05-18 21_10_56_青浦区 公路骑行_596192785.fit",
+    "start_time_local": "2026-05-18T21:10:56",
+    "sub_sport": "road",
+    "duration_s": 2569.761,
+    "distance_m": 15793.06
+  },
+  "history_before": {
+    "schema_version": "file_training_history.v1",
+    "before": "2026-05-18T21:10:56",
+    "days": 90,
+    "limit": 50,
+    "count": 0,
+    "activities": []
+  },
+  "summary_path": "data\\summaries\\2026-05-18 21_10_56_青浦区 公路骑行_596192785.summary.json"
+}
