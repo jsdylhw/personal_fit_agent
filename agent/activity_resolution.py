@@ -191,9 +191,9 @@ def _date_argument(args: dict[str, Any], *, today: date | None) -> str | None:
     value = args.get("date_local") or args.get("date")
     if value:
         return _resolve_relative_date(str(value), today=today)
-    date_range = args.get("date_range")
-    if date_range in {"today", "yesterday"}:
-        return _resolve_relative_date(str(date_range), today=today)
+    date_range = _range_text_argument(args)
+    if _mentions_today(date_range) or _mentions_yesterday(date_range):
+        return _resolve_relative_date(date_range, today=today)
     return None
 
 
@@ -202,7 +202,7 @@ def _date_range_arguments(args: dict[str, Any], *, today: date | None) -> tuple[
     if args.get("start_date") and args.get("end_date"):
         return str(args["start_date"]), str(args["end_date"])
 
-    date_range = str(args.get("date_range") or args.get("range_description") or "").strip().lower()
+    date_range = _range_text_argument(args)
     if _mentions_today(date_range) or _mentions_yesterday(date_range):
         resolved = _resolve_relative_date(date_range, today=current)
         return resolved, resolved
@@ -214,6 +214,17 @@ def _date_range_arguments(args: dict[str, Any], *, today: date | None) -> tuple[
         return start.isoformat(), current.isoformat()
 
     return current.isoformat(), current.isoformat()
+
+
+def _range_text_argument(args: dict[str, Any]) -> str:
+    """兼容 LLM 对日期范围参数的几种常见写法."""
+    return str(
+        args.get("date_range")
+        or args.get("range_type")
+        or args.get("range_description")
+        or args.get("relative_range")
+        or ""
+    ).strip().lower()
 
 
 def _resolve_relative_date(value: str, *, today: date | None) -> str:

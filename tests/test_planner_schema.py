@@ -33,24 +33,32 @@ def test_key_workflow_step_flags_are_declared():
 
     assert single_activity is not None
     assert single_activity.requires_current_fit is True
+    assert single_activity.requires == ["current_fit_file"]
+    assert single_activity.produces == ["activity_analysis"]
     assert single_activity.side_effect is False
 
     assert compare_activities is not None
+    assert compare_activities.requires == ["selected_activities"]
     assert compare_activities.side_effect is False
 
     assert ensure_summaries is not None
     assert ensure_summaries.side_effect is True
+    assert ensure_summaries.requires == ["selected_activities"]
 
     assert sync_garmin is not None
     assert sync_garmin.side_effect is True
+    assert sync_garmin.idempotent is False
+    assert sync_garmin.produces == ["synced_fit_files"]
 
     assert prepare_upload is not None
     assert prepare_upload.side_effect is False
     assert prepare_upload.requires_confirmation is False
+    assert prepare_upload.requires == ["current_fit_file"]
 
     assert confirm_upload is not None
     assert confirm_upload.side_effect is True
     assert confirm_upload.requires_confirmation is True
+    assert confirm_upload.idempotent is False
 
 
 def test_steps_can_be_filtered_by_category():

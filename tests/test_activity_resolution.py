@@ -103,6 +103,34 @@ def test_resolve_activity_range_accepts_range_description(tmp_path):
     assert result["result"]["count"] == 2
 
 
+def test_resolve_activity_range_accepts_range_type_yesterday(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_range",
+        reason="LLM 使用 range_type 表达昨天",
+        arguments={"range_type": "yesterday"},
+    )
+
+    result = execute_activity_resolution_step(
+        step,
+        context,
+        index_path=index_path,
+        today=date(2026, 5, 19),
+    )
+
+    assert result["result"]["start_date"] == "2026-05-18"
+    assert result["result"]["end_date"] == "2026-05-18"
+    assert result["result"]["count"] == 2
+    assert context.selected_activity_range == {
+        "type": "date_range",
+        "start_date": "2026-05-18",
+        "end_date": "2026-05-18",
+        "sport_type": None,
+    }
+
+
 def test_resolve_activity_range_accepts_natural_language_yesterday(tmp_path):
     index_path = tmp_path / "activity_index.json"
     _write_index(index_path)

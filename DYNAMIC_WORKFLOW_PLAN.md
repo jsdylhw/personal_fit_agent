@@ -36,6 +36,10 @@ agent/context.py       # AgentContext,集中保存 workflow 状态
 agent/activity_resolution.py # 执行 activity_resolution 步骤,只定位活动
 agent/plan_schema.py   # 粗粒度工作流步骤定义
 agent/planner.py       # 构建 planner payload,调用 LLM 生成初始 WorkflowPlan
+agent/plan_validator.py # 校验计划合法性、依赖和副作用边界
+agent/step_selector.py # 把粗粒度 step 映射到执行器/handler/允许工具
+agent/workflow_executor.py # 顺序执行已校验计划,支持 handler 注入和默认工具调度
+agent/activity_comparison.py # 基于已有 summary.json 执行多活动对比,不重新解析 FIT
 agent/workflow_chat.py # 当前仍是工具 loop 主入口
 agent/tools.py         # 当前底层工具 catalog 和执行路由
 app/debug_cli.py       # 工具调试入口,包含 plan-workflow 初始规划调试命令
@@ -44,9 +48,6 @@ app/debug_cli.py       # 工具调试入口,包含 plan-workflow 初始规划调
 当前还没有做:
 
 ```text
-Plan Validator
-Step Selector
-Executor
 Result Parser
 Responder
 Single Activity ReAct 子流程接口
@@ -230,10 +231,10 @@ Planner 后续应该输出固定 JSON:
 
 ## Validator
 
-新增:
+已新增:
 
 ```text
-agent/validator.py
+agent/plan_validator.py
 ```
 
 职责:
@@ -273,10 +274,10 @@ Validator 输出:
 
 ## Selector
 
-新增:
+已新增:
 
 ```text
-agent/selector.py
+agent/step_selector.py
 ```
 
 职责:
@@ -284,6 +285,7 @@ agent/selector.py
 - 把粗粒度步骤映射为允许的底层工具子集。
 - 不执行工具。
 - 不把无关工具暴露给执行 LLM。
+- 合并 `plan_schema.py` 中的依赖、产出、副作用、确认等执行约束。
 
 映射示例:
 
@@ -324,11 +326,19 @@ requires_confirmation
 
 ## Executor
 
-新增:
+已新增:
 
 ```text
-agent/executor.py
+agent/workflow_executor.py
 ```
+
+当前职责:
+
+- 先调用 `validate_workflow_plan()`,再调用 `select_workflow_steps()`。
+- 按顺序执行 selector 返回的 step。
+- 支持上层注入 `handler_name -> callable`,方便后续接入单活动 ReAct 子流程。
+- 已支持 `activity_resolution`、已有 summary 多活动对比、Garmin 同步、summary 生成、Strava 预览/确认、`final_response` 的默认调度。
+- 未实现的分析/训练建议/路线建议 handler 会明确返回 `handler_not_implemented`。
 
 职责:
 
@@ -339,7 +349,7 @@ agent/executor.py
 - 支持一个 step 内执行多个底层工具。
 - 对 `analyze_single_activity` 这类复杂步骤,调用子流程接口而不是把内部工具直接塞进主 workflow。
 
-短期可以继续复用:
+当前短期复用:
 
 ```text
 call_fit_analysis_tool()
