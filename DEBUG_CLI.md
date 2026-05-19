@@ -74,6 +74,12 @@ python -m app.debug_cli plan-workflow "分析这次骑行并给明天建议" --f
 python -m app.debug_cli plan-workflow "最近一周训练怎么样" --include-payload
 ```
 
+只执行计划中的活动定位步骤,用来验证是否能先把活动找出来:
+
+```bash
+python -m app.debug_cli plan-workflow "比较昨天的两次活动，如果没有分析过就分析一下" --resolve-activities
+```
+
 ## 检查 FIT 解析
 
 ```bash

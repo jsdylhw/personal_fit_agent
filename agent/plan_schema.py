@@ -171,7 +171,7 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         name="final_response",
-        description="在规划或执行结果可用后组织最终用户回答.",
+        description="根据已完成步骤的结果组织最终用户回答,不重新分析活动数据.",
         category="output",
     ),
 )

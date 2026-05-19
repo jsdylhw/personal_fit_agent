@@ -15,6 +15,8 @@ class AgentContext:
     current_fit_file: Path | None = None
     current_activity_key: str | None = None
     current_summary_path: Path | None = None
+    selected_activities: list[dict[str, Any]] = field(default_factory=list)
+    selected_activity_range: dict[str, Any] | None = None
     history_enabled: bool = True
     pending_action: dict[str, Any] | None = None
     last_tool_result: dict[str, Any] | None = None

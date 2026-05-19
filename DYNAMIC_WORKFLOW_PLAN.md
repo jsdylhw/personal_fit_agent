@@ -25,6 +25,7 @@
 - 任何副作用动作都必须经过程序校验。
 - 上传类动作必须有明确确认。
 - 单活动分析,周期总结,训练建议,路线建议都应该是可组合步骤。
+- 复杂单活动分析通过接口调用独立 ReAct 子流程,子流程另起 session 和日志。
 
 ## 当前状态
 
@@ -32,6 +33,7 @@
 
 ```text
 agent/context.py       # AgentContext,集中保存 workflow 状态
+agent/activity_resolution.py # 执行 activity_resolution 步骤,只定位活动
 agent/plan_schema.py   # 粗粒度工作流步骤定义
 agent/planner.py       # 构建 planner payload,调用 LLM 生成初始 WorkflowPlan
 agent/workflow_chat.py # 当前仍是工具 loop 主入口
@@ -47,6 +49,7 @@ Step Selector
 Executor
 Result Parser
 Responder
+Single Activity ReAct 子流程接口
 ```
 
 ## 粗粒度步骤层
@@ -96,6 +99,94 @@ sync_garmin_activities + analyze_new_fit_files
 ```
 
 这样可以让 LLM 做意图理解,但不直接控制工具和副作用。
+
+## 单活动 ReAct 子流程
+
+单活动分析保留原来较好的 ReAct 结构,但要从"全局自由调用工具"改成
+"主 workflow 通过接口调用的受限子流程"。
+
+目标结构:
+
+```text
+workflow_agent session
+→ Planner 选择 analyze_single_activity
+→ activity_resolution 确定 current_fit_file
+→ run_single_activity_react_analysis(...)
+   → single_activity_analysis session
+   → 独立受限 tool loop
+   → 独立 log
+→ workflow_agent 接收子流程结果
+→ final_response 汇总
+```
+
+推荐新增:
+
+```text
+agent/single_activity_react.py
+```
+
+建议接口:
+
+```python
+def run_single_activity_react_analysis(
+    *,
+    fit_path: str | Path,
+    question: str,
+    use_history: bool = True,
+    parent_session_id: str | None = None,
+) -> dict:
+    ...
+```
+
+返回:
+
+```json
+{
+  "answer": "...",
+  "fit_path": "...",
+  "session_id": "single_activity_...",
+  "log_path": "...",
+  "readable_log_path": "...",
+  "key_findings": [],
+  "used_tools": []
+}
+```
+
+子流程内部允许的工具:
+
+```text
+get_activity_overview
+get_activity_summary
+detect_activity_segments
+get_time_intervals
+get_distance_intervals
+get_history
+```
+
+子流程内部禁止的工具:
+
+```text
+sync_garmin_activities
+analyze_fit_file
+upload_to_strava
+resolve_activity
+get_activities_in_range
+```
+
+也就是说:
+
+```text
+固定外层流程 = 先定位活动 + 限制工具 + 管理 session/log
+受限 ReAct 内层 = 让 LLM 在单活动分析工具中动态探索
+```
+
+什么时候另起 session:
+
+- 需要深度分析单个 FIT 时另起 `single_activity_analysis` session。
+- 只是读取已有 summary 做比较时不另起子 session。
+- 周期总结或比较多活动时,优先读 summary/history;只有缺细节时再按活动启动子 session。
+
+这样主 workflow 日志只记录"做了哪些步骤",单活动子日志记录"这条 FIT 是怎么分析出来的"。
 
 ## 动态规划输出
 
@@ -246,6 +337,7 @@ agent/executor.py
 - 将 `AgentContext` 中的 parsed/history 传给数据工具。
 - 对副作用工具做最后一道保护。
 - 支持一个 step 内执行多个底层工具。
+- 对 `analyze_single_activity` 这类复杂步骤,调用子流程接口而不是把内部工具直接塞进主 workflow。
 
 短期可以继续复用:
 
@@ -278,6 +370,10 @@ resolve_activity 返回 activity.fit_path
 
 sync_garmin_activities 返回 downloaded files
 → context.last_synced_fit_files
+
+single_activity_react 返回 session/log/key_findings
+→ context.last_tool_result
+→ 后续 final_response 引用子流程结果
 
 analyze_fit_file 返回 fit_path/summary_path
 → context.current_fit_file
@@ -402,12 +498,14 @@ route_export_gpx
 1. 完善 plan_schema.py 的粗粒度步骤和测试
 2. 新增 validator.py,只校验计划,不执行
 3. 新增 LLM planner,只输出 WorkflowPlan JSON
-4. 新增 Tool Registry,给底层工具补元信息
-5. 新增 selector.py,完成 step -> tools 映射
-6. 新增 executor.py,从 workflow_chat.py 抽出工具执行
-7. 新增 result_parser.py,统一更新 AgentContext
-8. 新增 responder.py,把最终表达从执行 loop 中拆出
-9. workflow_chat.py 接入动态规划执行链路
+4. 完成 activity_resolution 步骤执行,先把活动找出来
+5. 新增 single_activity_react.py,把单活动 ReAct 分析做成可调用子流程
+6. 新增 Tool Registry,给底层工具补元信息
+7. 新增 selector.py,完成 step -> tools / step -> subflow 映射
+8. 新增 executor.py,从 workflow_chat.py 抽出工具和子流程执行
+9. 新增 result_parser.py,统一更新 AgentContext
+10. 新增 responder.py,把最终表达从执行 loop 中拆出
+11. workflow_chat.py 接入动态规划执行链路
 ```
 
 每一步都要保持旧入口可用:
@@ -432,12 +530,14 @@ pytest -q
 
 - 用户输入可以得到 `WorkflowPlan`。
 - `python -m app.debug_cli plan-workflow "..."` 可以调试初始计划。
+- `python -m app.debug_cli plan-workflow "..." --resolve-activities` 可以只执行活动定位步骤。
 - Planner 输出非法 step 时能被 validator 拒绝。
 - 信息不足时 planner 输出 `ask_user_clarification`。
 
 ### 阶段 C:选择工具
 
 - 单活动分析只暴露数据工具。
+- 单活动深度分析通过独立 ReAct 子流程执行,主 workflow 不直接暴露其内部工具。
 - 周期总结只暴露活动索引和历史工具。
 - 训练建议不暴露上传工具。
 - 上传流程只暴露 Strava 预览/确认相关工具。
@@ -448,6 +548,77 @@ pytest -q
 - `analyze_fit_file` 只在 summary generation 或 sync 后分析中出现。
 - `upload_to_strava confirmed=true` 只能在用户确认后出现。
 - 工具结果能自动更新 context。
+
+## 需要真实 LLM 接入的测试清单
+
+普通单测默认使用 fake client,保证 CI 和本地快速测试稳定。下面这些属于
+需要真实 LLM 配置的集成验证,后续单独跑,不要混进默认 `pytest -q`。
+
+### Planner 真实输出
+
+验证命令:
+
+```bash
+python -m app.debug_cli plan-workflow "比较昨天的两次活动，如果没有分析过就分析一下"
+python -m app.debug_cli plan-workflow "最近一周训练怎么样，明天怎么骑"
+python -m app.debug_cli plan-workflow "上传这次活动到 Strava" --fit latest
+```
+
+检查点:
+
+- 输出是合法 `WorkflowPlan` JSON。
+- `steps[].name` 全部来自 `available_steps`。
+- 不输出底层工具名,例如 `get_activity_summary` / `upload_to_strava`。
+- 信息不足时使用 `ask_user_clarification`。
+- 上传请求必须先规划 `prepare_strava_upload`,不能直接确认上传。
+
+### Planner + 活动定位
+
+验证命令:
+
+```bash
+python -m app.debug_cli plan-workflow "比较昨天的两次活动，如果没有分析过就分析一下" --resolve-activities
+python -m app.debug_cli plan-workflow "分析昨天那次骑行" --resolve-activities
+python -m app.debug_cli plan-workflow "看看最近两次骑行" --resolve-activities
+```
+
+检查点:
+
+- 相对日期如"昨天"能解析为具体日期。
+- `selected_activities` 能从 `data/activity_index.json` 中定位出来。
+- 多活动请求保留多条活动,不要错误设置成单个 `current_fit_file`。
+- 单活动请求会更新 `current_fit_file/current_activity_key/current_summary_path`。
+
+### 单活动 ReAct 子流程
+
+后续 `single_activity_react.py` 接入后再验证:
+
+```bash
+python -m app.debug_cli analyze-single-activity latest "分析这次骑行"
+```
+
+检查点:
+
+- 子流程另起 `single_activity_analysis` session。
+- 子流程日志独立于 workflow 主日志。
+- 只允许单活动分析工具。
+- 不出现 `sync_garmin_activities` / `analyze_fit_file` / `upload_to_strava`。
+
+### 动态执行链路
+
+后续 executor 接入后再验证:
+
+```bash
+python -m app.cli agent "分析昨天那次骑行"
+python -m app.cli agent "比较昨天的两次活动，如果没有分析过就分析一下"
+```
+
+检查点:
+
+- 主 workflow 先规划,再校验,再执行。
+- activity_resolution 先定位活动。
+- 单活动深度分析通过子 session 完成。
+- `final_response` 只汇总已有结果,不重新分析活动数据。
 
 ## 最终目标
 
