@@ -80,8 +80,7 @@ def analyze_fit_file_tool(fit_path: str, *, force: bool = False) -> dict[str, An
         force: 强制重新分析(即使已有缓存)。
 
     Returns:
-        dict: {activity_key, fit_path, sport_type, duration_min, distance_km,
-               strava_summary, model, status}
+        dict: 精简活动元数据 + summary_path/markdown_report,供 workflow 直接展示报告.
     """
     from core.file_workflow import analyze_fit_file
 
@@ -92,11 +91,14 @@ def analyze_fit_file_tool(fit_path: str, *, force: bool = False) -> dict[str, An
     return {
         "activity_key": result.get("activity_key"),
         "fit_path": result.get("fit_path"),
+        "summary_path": result.get("summary_path"),
         "sport_type": fit_summary.get("sport_type"),
         "start_time_local": fit_summary.get("start_time_local"),
         "duration_min": _seconds_to_minutes(fit_summary.get("duration_s")),
         "distance_km": _meters_to_km(fit_summary.get("distance_m")),
+        "markdown_report": result.get("markdown_report"),
         "strava_summary": result.get("strava_summary"),
+        "history_entry": result.get("history_entry") if isinstance(result.get("history_entry"), dict) else {},
         "model": result.get("model"),
         "status": result.get("status"),
     }

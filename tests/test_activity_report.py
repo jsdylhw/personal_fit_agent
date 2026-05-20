@@ -53,3 +53,35 @@ def test_show_selected_activity_report_reports_missing_summary():
     )
 
     assert result["error"] == "missing_activity_summary"
+
+
+def test_show_selected_activity_report_generates_summary_when_fit_exists(monkeypatch):
+    calls: list[tuple[str, bool]] = []
+
+    def fake_analyze_fit_file_tool(fit_path: str, *, force: bool = False):
+        calls.append((fit_path, force))
+        return {
+            "activity_key": "a1",
+            "fit_path": fit_path,
+            "summary_path": "data/summaries/latest.summary.json",
+            "markdown_report": "# 新生成报告\n\n文件分析完成。",
+            "status": "analyzed",
+            "history_entry": {"summary_label": "高功率区间"},
+        }
+
+    monkeypatch.setattr("agent.activity_report.analyze_fit_file_tool", fake_analyze_fit_file_tool)
+    context = AgentContext(
+        session_id="activity-report-test",
+        selected_activities=[{"activity_key": "a1", "fit_path": "/tmp/latest.fit"}],
+    )
+
+    result = show_selected_activity_report(
+        WorkflowPlanStep(name="analyze_single_activity", reason="分析文件", arguments={"force": True}),
+        context,
+    )
+
+    assert result["status"] == "completed"
+    assert result["answer"].startswith("# 新生成报告")
+    assert result["result"]["source"] == "generated_summary"
+    assert calls == [("/tmp/latest.fit", True)]
+    assert str(context.current_fit_file) == "/tmp/latest.fit"

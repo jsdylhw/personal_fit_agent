@@ -140,7 +140,7 @@ def test_executor_runs_single_activity_report_from_existing_summary(tmp_path):
     assert result.final_response.startswith("# 最新骑行报告")
 
 
-def test_executor_reports_unimplemented_default_handler():
+def test_executor_runs_single_activity_analysis_when_summary_missing(monkeypatch):
     context = AgentContext(
         session_id="executor-test",
         current_fit_file=Path("/tmp/current.fit"),
@@ -149,11 +149,23 @@ def test_executor_reports_unimplemented_default_handler():
         WorkflowPlanStep(name="analyze_single_activity", reason="分析当前活动"),
     )
 
+    def fake_analyze_fit_file_tool(fit_path: str, *, force: bool = False):
+        return {
+            "activity_key": "a1",
+            "fit_path": fit_path,
+            "summary_path": "/tmp/current.summary.json",
+            "markdown_report": "# 新分析报告\n\n分析已完成。",
+            "status": "analyzed",
+        }
+
+    monkeypatch.setattr("agent.activity_report.analyze_fit_file_tool", fake_analyze_fit_file_tool)
+
     result = execute_workflow_plan(plan, context)
 
-    assert result.status == "failed"
-    assert result.step_results[0].status == "failed"
-    assert result.step_results[0].error == "missing_activity_summary"
+    assert result.status == "completed"
+    assert result.step_results[0].status == "completed"
+    assert result.final_response is not None
+    assert result.final_response.startswith("# 新分析报告")
 
 
 def test_executor_can_continue_after_step_error_when_requested():

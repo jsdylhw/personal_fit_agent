@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from agent.activity_comparison import read_activity_summary
 from agent.context import AgentContext
 from agent.plan_schema import WorkflowPlanStep
+from core.workflow_tools import analyze_fit_file_tool
 
 
 def show_selected_activity_report(
     step: WorkflowPlanStep,
     context: AgentContext,
 ) -> dict[str, Any]:
-    """读取当前或已选活动的已有报告,不重新分析 FIT."""
+    """展示单活动报告;无 summary 但有 FIT 时触发文件分析工具链路."""
     activity = _selected_activity(context)
     if not activity:
         return {
@@ -23,11 +25,10 @@ def show_selected_activity_report(
 
     summary_path, summary, error = read_activity_summary(activity)
     if error or summary is None:
-        return {
-            "error": error or "missing_activity_summary",
-            "message": "Selected activity does not have a readable summary report.",
-            "activity": activity,
-        }
+        generated = _analyze_missing_summary(step, context, activity)
+        if generated.get("error"):
+            return generated
+        return generated
 
     report = str(summary.get("markdown_report") or "").strip()
     if not report:
@@ -53,6 +54,51 @@ def show_selected_activity_report(
             "source": "existing_summary",
             "fit_summary": summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {},
             "history_entry": summary.get("history_entry") if isinstance(summary.get("history_entry"), dict) else {},
+        },
+    }
+
+
+def _analyze_missing_summary(
+    step: WorkflowPlanStep,
+    context: AgentContext,
+    activity: dict[str, Any],
+) -> dict[str, Any]:
+    fit_path = activity.get("fit_path") or (str(context.current_fit_file) if context.current_fit_file else None)
+    if not fit_path:
+        return {
+            "error": "missing_activity_summary",
+            "message": "Selected activity does not have a readable summary report or FIT path.",
+            "activity": activity,
+        }
+
+    analysis = analyze_fit_file_tool(str(fit_path), force=bool(step.arguments.get("force")))
+    report = str(analysis.get("markdown_report") or "").strip()
+    if not report:
+        return {
+            "error": "missing_markdown_report",
+            "message": "File analysis completed but did not return markdown_report.",
+            "activity": activity,
+            "analysis": analysis,
+        }
+
+    summary_path = analysis.get("summary_path")
+    context.current_fit_file = Path(str(analysis.get("fit_path") or fit_path)).expanduser()
+    context.current_activity_key = analysis.get("activity_key") or activity.get("activity_key")
+    if summary_path:
+        context.current_summary_path = Path(str(summary_path)).expanduser()
+
+    return {
+        "step": step.name,
+        "status": "completed",
+        "answer": report,
+        "result": {
+            "schema_version": "activity_report.v1",
+            "activity_key": analysis.get("activity_key") or activity.get("activity_key"),
+            "fit_path": analysis.get("fit_path") or fit_path,
+            "summary_path": summary_path,
+            "source": "generated_summary",
+            "status": analysis.get("status"),
+            "history_entry": analysis.get("history_entry") if isinstance(analysis.get("history_entry"), dict) else {},
         },
     }
 
