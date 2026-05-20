@@ -17,17 +17,15 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from core.config import load_config
+from core.config import cfg_get, load_config
 from core.file_workflow import analyze_fit_file
-from core.strava_workflow import upload_summary_to_strava
-from download_garmin_cn_fit import (
+from core.garmin_cn import (
     DEFAULT_OUTPUT_DIR,
-    activity_base_name,
     build_downloader,
-    cfg_get,
     existing_fit_paths,
     save_original_as_fit,
 )
+from core.strava_workflow import upload_summary_to_strava
 from fit.parser import parse_fit
 
 

@@ -12,6 +12,7 @@ from agent.guided_chat import GuidedActivityChatSession, direct_fit_analysis, re
 from agent.workflow_chat import run_workflow_agent
 from agent.workflow_runner import run_planned_workflow
 from core.file_workflow import analyze_fit_file
+from core.workflow_tools import sync_garmin_activities_tool
 from core.strava_workflow import (
     update_strava_description_from_summary,
     upload_summary_to_strava,
@@ -91,6 +92,13 @@ def analyze_file_command(
         use_history=history,
         force=force,
     )
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+@app.command("sync-garmin")
+def sync_garmin_command(count: int = typer.Option(5, "--count", "-n", help="下载最近 N 条 Garmin 活动,最多 20 条.")) -> None:
+    """下载 Garmin 中国区最近活动 FIT 文件,自动跳过本地已有文件."""
+    result = sync_garmin_activities_tool(count=count)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 

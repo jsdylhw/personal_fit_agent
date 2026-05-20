@@ -4,6 +4,8 @@ import pytest
 
 from core.config import (
     _extract_top_level_yaml_block,
+    cfg_bool,
+    cfg_get,
     ensure_data_dirs,
     get_agent_config,
     load_agent_config,
@@ -20,6 +22,18 @@ class TestLoadConfig:
     def test_nonexistent_file_returns_empty(self):
         config = load_config("/tmp/nonexistent_config.yaml")
         assert config == {}
+
+
+class TestConfigHelpers:
+    def test_cfg_get_treats_empty_as_default(self):
+        assert cfg_get({"value": ""}, "value", "fallback") == "fallback"
+        assert cfg_get({"value": None}, "value", "fallback") == "fallback"
+        assert cfg_get({"value": "ok"}, "value", "fallback") == "ok"
+
+    def test_cfg_bool_accepts_common_string_values(self):
+        assert cfg_bool({"enabled": "yes"}, "enabled") is True
+        assert cfg_bool({"enabled": "off"}, "enabled") is False
+        assert cfg_bool({}, "enabled", default=True) is True
 
 
 class TestLoadAgentConfig:

@@ -24,11 +24,10 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
     """
     count = max(1, min(int(count), MAX_SYNC_COUNT))
 
-    from core.config import load_config
-    from download_garmin_cn_fit import (
+    from core.config import cfg_get, load_config
+    from core.garmin_cn import (
         DEFAULT_OUTPUT_DIR,
         build_downloader,
-        cfg_get,
         existing_fit_paths,
         save_original_as_fit,
     )

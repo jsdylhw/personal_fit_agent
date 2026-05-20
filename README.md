@@ -108,13 +108,13 @@ python -m app.cli strava-exchange-code "PASTE_CODE_HERE"
 下载 Garmin 中国最近活动:
 
 ```bash
-python download_garmin_cn_fit.py --config config.yaml
+python -m app.cli sync-garmin
 ```
 
-临时覆盖下载数量或输出目录:
+临时覆盖下载数量:
 
 ```bash
-python download_garmin_cn_fit.py --count 1 --output-dir garmin_cn_fit_files
+python -m app.cli sync-garmin --count 1
 ```
 
 本地已有的 FIT 文件会自动跳过.

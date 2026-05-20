@@ -1,14 +1,11 @@
-#!/usr/bin/env python3
-"""Garmin 中国区 FIT 文件下载器.
+"""Garmin 中国区下载业务逻辑.
 
-独立可运行的模块,也可被 app/api.py 导入使用.
-通过 garminconnect 库登录 Garmin 中国区,下载原始活动文件(.fit 或 .zip),
-解压并去重后保存到本地目录.
+这里放可被 API、workflow tool 和脚本复用的下载能力。根目录脚本只负责
+命令行参数和输出,避免业务模块反向导入根级脚本。
 """
 
 from __future__ import annotations
 
-import argparse
 import io
 import os
 import re
@@ -16,40 +13,12 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-DEFAULT_CONFIG_PATH = "config.yaml"
+from core.config import cfg_bool, cfg_get
+
 DEFAULT_OUTPUT_DIR = "garmin_cn_fit_files"
 DEFAULT_TOKENSTORE = ".garmin_cn_tokens"
-# Garmin 中国区使用独立的 OAuth 端点
+# Garmin 中国区使用独立的 OAuth 端点。
 CN_DI_TOKEN_URL = "https://diauth.garmin.cn/di-oauth2-service/oauth/token"
-
-
-def read_config(path: str | Path) -> dict[str, Any]:
-    config_path = Path(path)
-    if not config_path.exists():
-        return {}
-    try:
-        import yaml
-    except ImportError as exc:
-        raise RuntimeError("Reading config.yaml requires pyyaml: pip install pyyaml") from exc
-
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    if not isinstance(data, dict):
-        raise ValueError(f"Config must be a YAML object: {config_path}")
-    return data
-
-
-def cfg_get(config: dict[str, Any], name: str, default: Any = None) -> Any:
-    value = config.get(name)
-    return default if value in (None, "") else value
-
-
-def cfg_bool(config: dict[str, Any], name: str, default: bool = False) -> bool:
-    value = cfg_get(config, name, default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-    return bool(value)
 
 
 def safe_filename(value: Any) -> str:
@@ -74,6 +43,7 @@ def existing_fit_paths(output_dir: Path, activity: dict[str, Any]) -> list[Path]
 
 
 def save_original_as_fit(raw_bytes: bytes, output_dir: Path, activity: dict[str, Any]) -> list[Path]:
+    """保存 Garmin ORIGINAL 下载结果,自动处理 zip 内的 FIT 文件."""
     base_name = activity_base_name(activity)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -102,8 +72,8 @@ def save_original_as_fit(raw_bytes: bytes, output_dir: Path, activity: dict[str,
 class GarminChinaDownloader:
     """Garmin 中国区登录与活动下载.
 
-    封装 garminconnect 库,处理中国区 DI OAuth 端点覆盖,
-    代理设置和 token持久化.登录后才能调用 list_activities/download_original.
+    封装 garminconnect 库,处理中国区 DI OAuth 端点覆盖、
+    代理设置和 token 持久化。登录后才能调用 list_activities/download_original。
     """
 
     def __init__(
@@ -124,7 +94,7 @@ class GarminChinaDownloader:
         self.Garmin = None
 
     def login(self) -> None:
-        # 代理通过全局环境变量设置,影响整个进程的网络请求
+        # 代理通过全局环境变量设置,影响整个进程的网络请求。
         if self.proxy:
             os.environ["HTTP_PROXY"] = self.proxy
             os.environ["HTTPS_PROXY"] = self.proxy
@@ -156,14 +126,6 @@ class GarminChinaDownloader:
         )
 
 
-def build_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Download recent Garmin China activities as FIT files.")
-    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Config file path.")
-    parser.add_argument("--count", type=int, help="Number of recent activities to download.")
-    parser.add_argument("--output-dir", help="Directory for downloaded FIT files.")
-    return parser.parse_args()
-
-
 def build_downloader(config: dict[str, Any]) -> GarminChinaDownloader:
     username = cfg_get(config, "garmin_username")
     password = cfg_get(config, "garmin_password")
@@ -177,43 +139,3 @@ def build_downloader(config: dict[str, Any]) -> GarminChinaDownloader:
         proxy=cfg_get(config, "garmin_proxy"),
         disable_curl_cffi=cfg_bool(config, "disable_curl_cffi", default=False),
     )
-
-
-def main() -> None:
-    args = build_args()
-    config = read_config(args.config)
-    count = args.count or int(cfg_get(config, "download_count", 5))
-    output_dir = Path(args.output_dir or cfg_get(config, "output_dir", DEFAULT_OUTPUT_DIR))
-
-    downloader = build_downloader(config)
-    print("Logging in to Garmin China...")
-    downloader.login()
-
-    print(f"Reading latest {count} activities...")
-    activities = downloader.list_activities(count)
-    if not activities:
-        print("No activities found.")
-        return
-
-    print(f"Downloading FIT files to: {output_dir}")
-    for index, activity in enumerate(activities, start=1):
-        activity_id = activity.get("activityId")
-        name = activity.get("activityName") or f"activity_{activity_id}"
-        start_time = activity.get("startTimeLocal") or "unknown"
-        print(f"[{index}/{len(activities)}] {name} | {start_time} | {activity_id}")
-
-        existing_paths = existing_fit_paths(output_dir, activity)
-        if existing_paths:
-            for path in existing_paths:
-                print(f"  skipped existing: {path}")
-            continue
-
-        raw_bytes = downloader.download_original(activity_id)
-        for path in save_original_as_fit(raw_bytes, output_dir, activity):
-            print(f"  saved: {path}")
-
-    print("Download complete.")
-
-
-if __name__ == "__main__":
-    main()
