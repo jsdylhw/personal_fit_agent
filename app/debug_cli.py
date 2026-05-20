@@ -94,10 +94,33 @@ def tool_call_command(
 
 
 @app.command("inspect-fit")
-def inspect_fit_command(fit_path: str = typer.Argument("latest")) -> None:
-    """解析 FIT 并输出基础 summary/training metadata 概况."""
+def inspect_fit_command(
+    fit_path: str = typer.Argument("latest"),
+    tool_name: str | None = typer.Argument(None),
+    args: str = typer.Option("{}", "--args", help="可选:调用数据工具时传入的 JSON object 参数."),
+    history: bool = typer.Option(True, "--history/--no-history", help="调用 get_history 等数据工具时是否带历史上下文."),
+) -> None:
+    """解析 FIT;如果传 tool_name,则直接调用对应只读数据工具."""
     fit = resolve_fit_path(fit_path)
     parsed = parse_fit(fit)
+    if tool_name:
+        history_before = None
+        if history:
+            summary_for_history = parsed.get("summary") or {}
+            before = summary_for_history.get("start_time_local") or summary_for_history.get("start_time")
+            history_before = query_activity_history(before=before, days=90, limit=50)
+        result = call_fit_analysis_tool(
+            tool_name,
+            _parse_args_json(args),
+            parsed=parsed,
+            history_before=history_before,
+        )
+        _echo_json({
+            "fit_path": str(fit),
+            **result,
+        })
+        return
+
     summary = parsed.get("summary") or {}
     metadata = parsed.get("training_metadata") or {}
     _echo_json({

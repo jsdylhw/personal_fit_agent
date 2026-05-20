@@ -1,7 +1,7 @@
 """终端 agent 模式:让大模型按需调用完整工作流工具集.
 
 这个模块和 analyze-file 的隐藏 FIT 分析 loop 不同:
-- analyze-file 只暴露 5 个只读数据工具,用于单条 FIT 报告生成;
+- analyze-file 只暴露 6 个只读数据工具,用于单条 FIT 报告生成;
 - workflow agent 暴露 8 个工具,包含 Garmin 下载,FIT 分析和 Strava 上传.
 """
 

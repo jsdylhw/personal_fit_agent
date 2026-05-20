@@ -17,6 +17,7 @@ LOW_LEVEL_TOOL_NAMES = {
     # 单活动分析子流程内部工具,不应该出现在外层 workflow plan 中.
     "get_activity_overview",
     "get_activity_summary",
+    "scan_activity_segments",
     "get_time_intervals",
     "get_distance_intervals",
     "get_history",

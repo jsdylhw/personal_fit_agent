@@ -11,6 +11,7 @@ from typing import Any
 
 from fit.parser import records_dataframe
 
+from .activity_scan import scan_activity_segments
 from .stats import (
     _distance_delta,
     _duration_from_group,
@@ -234,6 +235,22 @@ def get_distance_intervals_tool(
         "window": {"start_d": _round_float(start_d, 1), "end_d": _round_float(end_d, 1)},
         "format": "column_arrays", "series": _rows_to_column_arrays(rows),
     }
+
+
+def scan_activity_segments_tool(
+    parsed: dict[str, Any],
+    *,
+    window_seconds: Any = 30,
+    step_seconds: Any = 10,
+    max_segments: Any = 12,
+) -> dict[str, Any]:
+    """全程扫描活动 records,返回连续高功率区间和数据质量提示."""
+    return scan_activity_segments(
+        parsed,
+        window_seconds=int(window_seconds or 30),
+        step_seconds=int(step_seconds or 10),
+        max_segments=int(max_segments or 12),
+    )
 
 
 # =============================================================================

@@ -1,7 +1,7 @@
 """LLM 工具目录与路由.
 
 两个 catalog:
-- fit_data_tool_catalog(): 5 个只读数据查询工具,给 analyze-file 的 hidden tool loop 用
+- fit_data_tool_catalog(): 6 个只读数据查询工具,给 analyze-file 的 hidden tool loop 用
 - agent_workflow_tool_catalog(): 8 个工具(数据查询 + 下载/分析/上传),给 agent 模式用
 
 call_fit_analysis_tool() 统一路由,根据 name 分发到 core/data_tools 或 core/workflow_tools.
@@ -22,6 +22,7 @@ from core.data_tools import (
     get_distance_intervals_tool,
     get_time_intervals_tool,
     llm_safe_history,
+    scan_activity_segments_tool,
 )
 from core.stats import prune_empty_values
 from core.workflow_tools import (
@@ -54,6 +55,11 @@ def fit_data_tool_catalog() -> list[dict[str, Any]]:
             "name": "get_distance_intervals",
             "description": "Return fixed distance-window averages. Use bucket_distance_m for every 1km/3km/5km; use start_d/end_d for a focused window. Power/cadence/speed include non-zero averages and zero fractions.",
             "arguments": {"bucket_distance_m": 1000, "start_d": None, "end_d": None},
+        },
+        {
+            "name": "scan_activity_segments",
+            "description": "Scan the full activity once and return concise continuous high-power intervals lasting at least 30s. Each interval includes power/HR/cadence/speed/elevation context and marks climb only when the interval gains at least 30m. Also returns data-quality/configuration warnings. This is deterministic local analysis, not a report generator.",
+            "arguments": {"window_seconds": 30, "step_seconds": 10, "max_segments": 12},
         },
         {
             "name": "get_history",
@@ -121,7 +127,7 @@ def call_fit_analysis_tool(
     Returns:
         dict: {tool, arguments, result} 或 {tool, arguments, error, message}.
     """
-    _data_tool_names = {"get_activity_overview", "get_activity_summary", "get_time_intervals", "get_distance_intervals"}
+    _data_tool_names = {"get_activity_overview", "get_activity_summary", "get_time_intervals", "get_distance_intervals", "scan_activity_segments"}
     if name in _data_tool_names and parsed is None:
         return {"tool": name, "arguments": arguments, "error": "missing_parsed", "message": "This tool requires a parsed FIT file."}
 
@@ -159,6 +165,13 @@ def call_fit_analysis_tool(
             result = get_time_intervals_tool(parsed, bucket_seconds=int(arguments.get("bucket_seconds", 60)), start_s=arguments.get("start_s"), end_s=arguments.get("end_s"))
         elif name == "get_distance_intervals":
             result = get_distance_intervals_tool(parsed, bucket_distance_m=arguments.get("bucket_distance_m", 1000), start_d=arguments.get("start_d"), end_d=arguments.get("end_d"))
+        elif name == "scan_activity_segments":
+            result = scan_activity_segments_tool(
+                parsed,
+                window_seconds=arguments.get("window_seconds", 30),
+                step_seconds=arguments.get("step_seconds", 10),
+                max_segments=arguments.get("max_segments", 12),
+            )
         elif name == "get_history":
             result = llm_safe_history(history_before) or {"schema_version": "file_training_history.v1", "count": 0, "activities": [], "note": "History was not enabled or no previous activities exist."}
         else:

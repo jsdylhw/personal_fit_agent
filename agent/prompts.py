@@ -19,13 +19,14 @@ Decision guidance:
 1. Start from the initial fit_summary. Request get_activity_overview when you need a compact first-pass activity portrait.
 2. For dates and time-of-day, use fit_summary.start_time_local only. It is a local wall-clock string without a timezone suffix; do not add +08:00/Z or infer UTC.
 3. Prefer get_activity_summary with sections when you need objective grouped data such as power, heart_rate, energy_load, laps, training_zones, or device_profile.
-4. Request get_time_intervals when you need time-based averages, such as every 1 minute, every 5 minutes, or the 100-200s window for a sprint. Use very small buckets like 3s only for focused short windows because full-activity output can be large.
-5. Request get_distance_intervals when you need distance-based averages, such as every 1km, every 3km, every 5km, or the 2km-3km window for a climb.
-6. For interval tools, use avg_* for the real whole-window average including coasting/stops, avg_nonzero_* for active output, and *_zero_fraction to judge coasting or stopping.
-7. You may analyze specific segments that look interesting. First use coarse intervals such as 60s, 5min, 1km, or 3km to locate possible climbs, surges, sprints, pauses, pacing drops, or tempo blocks; then request a focused smaller window such as 3-10s, 30s, 100-200s, or 2km-3km to inspect that segment in detail.
-8. For climbs, prefer distance intervals and look at altitude, speed, power, cadence, and heart-rate response together. For short sprints or surges, prefer small time intervals and look at power, cadence, speed change, and whether the effort starts from coasting.
-9. Request get_history only when the user asked to reference history or when longitudinal comparison materially improves the answer.
-10. When the data is enough, output final.
+4. Request scan_activity_segments first when the user asks about hard intervals, high-power sections, climbs with power, surges, or notable points. It returns concise continuous high-power intervals of at least 30s and marks climb context only when the interval gains at least 30m; use it as a locator, not as the final report.
+5. Request get_time_intervals when you need time-based averages, such as every 1 minute, every 5 minutes, or the 100-200s window for a hard effort. Use very small buckets like 3s only for focused short windows because full-activity output can be large.
+6. Request get_distance_intervals when you need distance-based averages, such as every 1km, every 3km, every 5km, or the 2km-3km window for a climb.
+7. For interval tools, use avg_* for the real whole-window average including coasting/stops, avg_nonzero_* for active output, and *_zero_fraction to judge coasting or stopping.
+8. You may analyze specific segments that look interesting. Use scan_activity_segments or coarse intervals such as 60s, 5min, 1km, or 3km to locate possible sustained efforts, climbs with power, pacing drops, or repeated surges; then request a focused smaller window such as 30s, 100-200s, or 2km-3km to inspect that segment in detail.
+9. For climbs, prefer distance intervals and look at altitude, speed, power, cadence, and heart-rate response together. For short hard efforts, prefer small time intervals and look at power, cadence, speed change, and whether the effort starts from coasting.
+10. Request get_history only when the user asked to reference history or when longitudinal comparison materially improves the answer.
+11. When the data is enough, output final.
 
 Final response must be exactly one JSON object:
 {
@@ -100,7 +101,7 @@ WORKFLOW_AGENT_SYSTEM_PROMPT = """你是 Personal FIT Agent 的终端工作流�
 - 如果用户要求上传 Strava,必须先调用 upload_to_strava 且 confirmed=false 获取预览;只有用户明确确认后才可以 confirmed=true.
 - 不要伪造工具结果.所有涉及本地文件,下载,分析,上传状态的结论必须基于工具返回.
 - 数据查询工具只能查询 current_fit_file.如果 current_fit_file 为 null,不要调用 get_activity_overview/get_activity_summary/get_time_intervals/get_distance_intervals/get_history.
-- 可以针对感兴趣片段调用 get_time_intervals 或 get_distance_intervals,例如每 1 分钟,每 5 分钟,100-200s 冲刺,2km-3km 爬坡等.
+- 可以针对感兴趣片段优先调用 scan_activity_segments 定位 30 秒以上连续高功率区间;如果区间爬升超过 30m,工具会标记爬坡类型.之后再用 get_time_intervals 或 get_distance_intervals 做局部细看,例如每 1 分钟,每 5 分钟,100-200s 发力,2km-3km 爬坡等.
 
 如果需要调用工具,只返回 JSON:
 {

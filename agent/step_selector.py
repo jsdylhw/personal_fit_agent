@@ -15,6 +15,7 @@ from agent.plan_schema import WorkflowPlan, WorkflowPlanStep, get_workflow_step
 FIT_DATA_TOOLS = (
     "get_activity_overview",
     "get_activity_summary",
+    "scan_activity_segments",
     "get_time_intervals",
     "get_distance_intervals",
     "get_history",

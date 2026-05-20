@@ -169,21 +169,21 @@ class TestChooseStravaSummaryTone:
 
 
 class TestFitAnalysisToolCatalog:
-    def test_data_catalog_has_only_5_readonly_tools(self):
-        """Hidden tool loop 只能看到 5 个只读数据工具,不能看到副作用工具."""
+    def test_data_catalog_has_only_6_readonly_tools(self):
+        """Hidden tool loop 只能看到 6 个只读数据工具,不能看到副作用工具."""
         tools = fit_data_tool_catalog()
         tool_names = {t["name"] for t in tools}
         assert tool_names == {
-            "get_activity_overview", "get_activity_summary",
+            "get_activity_overview", "get_activity_summary", "scan_activity_segments",
             "get_time_intervals", "get_distance_intervals", "get_history",
         }
 
-    def test_agent_catalog_has_all_11_tools(self):
+    def test_agent_catalog_has_all_12_tools(self):
         """Agent 模式可以看到 数据查询 + 活动发现 + 下载/分析/上传."""
         tools = agent_workflow_tool_catalog()
         tool_names = {t["name"] for t in tools}
         assert tool_names == {
-            "get_activity_overview", "get_activity_summary",
+            "get_activity_overview", "get_activity_summary", "scan_activity_segments",
             "get_time_intervals", "get_distance_intervals", "get_history",
             "list_activities", "resolve_activity", "get_activities_in_range",
             "sync_garmin_activities", "analyze_fit_file", "upload_to_strava",
@@ -203,8 +203,8 @@ class TestFitAnalysisToolCatalog:
 
 
 class TestWorkflowAgentCliRunner:
-    def test_workflow_agent_exposes_all_11_tools_without_fit(self, tmp_path, monkeypatch):
-        """终端 agent 模式首轮 payload 应暴露完整 11 工具 catalog."""
+    def test_workflow_agent_exposes_all_12_tools_without_fit(self, tmp_path, monkeypatch):
+        """终端 agent 模式首轮 payload 应暴露完整 12 工具 catalog."""
         from agent.workflow_chat import run_workflow_agent
 
         captured: dict[str, object] = {}
@@ -232,7 +232,7 @@ class TestWorkflowAgentCliRunner:
         payload = _extract_json_object(messages[0]["content"])
         tool_names = {tool["name"] for tool in payload["available_tools"]}
         assert tool_names == {
-            "get_activity_overview", "get_activity_summary",
+            "get_activity_overview", "get_activity_summary", "scan_activity_segments",
             "get_time_intervals", "get_distance_intervals", "get_history",
             "list_activities", "resolve_activity", "get_activities_in_range",
             "sync_garmin_activities", "analyze_fit_file", "upload_to_strava",
@@ -377,6 +377,12 @@ class TestCallFitAnalysisTool:
     def test_get_distance_intervals(self, sample_parsed_fit):
         result = call_fit_analysis_tool("get_distance_intervals", {"bucket_distance_m": 1000}, parsed=sample_parsed_fit, history_before=None)
         assert result["result"]["available"] is True
+
+    def test_scan_activity_segments(self, sample_parsed_fit):
+        result = call_fit_analysis_tool("scan_activity_segments", {}, parsed=sample_parsed_fit, history_before=None)
+        assert result["tool"] == "scan_activity_segments"
+        assert result["result"]["available"] is True
+        assert result["result"]["schema_version"] == "activity_scan.v1"
 
     def test_get_history_disabled(self, sample_parsed_fit):
         result = call_fit_analysis_tool("get_history", {}, parsed=sample_parsed_fit, history_before=None)
