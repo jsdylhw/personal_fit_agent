@@ -92,6 +92,11 @@ def _normalize_step_arguments(
         if sport_type:
             arguments["sport_type"] = sport_type
 
+    if "order" not in arguments and "match" not in arguments:
+        order = _order_from_scope(scope, step.reason)
+        if order:
+            arguments["order"] = order
+
     if arguments == step.arguments:
         return step
     return WorkflowPlanStep(
@@ -99,6 +104,19 @@ def _normalize_step_arguments(
         reason=step.reason,
         arguments=arguments,
     )
+
+
+def _order_from_scope(scope: dict[str, Any], reason: str = "") -> str | None:
+    text = " ".join(
+        str(scope.get(key) or "")
+        for key in ("order", "match", "position", "scope_type", "type", "description")
+    ).lower()
+    text = f"{text} {reason}".lower()
+    if any(token in text for token in ("first", "earliest", "oldest", "第一个", "最早", "最前")):
+        return "earliest"
+    if any(token in text for token in ("last", "latest", "newest", "最后", "最新", "最晚")):
+        return "latest"
+    return None
 
 
 def _fallback_answer(execution) -> str:

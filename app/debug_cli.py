@@ -147,8 +147,8 @@ def rebuild_index_command() -> None:
 
 
 @app.command("list-activities")
-def list_activities_command(limit: int = 20, sport_type: str | None = None) -> None:
-    _echo_json(list_activities(limit=limit, sport_type=sport_type))
+def list_activities_command(limit: int = 20, sport_type: str | None = None, order: str = "latest") -> None:
+    _echo_json(list_activities(limit=limit, sport_type=sport_type, order=order))
 
 
 @app.command("resolve-activity")
@@ -156,11 +156,13 @@ def resolve_activity_command(
     date_local: str | None = None,
     name: str | None = None,
     activity_key: str | None = None,
+    activity_index: int | None = None,
     sport_type: str | None = None,
     match: str = "latest",
 ) -> None:
     _echo_json(resolve_activity(
         activity_key=activity_key,
+        activity_index=activity_index,
         date_local=date_local,
         name=name,
         sport_type=sport_type,

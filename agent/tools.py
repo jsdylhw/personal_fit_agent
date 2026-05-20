@@ -38,12 +38,12 @@ def fit_data_tool_catalog() -> list[dict[str, Any]]:
     return [
         {
             "name": "get_activity_overview",
-            "description": "Return a compact high-level activity overview: sport, local start time, duration, distance, total ascent, calories, basic power/HR/cadence/speed metrics, TSS/IF, and data availability flags.",
+            "description": "Return a compact high-level activity overview for lightweight inventory or quick profile questions, such as listing what activities happened in a period. Do not use as the first step for a full single-activity training report; use get_activity_summary instead.",
             "arguments": {},
         },
         {
             "name": "get_activity_summary",
-            "description": "Return structured objective activity summary by sections. Default returns 8 core sections. Use sections to pick specific ones, or 'all' for all 11. Core sections (power/heart_rate/cadence/speed/elevation) have available/stats/summary fields.",
+            "description": "Primary objective data tool for full single-activity analysis reports. Return structured activity summary by sections. Default returns 8 core sections. Use sections to pick specific ones, or 'all' for all 11. Core sections (power/heart_rate/cadence/speed/elevation) have available/stats/summary fields.",
             "arguments": {"sections": ["all"]},
         },
         {
@@ -74,13 +74,13 @@ def agent_workflow_tool_catalog() -> list[dict[str, Any]]:
     return fit_data_tool_catalog() + [
         {
             "name": "list_activities",
-            "description": "List indexed local activities from data/activity_index.json. Use this before selecting activities by date or finding recent activities. Arguments: limit, sport_type.",
-            "arguments": {"limit": 20, "sport_type": None},
+            "description": "List indexed local activities from data/activity_index.json. Use this before selecting activities by date or finding recent activities. Arguments: limit, sport_type, order(latest/earliest). Returned activities include activity_index, a chronological number where 1 is the earliest activity.",
+            "arguments": {"limit": 20, "sport_type": None, "order": "latest"},
         },
         {
             "name": "resolve_activity",
-            "description": "Resolve one indexed activity by activity_key, date_local (YYYY-MM-DD), name/file stem, and optional sport_type. Returns selected activity and candidates if multiple match.",
-            "arguments": {"activity_key": None, "date_local": None, "name": None, "sport_type": None, "match": "latest"},
+            "description": "Resolve one indexed activity by activity_key, activity_index, date_local (YYYY-MM-DD), name/file stem, and optional sport_type. activity_index is chronological: 1 is the earliest activity. Returns selected activity and candidates if multiple match.",
+            "arguments": {"activity_key": None, "activity_index": None, "date_local": None, "name": None, "sport_type": None, "match": "latest"},
         },
         {
             "name": "get_activities_in_range",
@@ -134,10 +134,15 @@ def call_fit_analysis_tool(
     try:
         # -- 工作流工具(副作用,仅 agent 模式) --
         if name == "list_activities":
-            result = list_activities(limit=int(arguments.get("limit", 20)), sport_type=arguments.get("sport_type"))
+            result = list_activities(
+                limit=int(arguments.get("limit", 20)),
+                sport_type=arguments.get("sport_type"),
+                order=str(arguments.get("order") or "latest"),
+            )
         elif name == "resolve_activity":
             result = resolve_activity(
                 activity_key=arguments.get("activity_key"),
+                activity_index=arguments.get("activity_index"),
                 date_local=arguments.get("date_local"),
                 name=arguments.get("name"),
                 sport_type=arguments.get("sport_type"),

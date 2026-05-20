@@ -345,6 +345,7 @@ class TestActivityIndex:
         assert entry["date_local"] == "2026-05-14"
         listed = list_activities(path=index_path)
         assert listed["count"] == 1
+        assert listed["activities"][0]["activity_index"] == 1
         resolved = resolve_activity(date_local="2026-05-14", path=index_path)
         assert resolved["matched_count"] == 1
         assert resolved["activity"]["fit_path"] == str(fit_file.resolve())

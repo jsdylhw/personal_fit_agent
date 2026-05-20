@@ -49,7 +49,7 @@ def save_activity_index(index: dict[str, Any], path: str | Path | None = None) -
     target = activity_index_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     rows = index.get("activities") if isinstance(index.get("activities"), list) else []
-    rows = sorted(rows, key=lambda row: (row.get("start_time_local") or "", row.get("file_name") or ""))
+    rows = _with_activity_indices(rows)
     data = {
         "schema_version": "activity_index.v1",
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -154,14 +154,20 @@ def list_activities(
     *,
     limit: int = 20,
     sport_type: str | None = None,
+    order: str = "latest",
     path: str | Path | None = None,
 ) -> dict[str, Any]:
     rows = _filter_rows(load_activity_index(path).get("activities") or [], sport_type=sport_type)
-    rows = rows[-max(1, int(limit)) :] if limit else rows
-    rows = list(reversed(rows))
+    order_key = _activity_order_key(order)
+    if order_key == "earliest":
+        rows = rows[: max(1, int(limit))] if limit else rows
+    else:
+        rows = rows[-max(1, int(limit)) :] if limit else rows
+        rows = list(reversed(rows))
     return {
         "schema_version": "activity_list.v1",
         "count": len(rows),
+        "order": order_key,
         "activities": [_compact_activity(row) for row in rows],
     }
 
@@ -169,6 +175,7 @@ def list_activities(
 def resolve_activity(
     *,
     activity_key: str | None = None,
+    activity_index: int | str | None = None,
     date_local: str | None = None,
     name: str | None = None,
     sport_type: str | None = None,
@@ -179,6 +186,13 @@ def resolve_activity(
     rows = _filter_rows(rows, sport_type=sport_type)
     if activity_key:
         rows = [row for row in rows if str(row.get("activity_key")) == str(activity_key)]
+    if activity_index is not None:
+        try:
+            wanted_index = int(activity_index)
+        except (TypeError, ValueError):
+            rows = []
+        else:
+            rows = [row for row in rows if row.get("activity_index") == wanted_index]
     if date_local:
         rows = [row for row in rows if row.get("date_local") == date_local]
     if name:
@@ -192,7 +206,7 @@ def resolve_activity(
     if not rows:
         return {"schema_version": "activity_resolve.v1", "matched_count": 0, "activity": None, "candidates": []}
 
-    chosen = rows[0] if match == "earliest" else rows[-1]
+    chosen = rows[0] if _activity_order_key(match) == "earliest" else rows[-1]
     return {
         "schema_version": "activity_resolve.v1",
         "matched_count": len(rows),
@@ -264,6 +278,7 @@ def _entry_from_fit_summary(
 def _compact_activity(row: dict[str, Any]) -> dict[str, Any]:
     return prune_empty_values({
         "activity_key": row.get("activity_key"),
+        "activity_index": row.get("activity_index"),
         "file_name": row.get("file_name"),
         "fit_path": row.get("fit_path"),
         "summary_path": row.get("summary_path"),
@@ -304,10 +319,30 @@ def _same_activity(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 
 def _filter_rows(rows: list[dict[str, Any]], *, sport_type: str | None = None) -> list[dict[str, Any]]:
-    filtered = rows
+    indexed_rows = _with_activity_indices(rows)
+    filtered = indexed_rows
     if sport_type:
         filtered = [row for row in filtered if row.get("sport_type") == sport_type]
     return sorted(filtered, key=lambda row: row.get("start_time_local") or "")
+
+
+def _with_activity_indices(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sorted_rows = sorted(rows, key=lambda row: (row.get("start_time_local") or "", row.get("file_name") or ""))
+    # 只保存一个按时间正序的序号:最早为 1,最后一个就是最大序号.
+    return [
+        {
+            **row,
+            "activity_index": index,
+        }
+        for index, row in enumerate(sorted_rows, start=1)
+    ]
+
+
+def _activity_order_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"earliest", "oldest", "first", "chronological", "asc", "ascending"}:
+        return "earliest"
+    return "latest"
 
 
 def _activity_key(path: Path) -> str:

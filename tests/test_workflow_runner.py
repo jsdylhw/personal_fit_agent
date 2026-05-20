@@ -63,7 +63,36 @@ def test_normalize_workflow_plan_moves_recent_scope_to_step_arguments():
 
     assert normalized.steps[0].arguments == {
         "limit": 1,
+        "order": "latest",
         "sport_type": "cycling",
+    }
+
+
+def test_normalize_workflow_plan_moves_first_activity_scope_to_order():
+    plan = WorkflowPlan(
+        task_type="activity_report",
+        steps=[
+            WorkflowPlanStep(
+                name="resolve_recent_activities",
+                reason="定位第一个活动",
+            ),
+            WorkflowPlanStep(
+                name="analyze_single_activity",
+                reason="展示报告",
+            ),
+        ],
+        activity_scope={
+            "scope_type": "recent",
+            "limit": 1,
+            "description": "第一个活动,也就是最早的活动",
+        },
+    )
+
+    normalized = normalize_workflow_plan(plan)
+
+    assert normalized.steps[0].arguments == {
+        "limit": 1,
+        "order": "earliest",
     }
 
 

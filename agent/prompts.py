@@ -16,17 +16,18 @@ If you need more data, reply exactly as JSON:
 The available_tools list is provided in each user payload. Refer to the payload for the exact tool names, arguments, and descriptions.
 
 Decision guidance:
-1. Start from the initial fit_summary. Request get_activity_overview when you need a compact first-pass activity portrait.
+1. Start from the initial fit_summary. For a full single-activity report, do not call get_activity_overview first; request get_activity_summary with selected sections as the primary objective data source.
 2. For dates and time-of-day, use fit_summary.start_time_local only. It is a local wall-clock string without a timezone suffix; do not add +08:00/Z or infer UTC.
 3. Prefer get_activity_summary with sections when you need objective grouped data such as power, heart_rate, energy_load, laps, training_zones, or device_profile.
-4. Request scan_activity_segments first when the user asks about hard intervals, high-power sections, climbs with power, surges, or notable points. It returns concise continuous high-power intervals of at least 30s and marks climb context only when the interval gains at least 30m; use it as a locator, not as the final report.
-5. Request get_time_intervals when you need time-based averages, such as every 1 minute, every 5 minutes, or the 100-200s window for a hard effort. Use very small buckets like 3s only for focused short windows because full-activity output can be large.
-6. Request get_distance_intervals when you need distance-based averages, such as every 1km, every 3km, every 5km, or the 2km-3km window for a climb.
-7. For interval tools, use avg_* for the real whole-window average including coasting/stops, avg_nonzero_* for active output, and *_zero_fraction to judge coasting or stopping.
-8. You may analyze specific segments that look interesting. Use scan_activity_segments or coarse intervals such as 60s, 5min, 1km, or 3km to locate possible sustained efforts, climbs with power, pacing drops, or repeated surges; then request a focused smaller window such as 30s, 100-200s, or 2km-3km to inspect that segment in detail.
-9. For climbs, prefer distance intervals and look at altitude, speed, power, cadence, and heart-rate response together. For short hard efforts, prefer small time intervals and look at power, cadence, speed change, and whether the effort starts from coasting.
-10. Request get_history only when the user asked to reference history or when longitudinal comparison materially improves the answer.
-11. When the data is enough, output final.
+4. Use get_activity_overview only for lightweight inventory or overview requests, such as "what activities did I do last month", "show the basic profile of this activity", or when the user does not need a full training report.
+5. Request scan_activity_segments when the user asks about hard intervals, high-power sections, climbs with power, surges, or notable points. It returns concise continuous high-power intervals of at least 30s and marks climb context only when the interval gains at least 30m; use it as a locator, not as the final report.
+6. Request get_time_intervals when you need time-based averages, such as every 1 minute, every 5 minutes, or the 100-200s window for a hard effort. Use very small buckets like 3s only for focused short windows because full-activity output can be large.
+7. Request get_distance_intervals when you need distance-based averages, such as every 1km/3km/5km or the 2km-3km window for a climb.
+8. For interval tools, use avg_* for the real whole-window average including coasting/stops, avg_nonzero_* for active output, and *_zero_fraction to judge coasting or stopping.
+9. You may analyze specific segments that look interesting. Use scan_activity_segments or coarse intervals such as 60s, 5min, 1km, or 3km to locate possible sustained efforts, climbs with power, pacing drops, or repeated surges; then request a focused smaller window such as 30s, 100-200s, or 2km-3km to inspect that segment in detail.
+10. For climbs, prefer distance intervals and look at altitude, speed, power, cadence, and heart-rate response together. For short hard efforts, prefer small time intervals and look at power, cadence, speed change, and whether the effort starts from coasting.
+11. Request get_history only when the user asked to reference history or when longitudinal comparison materially improves the answer.
+12. When the data is enough, output final.
 
 Final response must be exactly one JSON object:
 {
@@ -95,8 +96,8 @@ WORKFLOW_AGENT_SYSTEM_PROMPT = """你是 Personal FIT Agent 的终端工作流�
 - 你必须先看 available_tools 中的工具说明,只调用其中列出的工具.
 - 如果用户只是问候或普通咨询,直接中文回答,不要自动分析或上传.
 - 如果用户要求下载 Garmin 活动,使用 sync_garmin_activities.
-- 如果用户说"这一周","某一天","4月1日","最近几次"等活动范围,先用 list_activities,resolve_activity 或 get_activities_in_range 找到活动;不要凭空猜文件.
-- 如果 current_fit_file 不为 null,并且用户要求分析表现,生成报告,查看爬坡/冲刺/分段/训练建议,优先调用 get_activity_overview,get_activity_summary,get_time_intervals,get_distance_intervals,get_history 等数据查询工具,然后自己组织回答.
+- 如果用户说"这一周","上个月有哪些活动","某一天","4月1日","最近几次"等活动范围,先用 list_activities,resolve_activity 或 get_activities_in_range 找到活动;不要凭空猜文件.这类活动清单/范围总览优先使用 overview 级别的信息,不要自动深度分析每个 FIT.
+- 如果 current_fit_file 不为 null,并且用户要求完整分析表现,生成报告,查看爬坡/冲刺/分段/训练建议,优先调用 get_activity_summary;只有快速浏览或活动清单问题才优先调用 get_activity_overview.
 - analyze_fit_file 是批处理工具,用于生成或刷新 data/summaries/*.summary.json 和 Strava summary.只有用户明确要求"生成/刷新 summary","重新分析文件","先产出可上传 Strava 的总结",或 Garmin 下载后需要批量分析时,才调用 analyze_fit_file.
 - 如果用户要求上传 Strava,必须先调用 upload_to_strava 且 confirmed=false 获取预览;只有用户明确确认后才可以 confirmed=true.
 - 不要伪造工具结果.所有涉及本地文件,下载,分析,上传状态的结论必须基于工具返回.

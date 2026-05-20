@@ -6,6 +6,7 @@ AgentContext.它不分析 FIT,不生成 summary,也不上传.
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,7 @@ def _resolve_activity_by_date(
     date_local = _date_argument(args, today=today)
     result = resolve_activity(
         activity_key=args.get("activity_key"),
+        activity_index=args.get("activity_index") or _activity_index_from_text(step.reason),
         date_local=date_local,
         name=args.get("name"),
         sport_type=args.get("sport_type"),
@@ -131,6 +133,7 @@ def _resolve_recent_activities(
     result = list_activities(
         limit=int(args.get("limit") or args.get("count") or 5),
         sport_type=args.get("sport_type"),
+        order=_order_argument(args, reason=step.reason),
         path=index_path,
     )
     _update_context_from_activity_list(
@@ -140,6 +143,7 @@ def _resolve_recent_activities(
             "type": "recent_activities",
             "limit": int(args.get("limit") or args.get("count") or 5),
             "sport_type": args.get("sport_type"),
+            "order": _order_argument(args, reason=step.reason),
         },
     )
     return {
@@ -225,6 +229,46 @@ def _range_text_argument(args: dict[str, Any]) -> str:
         or args.get("relative_range")
         or ""
     ).strip().lower()
+
+
+def _order_argument(args: dict[str, Any], *, reason: str = "") -> str:
+    """兼容 planner 对"第一个/最后一个"的常见参数表达."""
+    text = str(
+        args.get("order")
+        or args.get("match")
+        or args.get("position")
+        or ""
+    ).strip().lower()
+    combined = f"{text} {reason}".lower()
+    if any(token in combined for token in ("first", "earliest", "oldest", "chronological", "asc", "ascending", "第一个", "最早", "最前")):
+        return "earliest"
+    return "latest"
+
+
+def _activity_index_from_text(text: str) -> int | None:
+    """从"第 N 个活动"这类中文短语中提取 activity_index."""
+    normalized = str(text or "")
+    digit_match = re.search(r"第\s*(\d+)\s*个", normalized)
+    if digit_match:
+        return int(digit_match.group(1))
+
+    chinese_digits = {
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+        "十": 10,
+    }
+    chinese_match = re.search(r"第\s*([一二两三四五六七八九十])\s*个", normalized)
+    if chinese_match:
+        return chinese_digits.get(chinese_match.group(1))
+    return None
 
 
 def _resolve_relative_date(value: str, *, today: date | None) -> str:

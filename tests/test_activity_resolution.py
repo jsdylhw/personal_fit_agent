@@ -177,6 +177,39 @@ def test_resolve_activity_by_date_updates_current_activity(tmp_path):
     assert [activity["activity_key"] for activity in context.selected_activities] == ["a2"]
 
 
+def test_resolve_activity_by_activity_index_updates_current_activity(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_by_date",
+        reason="分析第二个活动",
+        arguments={"activity_index": 2},
+    )
+
+    result = execute_activity_resolution_step(step, context, index_path=index_path)
+
+    assert result["result"]["matched_count"] == 1
+    assert context.current_activity_key == "a2"
+    assert str(context.current_fit_file) == "/tmp/evening.fit"
+    assert context.selected_activities[0]["activity_index"] == 2
+
+
+def test_resolve_activity_by_date_can_infer_activity_index_from_reason(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_by_date",
+        reason="分析第二个活动",
+        arguments={},
+    )
+
+    execute_activity_resolution_step(step, context, index_path=index_path)
+
+    assert context.current_activity_key == "a2"
+
+
 def test_resolve_recent_activities_updates_selected_activities(tmp_path):
     index_path = tmp_path / "activity_index.json"
     _write_index(index_path)
@@ -195,7 +228,41 @@ def test_resolve_recent_activities_updates_selected_activities(tmp_path):
         "type": "recent_activities",
         "limit": 2,
         "sport_type": None,
+        "order": "latest",
     }
+
+
+def test_resolve_recent_activities_can_select_earliest_activity(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_recent_activities",
+        reason="找第一个活动",
+        arguments={"limit": 1, "order": "earliest"},
+    )
+
+    result = execute_activity_resolution_step(step, context, index_path=index_path)
+
+    assert result["result"]["order"] == "earliest"
+    assert [activity["activity_key"] for activity in context.selected_activities] == ["a1"]
+    assert context.current_activity_key == "a1"
+    assert context.selected_activities[0]["activity_index"] == 1
+
+
+def test_resolve_recent_activities_can_infer_earliest_from_reason(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_recent_activities",
+        reason="定位第一个活动,也就是最早的活动",
+        arguments={"limit": 1},
+    )
+
+    execute_activity_resolution_step(step, context, index_path=index_path)
+
+    assert [activity["activity_key"] for activity in context.selected_activities] == ["a1"]
 
 
 def test_non_activity_resolution_step_is_rejected():

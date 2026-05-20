@@ -99,7 +99,7 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         name="resolve_activity_by_date",
-        description="按日期,名称或 activity_key 定位一条本地活动.",
+        description="按日期,名称,activity_key 或 activity_index 定位一条本地活动;activity_index 是时间正序编号,1 表示最早活动.",
         category="activity_resolution",
         produces=["current_fit_file", "selected_activities"],
     ),
@@ -111,7 +111,7 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         name="resolve_recent_activities",
-        description="当用户提到最近活动时,定位最新的本地骑行或训练记录.",
+        description="定位本地活动列表中的最新/最早/最近 N 条记录;第一个通常表示最早,最后一个通常表示最新.",
         category="activity_resolution",
         produces=["selected_activities", "current_fit_file"],
     ),
@@ -124,7 +124,7 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         name="summarize_activity_range",
-        description="汇总指定时间范围内的多条活动.",
+        description="汇总或列出指定时间范围内的多条活动,例如回答上个月有哪些活动.",
         category="analysis",
         requires=["selected_activities"],
         produces=["range_summary"],
