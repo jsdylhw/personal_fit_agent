@@ -5,17 +5,17 @@
 当前主流程:
 
 ```text
-Garmin 中国 -> 下载 FIT 文件 -> 单个 FIT 分析 / 对话分析 -> 生成报告 / 总结 / 历史记录 -> 上传 FIT 和总结到 Strava
+Garmin 中国 -> 下载 FIT 文件 -> 单个 FIT 分析 / 规划执行工作流 -> 生成报告 / 总结 / 历史记录 -> 上传 FIT 和总结到 Strava
 ```
 
-现在使用文件式 workflow,不依赖本地 SQLite 数据库.程序会保留原始 FIT 文件,Markdown 报告,每条活动的 JSON summary,完整对话日志,以及一份 JSONL 训练历史.
+现在使用文件式 workflow,不依赖本地 SQLite 数据库.程序会保留原始 FIT 文件,Markdown 报告,每条活动的 JSON summary,大模型分析日志,以及一份 JSONL 训练历史.
 
 ## 功能
 
 - 从 Garmin 中国下载最近的活动为 `.fit` 文件.
 - 如果本地已经存在对应 FIT,则跳过重复下载.
 - 支持分析单个 FIT 文件.
-- 支持对 FIT 文件进行单轮直接提问,或进入多轮人为引导分析.
+- 支持通过 `workflow` 让大模型先规划粗粒度步骤,再由程序侧固定执行器完成活动定位、分析、汇总和上传预览.
 - 分析走隐藏的大模型 tool loop:
   - 第一次只发送简短 FIT 摘要;
   - 模型按需请求活动概览,结构化摘要,时间/距离区间或历史记录;
@@ -124,10 +124,16 @@ python -m app.cli sync-garmin --count 1
 分析单个 FIT 文件:
 
 ```bash
-python -m app.cli analyze-file "garmin_cn_fit_files/path/to/activity.fit" --history --force
+python -m app.cli analyze-file "garmin_cn_fit_files/path/to/activity.fit" --force
 ```
 
-`--history` 表示可以参考已经生成的紧凑历史.`--force` 表示即使 summary 已经存在,也重新请求大模型分析.
+也可以直接分析最近的本地 FIT:
+
+```bash
+python -m app.cli analyze-file latest
+```
+
+`analyze-file` 复用 workflow 内部的 `analyze_fit_file` 工具入口,会解析 `latest`、目录或具体 FIT 文件路径.`--force` 表示即使 summary 已经存在,也重新请求大模型分析.
 
 ## 规划执行工作流
 
@@ -221,31 +227,3 @@ FIT 分析 workflow(`analyze-file`)通过隐藏的 LLM tool loop 工作:模型�
 | `sync_garmin_activities` | 下载 Garmin 中国最近活动,自动跳过已有 FIT |
 | `analyze_fit_file` | 批处理生成/刷新 summary JSON 和 Strava 总结 |
 | `upload_to_strava` | 上传 FIT 到 Strava,并写入生成的 Strava 总结;需要二次确认 |
-
-## 对话式分析 FIT 文件
-
-`fit-ask`(单轮直接发送):程序会预计算活动 overview,summary 和 60s/1km 区间聚合数据,作为静态背景上下文发送给模型,模型基于这些数据直接回答.
-
-```bash
-python -m app.cli fit-ask "garmin_cn_fit_files/path/to/activity.fit" "分析这次骑行,并给下一次训练建议"
-```
-
-`fit-chat`(多轮人为引导分析):程序同样预计算数据视图,然后进入终端对话.你可以补充体感,目标,睡眠,补给,路况和下一次可训练时间,最后输入 `/final` 生成总结.
-
-最终总结写入 `data/summaries/*.summary.json` 的 `guided_analysis` 字段,不覆盖自动分析生成的 `markdown_report` 和 `strava_summary`.
-
-```bash
-python -m app.cli fit-chat "garmin_cn_fit_files/path/to/activity.fit"
-```
-
-也可以用最新的本地 FIT 文件启动:
-
-```bash
-python -m app.cli fit-chat latest
-```
-
-如果只想对话,不写回 summary:
-
-```bash
-python -m app.cli fit-chat latest --no-update-summary
-```

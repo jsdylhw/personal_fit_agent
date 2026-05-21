@@ -126,9 +126,6 @@ def analyze_fit_file(
         "history_entry": history_entry,
         "history_before": llm_safe_history(history_before),
     }
-    # 如果之前有过 guided 分析,保留不覆盖
-    _preserve_guided_analysis(result, previous_summary)
-
     result["summary_path"] = str(summary_path)
 
     summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -334,16 +331,6 @@ def _read_existing_summary(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def _preserve_guided_analysis(result: dict[str, Any], previous: dict[str, Any]) -> None:
-    """如果之前 run 过 guided_chat,保留不覆盖."""
-    if not previous:
-        return
-    if "guided_analysis" in previous:
-        result["guided_analysis"] = previous["guided_analysis"]
-    if "guided_analysis_history" in previous:
-        result["guided_analysis_history"] = previous["guided_analysis_history"]
 
 
 def _sanitize_result_times(result: dict[str, Any]) -> None:

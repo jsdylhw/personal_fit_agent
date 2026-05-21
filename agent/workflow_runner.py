@@ -7,7 +7,7 @@ from typing import Any
 
 from agent.chat_logger import new_session_id, write_workflow_markdown_log
 from agent.context import AgentContext
-from agent.guided_chat import resolve_fit_path
+from agent.fit_paths import resolve_fit_path
 from agent.plan_schema import WorkflowPlan, WorkflowPlanStep
 from agent.planner import plan_initial_workflow
 from agent.workflow_executor import execute_workflow_plan

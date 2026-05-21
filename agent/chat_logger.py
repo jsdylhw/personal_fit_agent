@@ -108,20 +108,6 @@ def _format_record(record: dict[str, Any]) -> list[str]:
             lines.append(f"- {key}: `{record[key]}`")
     lines.append("")
 
-    if event == "guided_activity_chat_turn":
-        lines.extend(_markdown_block("User", record.get("user_message")))
-        lines.extend(_markdown_block("Assistant", record.get("answer")))
-        return lines
-
-    if event == "direct_fit_analysis":
-        lines.extend(_markdown_block("Question", record.get("question")))
-        lines.extend(_markdown_block("Answer", record.get("answer")))
-        return lines
-
-    if event == "guided_activity_final_report":
-        lines.append("Final guided report saved.")
-        return lines
-
     if event == "fit_analysis_tool_loop":
         lines.extend(_format_tool_loop(record))
         return lines

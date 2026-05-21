@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.tools import agent_workflow_tool_catalog, call_fit_analysis_tool, fit_data_tool_catalog
+from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
 from core.data_tools import (
     DEFAULT_SECTIONS,
     SUMMARY_SECTIONS,
@@ -178,17 +178,6 @@ class TestFitAnalysisToolCatalog:
             "get_time_intervals", "get_distance_intervals", "get_history",
         }
 
-    def test_agent_catalog_has_all_12_tools(self):
-        """Agent 模式可以看到 数据查询 + 活动发现 + 下载/分析/上传."""
-        tools = agent_workflow_tool_catalog()
-        tool_names = {t["name"] for t in tools}
-        assert tool_names == {
-            "get_activity_overview", "get_activity_summary", "scan_activity_segments",
-            "get_time_intervals", "get_distance_intervals", "get_history",
-            "list_activities", "resolve_activity", "get_activities_in_range",
-            "sync_garmin_activities", "analyze_fit_file", "upload_to_strava",
-        }
-
     def test_no_side_effect_tools_in_data_catalog(self, sample_parsed_fit):
         """确认 sync/upload 不在 data catalog 中,analyze-file 不会触发副作用."""
         data_tools = {t["name"] for t in fit_data_tool_catalog()}
@@ -200,129 +189,6 @@ class TestFitAnalysisToolCatalog:
         for tool in fit_data_tool_catalog():
             assert "description" in tool
             assert len(tool["description"]) > 0
-
-
-class TestWorkflowAgentCliRunner:
-    def test_workflow_agent_exposes_all_12_tools_without_fit(self, tmp_path, monkeypatch):
-        """终端 agent 模式首轮 payload 应暴露完整 12 工具 catalog."""
-        from agent.workflow_chat import run_workflow_agent
-
-        captured: dict[str, object] = {}
-
-        class FakeClient:
-            def create_messages(self, **kwargs):
-                captured.update(kwargs)
-                return {
-                    "model": "fake-model",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": '{"action":"final","answer":"你好,我可以帮你下载、分析或上传 FIT。"}',
-                        }
-                    ],
-                }
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agent.workflow_chat.AnthropicMessagesClient", lambda: FakeClient())
-
-        result = run_workflow_agent("你好", max_steps=1)
-
-        assert "下载、分析或上传" in result["answer"]
-        messages = captured["messages"]
-        payload = _extract_json_object(messages[0]["content"])
-        tool_names = {tool["name"] for tool in payload["available_tools"]}
-        assert tool_names == {
-            "get_activity_overview", "get_activity_summary", "scan_activity_segments",
-            "get_time_intervals", "get_distance_intervals", "get_history",
-            "list_activities", "resolve_activity", "get_activities_in_range",
-            "sync_garmin_activities", "analyze_fit_file", "upload_to_strava",
-        }
-        assert result["log_path"].startswith("log/")
-
-    def test_workflow_agent_infers_fit_file_from_message(self, tmp_path, monkeypatch, sample_parsed_fit):
-        """用户只写文件 stem 时,agent 也应把本地 FIT 识别为 current_fit_file."""
-        from agent.workflow_chat import run_workflow_agent
-
-        fit_file = tmp_path / "594588818_ACTIVITY.fit"
-        fit_file.write_bytes(b"mock fit")
-        captured: dict[str, object] = {}
-
-        class FakeClient:
-            def create_messages(self, **kwargs):
-                captured.update(kwargs)
-                return {
-                    "model": "fake-model",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": '{"action":"final","answer":"已识别当前 FIT,会优先用数据工具分析。"}',
-                        }
-                    ],
-                }
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agent.workflow_chat.parse_fit", lambda path: sample_parsed_fit)
-        monkeypatch.setattr("agent.workflow_chat.query_activity_history", lambda **kwargs: None)
-        monkeypatch.setattr("agent.workflow_chat.AnthropicMessagesClient", lambda: FakeClient())
-
-        result = run_workflow_agent("分析594588818_ACTIVITY这个fit文件，生成报告", max_steps=1)
-
-        assert result["current_fit_file"] == str(fit_file.resolve())
-        messages = captured["messages"]
-        payload = _extract_json_object(messages[0]["content"])
-        assert payload["current_fit_file"] == str(fit_file.resolve())
-        assert payload["current_fit_source"] == "argument_or_message_match"
-
-    def test_workflow_agent_updates_current_fit_after_resolve_activity(self, tmp_path, monkeypatch, sample_parsed_fit):
-        """resolve_activity 返回 fit_path 后,后续轮次应从 AgentContext 读取 current_fit_file."""
-        from agent.workflow_chat import run_workflow_agent
-
-        fit_file = tmp_path / "resolved.fit"
-        fit_file.write_bytes(b"mock fit")
-        captured_messages: list[list[dict[str, object]]] = []
-
-        class FakeClient:
-            def __init__(self):
-                self.calls = 0
-
-            def create_messages(self, **kwargs):
-                self.calls += 1
-                captured_messages.append(list(kwargs["messages"]))
-                if self.calls == 1:
-                    text = '{"action":"tool","tool":"resolve_activity","arguments":{"date_local":"2026-05-14"}}'
-                else:
-                    text = '{"action":"final","answer":"已切换到解析出的活动。"}'
-                return {
-                    "model": "fake-model",
-                    "content": [{"type": "text", "text": text}],
-                }
-
-        def fake_call_tool(name, arguments, *, parsed=None, history_before=None):
-            assert name == "resolve_activity"
-            return {
-                "tool": name,
-                "arguments": arguments,
-                "result": {
-                    "activity": {
-                        "activity_key": "abc123",
-                        "fit_path": str(fit_file),
-                        "summary_path": str(tmp_path / "resolved.summary.json"),
-                    }
-                },
-            }
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agent.workflow_chat.call_fit_analysis_tool", fake_call_tool)
-        monkeypatch.setattr("agent.workflow_chat.parse_fit", lambda path: sample_parsed_fit)
-        monkeypatch.setattr("agent.workflow_chat.query_activity_history", lambda **kwargs: None)
-        monkeypatch.setattr("agent.workflow_chat.AnthropicMessagesClient", lambda: FakeClient())
-
-        result = run_workflow_agent("分析 2026-05-14 的活动", max_steps=2)
-
-        assert result["current_fit_file"] == str(fit_file.resolve())
-        second_payload = _extract_json_object(captured_messages[1][-1]["content"])
-        assert second_payload["current_fit_file"] == str(fit_file.resolve())
-        assert "已切换" in result["answer"]
 
 
 class TestActivityIndex:

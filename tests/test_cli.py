@@ -11,9 +11,13 @@ def test_cli_exposes_workflow_command_and_removes_old_agent_command():
     assert result.exit_code == 0
     assert "workflow" in result.output
     assert " agent " not in result.output
+    assert "fit-ask" not in result.output
+    assert "fit-chat" not in result.output
 
     missing = CliRunner().invoke(app, ["agent", "你好"])
     assert missing.exit_code != 0
+    assert CliRunner().invoke(app, ["fit-ask"]).exit_code != 0
+    assert CliRunner().invoke(app, ["fit-chat"]).exit_code != 0
 
 
 def test_sync_garmin_command_calls_workflow_tool(monkeypatch):
@@ -29,6 +33,25 @@ def test_sync_garmin_command_calls_workflow_tool(monkeypatch):
 
     assert result.exit_code == 0
     assert captured["count"] == 3
+    assert '"status": "ok"' in result.output
+
+
+def test_analyze_file_command_uses_workflow_tool_and_resolves_path(tmp_path, monkeypatch):
+    fit = tmp_path / "activity.fit"
+    fit.write_bytes(b"fit")
+    captured = {}
+
+    def fake_analyze_fit_file_tool(path: str, *, force: bool = False):
+        captured["path"] = path
+        captured["force"] = force
+        return {"status": "ok", "fit_path": path}
+
+    monkeypatch.setattr("app.cli.analyze_fit_file_tool", fake_analyze_fit_file_tool)
+
+    result = CliRunner().invoke(app, ["analyze-file", str(fit), "--force"])
+
+    assert result.exit_code == 0
+    assert captured == {"path": str(fit.resolve()), "force": True}
     assert '"status": "ok"' in result.output
 
 
