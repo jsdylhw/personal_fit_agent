@@ -123,6 +123,49 @@ def test_normalize_workflow_plan_moves_range_scope_to_step_arguments():
     }
 
 
+def test_normalize_workflow_plan_rewrites_all_history_range_to_recent_all():
+    plan = WorkflowPlan(
+        task_type="history_overview",
+        steps=[
+            WorkflowPlanStep(
+                name="resolve_activity_range",
+                reason="定位所有历史活动",
+                arguments={"range": "all"},
+            ),
+            WorkflowPlanStep(
+                name="summarize_activity_range",
+                reason="汇总所有历史活动",
+            ),
+        ],
+        activity_scope={"type": "all_history"},
+    )
+
+    normalized = normalize_workflow_plan(plan)
+
+    assert normalized.steps[0].name == "resolve_recent_activities"
+    assert normalized.steps[0].arguments == {"limit": 0}
+
+
+def test_normalize_workflow_plan_moves_top_level_clarifying_question_to_step():
+    plan = WorkflowPlan(
+        task_type="clarification",
+        steps=[
+            WorkflowPlanStep(
+                name="ask_user_clarification",
+                reason="需要追问范围",
+            )
+        ],
+        needs_user_clarification=True,
+        clarifying_question="你想分析全部历史活动还是最近一个月？",
+    )
+
+    normalized = normalize_workflow_plan(plan)
+
+    assert normalized.steps[0].arguments == {
+        "question": "你想分析全部历史活动还是最近一个月？",
+    }
+
+
 def _write_summary(path, *, key: str, label: str, distance_km: float, duration_min: float) -> None:
     path.write_text(
         json.dumps(

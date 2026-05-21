@@ -24,6 +24,8 @@ PLANNER_SYSTEM_PROMPT = """你是 Personal FIT Agent 的工作流规划器.
 
 你只能从 available_steps 中选择粗粒度工作流步骤.不要调用工具,不要假装
 任何步骤已经执行.不要输出分析过程,只返回一个符合 plan_json_schema 的 JSON 对象.
+如果用户明确说"所有历史活动"或"全部历史活动",这已经是明确范围,应按 all_history
+规划,不要再追问时间范围.
 """
 
 
@@ -33,6 +35,7 @@ def build_planner_payload(user_message: str, context: AgentContext) -> dict[str,
         "instruction": (
             "请为当前请求选择需要的粗粒度工作流步骤."
             "只能选择 available_steps 中存在的 name,不要执行任何步骤."
+            "用户说所有历史活动/全部历史活动时表示 all_history,不要追问时间范围."
         ),
         "user_message": user_message,
         "context": _planner_context(context),

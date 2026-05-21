@@ -254,6 +254,8 @@ def workflow_plan_from_dict(data: dict[str, Any]) -> WorkflowPlan:
         raise ValueError("workflow plan must be a JSON object")
 
     raw_steps = data.get("steps")
+    if isinstance(raw_steps, dict):
+        raw_steps = [raw_steps]
     if not isinstance(raw_steps, list):
         raise ValueError("workflow plan steps must be a list")
 

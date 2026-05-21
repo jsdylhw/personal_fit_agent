@@ -289,6 +289,26 @@ def test_resolve_activity_range_rejects_missing_range_instead_of_defaulting_toda
     assert context.selected_activity_range is None
 
 
+def test_resolve_activity_range_accepts_explicit_all_range(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_range",
+        reason="分析所有历史活动",
+        arguments={"range": "all"},
+    )
+
+    result = execute_activity_resolution_step(step, context, index_path=index_path)
+
+    assert result["result"]["count"] == 3
+    assert [activity["activity_key"] for activity in context.selected_activities] == ["a3", "a2", "a1"]
+    assert context.selected_activity_range == {
+        "type": "unbounded_range",
+        "sport_type": None,
+    }
+
+
 def test_resolve_activity_by_date_updates_current_activity(tmp_path):
     index_path = tmp_path / "activity_index.json"
     _write_index(index_path)

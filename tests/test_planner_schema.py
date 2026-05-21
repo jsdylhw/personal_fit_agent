@@ -153,6 +153,30 @@ def test_parse_workflow_plan_text_extracts_llm_json():
     assert plan.final_output == ["weekly_summary", "next_session_advice"]
 
 
+def test_parse_workflow_plan_text_accepts_single_step_object():
+    text = """
+    {
+      "task_type": "history_overview",
+      "steps": {
+        "name": "resolve_recent_activities",
+        "reason": "获取所有历史活动",
+        "arguments": {"limit": 0}
+      },
+      "activity_scope": {"type": "all_history"},
+      "allow_side_effects": false,
+      "requires_confirmation": false,
+      "needs_user_clarification": false,
+      "clarifying_question": null,
+      "final_output": ["range_summary"]
+    }
+    """
+
+    plan = parse_workflow_plan_text(text)
+
+    assert [step.name for step in plan.steps] == ["resolve_recent_activities"]
+    assert plan.steps[0].arguments == {"limit": 0}
+
+
 def test_build_planner_payload_contains_context_and_coarse_steps_only():
     context = AgentContext(
         session_id="workflow_agent_test",
@@ -176,6 +200,7 @@ def test_build_planner_payload_contains_context_and_coarse_steps_only():
     assert "generate_training_advice" in step_names
     assert "get_activity_summary" not in step_names
     assert "upload_to_strava" not in serialized_catalog
+    assert "所有历史活动/全部历史活动" in payload["instruction"]
 
 
 def test_plan_initial_workflow_calls_llm_and_returns_plan_json():

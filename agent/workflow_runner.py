@@ -52,11 +52,11 @@ def run_planned_workflow(
 def normalize_workflow_plan(plan: WorkflowPlan) -> WorkflowPlan:
     """把 planner 放错层级的活动范围参数补回具体 step arguments."""
     scope = plan.activity_scope
-    if not scope:
+    if not scope and not plan.clarifying_question:
         return plan
 
     steps = [
-        _normalize_step_arguments(step, scope)
+        _normalize_step_arguments(step, scope, clarifying_question=plan.clarifying_question)
         for step in plan.steps
     ]
     return WorkflowPlan(
@@ -74,8 +74,15 @@ def normalize_workflow_plan(plan: WorkflowPlan) -> WorkflowPlan:
 def _normalize_step_arguments(
     step: WorkflowPlanStep,
     scope: dict[str, Any],
+    *,
+    clarifying_question: str | None = None,
 ) -> WorkflowPlanStep:
+    if step.name == "ask_user_clarification":
+        return _normalize_clarification_step(step, clarifying_question)
     if step.name == "resolve_activity_range":
+        all_scope = _is_all_activities_scope(scope) or _is_all_activities_scope(step.arguments)
+        if all_scope:
+            return _normalize_all_activities_step(step, scope)
         return _normalize_activity_range_step(step, scope)
     if step.name != "resolve_recent_activities":
         return step
@@ -108,6 +115,21 @@ def _normalize_step_arguments(
     )
 
 
+def _normalize_clarification_step(
+    step: WorkflowPlanStep,
+    clarifying_question: str | None,
+) -> WorkflowPlanStep:
+    if not clarifying_question or step.arguments.get("question") or step.arguments.get("clarifying_question"):
+        return step
+    arguments = dict(step.arguments)
+    arguments["question"] = clarifying_question
+    return WorkflowPlanStep(
+        name=step.name,
+        reason=step.reason,
+        arguments=arguments,
+    )
+
+
 def _normalize_activity_range_step(
     step: WorkflowPlanStep,
     scope: dict[str, Any],
@@ -130,6 +152,36 @@ def _normalize_activity_range_step(
         reason=step.reason,
         arguments=arguments,
     )
+
+
+def _normalize_all_activities_step(
+    step: WorkflowPlanStep,
+    scope: dict[str, Any],
+) -> WorkflowPlanStep:
+    arguments = dict(step.arguments)
+    arguments.pop("range", None)
+    arguments.pop("date_range", None)
+    arguments.pop("time_range", None)
+    arguments["limit"] = 0
+
+    if "sport_type" not in arguments:
+        sport_type = scope.get("sport_type") or scope.get("activity_type")
+        if sport_type:
+            arguments["sport_type"] = sport_type
+
+    return WorkflowPlanStep(
+        name="resolve_recent_activities",
+        reason=step.reason,
+        arguments=arguments,
+    )
+
+
+def _is_all_activities_scope(data: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(data.get(key) or "")
+        for key in ("type", "scope", "scope_type", "range", "date_range", "time_range", "description")
+    ).lower()
+    return any(token in text for token in ("all_history", "all activities", "all", "全部", "所有", "历史活动"))
 
 
 def _order_from_scope(scope: dict[str, Any], reason: str = "") -> str | None:
