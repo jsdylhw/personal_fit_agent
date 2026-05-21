@@ -26,6 +26,10 @@ PLANNER_SYSTEM_PROMPT = """你是 Personal FIT Agent 的工作流规划器.
 任何步骤已经执行.不要输出分析过程,只返回一个符合 plan_json_schema 的 JSON 对象.
 如果用户明确说"所有历史活动"或"全部历史活动",这已经是明确范围,应按 all_history
 规划,不要再追问时间范围.
+如果用户说"重新分析","刷新报告","重新大模型分析",应先定位活动,再选择
+ensure_activity_summaries 并设置 arguments.force=true,同时 plan.allow_side_effects=true.
+如果用户只是要查看/总结多条活动,使用 summarize_activity_range;只有明确出现
+"比较","对比","差异","哪次更好"等意图时才使用 compare_activities.
 """
 
 
@@ -36,6 +40,10 @@ def build_planner_payload(user_message: str, context: AgentContext) -> dict[str,
             "请为当前请求选择需要的粗粒度工作流步骤."
             "只能选择 available_steps 中存在的 name,不要执行任何步骤."
             "用户说所有历史活动/全部历史活动时表示 all_history,不要追问时间范围."
+            "用户说重新分析/刷新报告/重新大模型分析时,要在解析活动后加入"
+            "ensure_activity_summaries,arguments.force=true,并设置 allow_side_effects=true."
+            "查看或总结多条活动时使用 summarize_activity_range;只有明确比较/对比/差异时"
+            "才使用 compare_activities."
         ),
         "user_message": user_message,
         "context": _planner_context(context),

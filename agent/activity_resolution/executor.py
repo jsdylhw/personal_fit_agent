@@ -159,7 +159,13 @@ def _resolve_recent_activities(
 ) -> dict[str, Any]:
     args = step.arguments
     limit_raw = args.get("limit") if args.get("limit") is not None else args.get("count")
-    limit = int(limit_raw) if limit_raw is not None else 5
+    limit = _positive_int_argument(limit_raw, default=5, max_value=50)
+    if limit is None:
+        return {
+            "step": step.name,
+            "error": "invalid_recent_activity_limit",
+            "message": "resolve_recent_activities.limit/count must be a positive integer.",
+        }
     result = list_activities(
         limit=limit,
         sport_type=args.get("sport_type"),
@@ -178,6 +184,15 @@ def _resolve_recent_activities(
         },
     )
     return {"step": step.name, "result": result}
+
+
+def _positive_int_argument(value: Any, *, default: int, max_value: int) -> int | None:
+    """执行层兜底:validator 被绕过时也不要让 int('latest') 直接抛异常。"""
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0 or value > max_value:
+        return None
+    return value
 
 
 _STEP_DISPATCH = {

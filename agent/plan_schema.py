@@ -124,7 +124,7 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         name="summarize_activity_range",
-        description="汇总或列出指定时间范围内的多条活动,例如回答上个月有哪些活动.",
+        description="汇总、列出或生成多条活动的整体总结报告,例如最近 3 次活动概览、上个月有哪些活动、所有历史活动整体情况.",
         category="analysis",
         requires=["selected_activities"],
         produces=["range_summary"],
@@ -138,7 +138,7 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         name="compare_activities",
-        description="对多条已选活动做横向对比,例如同一天的两次骑行或最近几次训练.",
+        description="仅当用户明确要求比较、对比、差异、哪次更好时,对多条已选活动做横向对比.",
         category="analysis",
         requires=["selected_activities"],
         produces=["activity_comparison"],
@@ -183,7 +183,7 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         name="ensure_activity_summaries",
-        description="检查已选活动是否已有 summary,缺失时为这些活动生成 summary.",
+        description="检查已选活动是否已有 summary,缺失时生成 summary;用户要求重新分析、刷新报告、重新大模型分析时应传 force=true.",
         category="operation",
         requires=["selected_activities"],
         produces=["activity_summaries"],

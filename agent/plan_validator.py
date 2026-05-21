@@ -11,6 +11,7 @@ from typing import Any
 
 from agent.context import AgentContext
 from agent.plan_schema import WorkflowPlan, get_workflow_step
+from agent.tools.workflow import MAX_SYNC_COUNT
 
 
 LOW_LEVEL_TOOL_NAMES = {
@@ -156,14 +157,33 @@ def _validate_step_arguments(
     warnings: list[str],
 ) -> None:
     if name == "sync_garmin_activities":
-        count = arguments.get("count")
-        if count is not None and (not isinstance(count, int) or count <= 0 or count > 50):
-            errors.append(f"step[{index}] sync_garmin_activities.count 必须是 1 到 50 的整数")
+        _validate_positive_int_argument(
+            arguments,
+            key="count",
+            step_name=name,
+            index=index,
+            max_value=MAX_SYNC_COUNT,
+            errors=errors,
+        )
 
     if name == "resolve_recent_activities":
-        count = arguments.get("count")
-        if count is not None and (not isinstance(count, int) or count <= 0 or count > 50):
-            errors.append(f"step[{index}] resolve_recent_activities.count 必须是 1 到 50 的整数")
+        # planner 有时会用 count,有时会用 limit;两者都进入执行层,所以都要校验。
+        _validate_positive_int_argument(
+            arguments,
+            key="count",
+            step_name=name,
+            index=index,
+            max_value=50,
+            errors=errors,
+        )
+        _validate_positive_int_argument(
+            arguments,
+            key="limit",
+            step_name=name,
+            index=index,
+            max_value=50,
+            errors=errors,
+        )
 
     if name == "resolve_activity_range":
         days = arguments.get("days")
@@ -172,3 +192,19 @@ def _validate_step_arguments(
 
     if name == "ask_user_clarification" and not arguments:
         warnings.append(f"step[{index}] ask_user_clarification 最好带上 question 参数")
+
+
+def _validate_positive_int_argument(
+    arguments: dict[str, Any],
+    *,
+    key: str,
+    step_name: str,
+    index: int,
+    max_value: int,
+    errors: list[str],
+) -> None:
+    value = arguments.get(key)
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0 or value > max_value:
+        errors.append(f"step[{index}] {step_name}.{key} 必须是 1 到 {max_value} 的整数")

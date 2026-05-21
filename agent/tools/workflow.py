@@ -22,7 +22,8 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
     Returns:
         dict: {fit_dir, total, downloaded, skipped, downloaded_items, skipped_items}
     """
-    count = max(1, min(int(count), MAX_SYNC_COUNT))
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0 or count > MAX_SYNC_COUNT:
+        raise ValueError(f"count must be an integer between 1 and {MAX_SYNC_COUNT}")
 
     from core.config import cfg_get, load_config
     from core.garmin_cn import (

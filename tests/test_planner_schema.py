@@ -201,6 +201,26 @@ def test_build_planner_payload_contains_context_and_coarse_steps_only():
     assert "get_activity_summary" not in step_names
     assert "upload_to_strava" not in serialized_catalog
     assert "所有历史活动/全部历史活动" in payload["instruction"]
+    assert "ensure_activity_summaries" in payload["instruction"]
+    assert "arguments.force=true" in payload["instruction"]
+    assert "只有明确比较/对比/差异" in payload["instruction"]
+
+
+def test_planner_catalog_guides_reanalysis_away_from_comparison():
+    """固定 planner 语言:重新分析是刷新 summary,不是默认横向对比。"""
+    ensure_summaries = get_workflow_step("ensure_activity_summaries")
+    compare_activities = get_workflow_step("compare_activities")
+    summarize_range = get_workflow_step("summarize_activity_range")
+
+    assert ensure_summaries is not None
+    assert "重新分析" in ensure_summaries.description
+    assert "force=true" in ensure_summaries.description
+
+    assert compare_activities is not None
+    assert "仅当用户明确要求比较" in compare_activities.description
+
+    assert summarize_range is not None
+    assert "最近 3 次活动概览" in summarize_range.description
 
 
 def test_plan_initial_workflow_calls_llm_and_returns_plan_json():

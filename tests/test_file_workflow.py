@@ -463,11 +463,18 @@ class TestStrictBool:
 
 
 class TestSyncCountLimit:
-    def test_count_capped(self):
-        from agent.tools.workflow import sync_garmin_activities_tool
-        # 只测 count 上限逻辑,不实际调用 Garmin(会因无凭证报错)
+    def test_max_sync_count_is_declared(self):
+        # 只测同步上限常量,不实际调用 Garmin(会因无凭证报错)
         from agent.tools.workflow import MAX_SYNC_COUNT
         assert MAX_SYNC_COUNT == 20
+
+    def test_count_above_limit_is_rejected(self):
+        import pytest
+
+        from agent.tools.workflow import sync_garmin_activities_tool
+
+        with pytest.raises(ValueError, match="between 1 and 20"):
+            sync_garmin_activities_tool(count=50)
 
 
 class TestUploadErrorStates:

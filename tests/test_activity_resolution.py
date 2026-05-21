@@ -421,6 +421,38 @@ def test_resolve_recent_activities_can_infer_earliest_from_reason(tmp_path):
     assert [activity["activity_key"] for activity in context.selected_activities] == ["a1"]
 
 
+def test_resolve_recent_activities_rejects_invalid_limit(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_recent_activities",
+        reason="找最近活动",
+        arguments={"limit": "latest"},
+    )
+
+    result = execute_activity_resolution_step(step, context, index_path=index_path)
+
+    assert result["error"] == "invalid_recent_activity_limit"
+    assert context.selected_activities == []
+
+
+def test_resolve_recent_activities_rejects_too_large_limit(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_recent_activities",
+        reason="找最近活动",
+        arguments={"limit": 999},
+    )
+
+    result = execute_activity_resolution_step(step, context, index_path=index_path)
+
+    assert result["error"] == "invalid_recent_activity_limit"
+    assert context.selected_activities == []
+
+
 def test_non_activity_resolution_step_is_rejected():
     context = AgentContext(session_id="test")
     step = WorkflowPlanStep(

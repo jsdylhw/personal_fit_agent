@@ -140,4 +140,53 @@ def test_validator_checks_simple_argument_bounds():
     result = validate_workflow_plan(plan, context)
 
     assert result.valid is False
-    assert any("1 到 50" in error for error in result.errors)
+    assert any("1 到 20" in error for error in result.errors)
+
+
+def test_validator_rejects_sync_count_above_tool_limit():
+    context = AgentContext(session_id="validator-test")
+    plan = _plan(
+        WorkflowPlanStep(
+            name="sync_garmin_activities",
+            reason="同步 50 条活动",
+            arguments={"count": 50},
+        ),
+        allow_side_effects=True,
+    )
+
+    result = validate_workflow_plan(plan, context)
+
+    assert result.valid is False
+    assert any("sync_garmin_activities.count 必须是 1 到 20" in error for error in result.errors)
+
+
+def test_validator_checks_resolve_recent_limit_argument():
+    context = AgentContext(session_id="validator-test")
+    plan = _plan(
+        WorkflowPlanStep(
+            name="resolve_recent_activities",
+            reason="找最近活动",
+            arguments={"limit": "latest"},
+        )
+    )
+
+    result = validate_workflow_plan(plan, context)
+
+    assert result.valid is False
+    assert any("resolve_recent_activities.limit 必须是 1 到 50" in error for error in result.errors)
+
+
+def test_validator_rejects_zero_recent_limit():
+    context = AgentContext(session_id="validator-test")
+    plan = _plan(
+        WorkflowPlanStep(
+            name="resolve_recent_activities",
+            reason="找最近活动",
+            arguments={"limit": 0},
+        )
+    )
+
+    result = validate_workflow_plan(plan, context)
+
+    assert result.valid is False
+    assert any("resolve_recent_activities.limit 必须是 1 到 50" in error for error in result.errors)
