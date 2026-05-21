@@ -131,6 +131,54 @@ def test_resolve_activity_range_accepts_range_type_yesterday(tmp_path):
     }
 
 
+def test_resolve_activity_range_accepts_time_range_last_month(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_range",
+        reason="LLM 使用 time_range 表达上个月",
+        arguments={"time_range": "last_month"},
+    )
+
+    result = execute_activity_resolution_step(
+        step,
+        context,
+        index_path=index_path,
+        today=date(2026, 5, 21),
+    )
+
+    assert result["result"]["start_date"] == "2026-04-01"
+    assert result["result"]["end_date"] == "2026-04-30"
+    assert context.selected_activity_range == {
+        "type": "date_range",
+        "start_date": "2026-04-01",
+        "end_date": "2026-04-30",
+        "sport_type": None,
+    }
+
+
+def test_resolve_activity_range_accepts_chinese_this_month(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_range",
+        reason="用户说本月活动",
+        arguments={"time_range": "本月"},
+    )
+
+    result = execute_activity_resolution_step(
+        step,
+        context,
+        index_path=index_path,
+        today=date(2026, 5, 21),
+    )
+
+    assert result["result"]["start_date"] == "2026-05-01"
+    assert result["result"]["end_date"] == "2026-05-21"
+
+
 def test_resolve_activity_range_accepts_natural_language_yesterday(tmp_path):
     index_path = tmp_path / "activity_index.json"
     _write_index(index_path)

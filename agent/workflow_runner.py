@@ -75,6 +75,8 @@ def _normalize_step_arguments(
     step: WorkflowPlanStep,
     scope: dict[str, Any],
 ) -> WorkflowPlanStep:
+    if step.name == "resolve_activity_range":
+        return _normalize_activity_range_step(step, scope)
     if step.name != "resolve_recent_activities":
         return step
 
@@ -96,6 +98,30 @@ def _normalize_step_arguments(
         order = _order_from_scope(scope, step.reason)
         if order:
             arguments["order"] = order
+
+    if arguments == step.arguments:
+        return step
+    return WorkflowPlanStep(
+        name=step.name,
+        reason=step.reason,
+        arguments=arguments,
+    )
+
+
+def _normalize_activity_range_step(
+    step: WorkflowPlanStep,
+    scope: dict[str, Any],
+) -> WorkflowPlanStep:
+    # planner 有时把时间范围写在 activity_scope；executor 只读取 step.arguments。
+    arguments = dict(step.arguments)
+    for key in ("start_date", "end_date", "date_range", "time_range", "range_type", "relative_range"):
+        if key not in arguments and scope.get(key) is not None:
+            arguments[key] = scope[key]
+
+    if "sport_type" not in arguments:
+        sport_type = scope.get("sport_type") or scope.get("activity_type")
+        if sport_type:
+            arguments["sport_type"] = sport_type
 
     if arguments == step.arguments:
         return step

@@ -96,6 +96,33 @@ def test_normalize_workflow_plan_moves_first_activity_scope_to_order():
     }
 
 
+def test_normalize_workflow_plan_moves_range_scope_to_step_arguments():
+    plan = WorkflowPlan(
+        task_type="range_summary",
+        steps=[
+            WorkflowPlanStep(
+                name="resolve_activity_range",
+                reason="定位上个月活动",
+            ),
+            WorkflowPlanStep(
+                name="summarize_activity_range",
+                reason="汇总范围活动",
+            ),
+        ],
+        activity_scope={
+            "time_range": "last_month",
+            "activity_type": "cycling",
+        },
+    )
+
+    normalized = normalize_workflow_plan(plan)
+
+    assert normalized.steps[0].arguments == {
+        "time_range": "last_month",
+        "sport_type": "cycling",
+    }
+
+
 def _write_summary(path, *, key: str, label: str, distance_km: float, duration_min: float) -> None:
     path.write_text(
         json.dumps(
