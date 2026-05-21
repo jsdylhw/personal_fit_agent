@@ -210,6 +210,20 @@ def _execute_default_handler(
     if step.name == "compare_activities":
         return compare_selected_activities(step, context)
     if step.name == "analyze_single_activity":
+        empty_answer = _empty_activity_resolution_answer(
+            str((context.last_tool_result or {}).get("step_name") or ""),
+            (context.last_tool_result or {}).get("result") if isinstance((context.last_tool_result or {}).get("result"), dict) else {},
+        )
+        if empty_answer:
+            return {
+                "step": step.name,
+                "status": "completed",
+                "answer": empty_answer,
+                "result": {
+                    "schema_version": "activity_analysis_skipped.v1",
+                    "reason": "empty_activity_resolution",
+                },
+            }
         return show_selected_activity_report(step, context)
     if executor_type in {"conversation", "analysis", "coaching", "subworkflow"}:
         return {
