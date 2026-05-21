@@ -201,6 +201,94 @@ def test_resolve_activity_range_accepts_natural_language_yesterday(tmp_path):
     assert result["result"]["count"] == 2
 
 
+def test_resolve_activity_range_preserves_range_scope_when_only_one_activity(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_range",
+        reason="查今天的活动",
+        arguments={"date_range": "today"},
+    )
+
+    result = execute_activity_resolution_step(
+        step,
+        context,
+        index_path=index_path,
+        today=date(2026, 5, 19),
+    )
+
+    assert result["result"]["count"] == 1
+    assert context.current_activity_key == "a3"
+    assert context.selected_activity_range == {
+        "type": "date_range",
+        "start_date": "2026-05-19",
+        "end_date": "2026-05-19",
+        "sport_type": None,
+    }
+
+
+def test_resolve_activity_range_accepts_start_date_only(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_range",
+        reason="从某天开始查活动",
+        arguments={"start_date": "2026-05-19"},
+    )
+
+    result = execute_activity_resolution_step(
+        step,
+        context,
+        index_path=index_path,
+        today=date(2026, 5, 21),
+    )
+
+    assert result["result"]["start_date"] == "2026-05-19"
+    assert result["result"]["end_date"] == "2026-05-21"
+    assert [activity["activity_key"] for activity in context.selected_activities] == ["a3"]
+
+
+def test_resolve_activity_range_accepts_end_date_only(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_range",
+        reason="查某天以前的活动",
+        arguments={"end_date": "2026-05-18"},
+    )
+
+    result = execute_activity_resolution_step(step, context, index_path=index_path)
+
+    assert result["result"]["start_date"] == "0001-01-01"
+    assert result["result"]["end_date"] == "2026-05-18"
+    assert [activity["activity_key"] for activity in context.selected_activities] == ["a1", "a2"]
+
+
+def test_resolve_activity_range_rejects_missing_range_instead_of_defaulting_today(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+    step = WorkflowPlanStep(
+        name="resolve_activity_range",
+        reason="比较一段时间",
+        arguments={},
+    )
+
+    result = execute_activity_resolution_step(
+        step,
+        context,
+        index_path=index_path,
+        today=date(2026, 5, 19),
+    )
+
+    assert result["error"] == "missing_activity_range"
+    assert context.selected_activities == []
+    assert context.selected_activity_range is None
+
+
 def test_resolve_activity_by_date_updates_current_activity(tmp_path):
     index_path = tmp_path / "activity_index.json"
     _write_index(index_path)

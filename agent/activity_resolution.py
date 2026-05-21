@@ -100,7 +100,14 @@ def _resolve_activity_range(
     today: date | None,
 ) -> dict[str, Any]:
     args = step.arguments
-    start_date, end_date = _date_range_arguments(args, today=today)
+    resolved_range = _date_range_arguments(args, today=today)
+    if resolved_range is None:
+        return {
+            "step": step.name,
+            "error": "missing_activity_range",
+            "message": "resolve_activity_range requires start/end date, relative range, or days.",
+        }
+    start_date, end_date = resolved_range
     result = get_activities_in_range(
         start_date=start_date,
         end_date=end_date,
@@ -167,6 +174,10 @@ def _update_context_from_single_activity(context: AgentContext, activity: dict[s
     context.selected_activity_range = {"type": "single_activity"} if activity else None
     if not activity:
         return
+    _update_current_activity_fields(context, activity)
+
+
+def _update_current_activity_fields(context: AgentContext, activity: dict[str, Any]) -> None:
     if activity.get("fit_path"):
         context.current_fit_file = Path(str(activity["fit_path"])).expanduser()
     if activity.get("activity_key"):
@@ -188,7 +199,8 @@ def _update_context_from_activity_list(
     ]
     context.selected_activity_range = scope
     if len(context.selected_activities) == 1:
-        _update_context_from_single_activity(context, context.selected_activities[0])
+        # 范围查询只命中 1 条时,仍应保留原始范围语义,只同步 current activity 字段.
+        _update_current_activity_fields(context, context.selected_activities[0])
 
 
 def _date_argument(args: dict[str, Any], *, today: date | None) -> str | None:
@@ -201,10 +213,14 @@ def _date_argument(args: dict[str, Any], *, today: date | None) -> str | None:
     return None
 
 
-def _date_range_arguments(args: dict[str, Any], *, today: date | None) -> tuple[str, str]:
+def _date_range_arguments(args: dict[str, Any], *, today: date | None) -> tuple[str, str] | None:
     current = today or date.today()
     if args.get("start_date") and args.get("end_date"):
         return str(args["start_date"]), str(args["end_date"])
+    if args.get("start_date"):
+        return str(args["start_date"]), current.isoformat()
+    if args.get("end_date"):
+        return "0001-01-01", str(args["end_date"])
 
     date_range = _range_text_argument(args)
     relative_range = _resolve_relative_date_range(date_range, today=current)
@@ -220,7 +236,7 @@ def _date_range_arguments(args: dict[str, Any], *, today: date | None) -> tuple[
         start = current - timedelta(days=count - 1)
         return start.isoformat(), current.isoformat()
 
-    return current.isoformat(), current.isoformat()
+    return None
 
 
 def _range_text_argument(args: dict[str, Any]) -> str:
@@ -231,6 +247,7 @@ def _range_text_argument(args: dict[str, Any]) -> str:
         or args.get("range_type")
         or args.get("range_description")
         or args.get("relative_range")
+        or args.get("range")
         or ""
     ).strip().lower()
 
