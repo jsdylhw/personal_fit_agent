@@ -280,6 +280,39 @@ def test_executor_runs_compare_activities_from_existing_summaries(tmp_path, monk
     assert "没有重新解析 FIT" in result.final_response
 
 
+def test_executor_runs_training_load_summary_without_local_answer(tmp_path):
+    summary = tmp_path / "activity.summary.json"
+    summary.write_text(
+        json.dumps(
+            {
+                "activity_key": "a1",
+                "fit_summary": {"start_time_local": "2026-05-18T08:00:00", "sport_type": "cycling"},
+                "history_entry": {
+                    "summary_label": "耐力骑",
+                    "training_load": "TSS 88",
+                    "duration_min": 90,
+                    "distance_km": 40,
+                    "brief": "IF 0.78, TSS 88",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    context = AgentContext(
+        session_id="executor-test",
+        selected_activities=[{"activity_key": "a1", "summary_path": str(summary)}],
+    )
+    plan = _plan(WorkflowPlanStep(name="summarize_recent_training_load", reason="整理训练负荷"))
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.step_results[0].step_name == "summarize_recent_training_load"
+    assert result.step_results[0].result["result"]["totals"]["tss"] == 88.0
+    assert result.final_response is None
+
+
 def test_executor_summarizes_selected_activity_range():
     context = AgentContext(
         session_id="executor-test",

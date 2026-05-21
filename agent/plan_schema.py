@@ -151,8 +151,15 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
         produces=["training_advice"],
     ),
     WorkflowStepSpec(
+        name="summarize_recent_training_load",
+        description="读取已选活动 summary,提取 TSS/IF/时长/距离等结构化近期训练负荷,不生成本地训练判断.",
+        category="analysis",
+        requires=["selected_activities"],
+        produces=["training_load_summary"],
+    ),
+    WorkflowStepSpec(
         name="generate_route_advice",
-        description="根据目标和训练状态推荐路线约束或路线类型.",
+        description="根据用户目标推荐路线约束或路线类型;如果已有 training_load_summary,可作为补充参考.",
         category="coaching",
         produces=["route_advice"],
     ),

@@ -28,6 +28,8 @@ def test_key_workflow_step_flags_are_declared():
     compare_activities = get_workflow_step("compare_activities")
     ensure_summaries = get_workflow_step("ensure_activity_summaries")
     sync_garmin = get_workflow_step("sync_garmin_activities")
+    training_load = get_workflow_step("summarize_recent_training_load")
+    route_advice = get_workflow_step("generate_route_advice")
     prepare_upload = get_workflow_step("prepare_strava_upload")
     confirm_upload = get_workflow_step("confirm_strava_upload")
 
@@ -49,6 +51,13 @@ def test_key_workflow_step_flags_are_declared():
     assert sync_garmin.side_effect is True
     assert sync_garmin.idempotent is False
     assert sync_garmin.produces == ["synced_fit_files"]
+
+    assert training_load is not None
+    assert training_load.requires == ["selected_activities"]
+    assert training_load.produces == ["training_load_summary"]
+
+    assert route_advice is not None
+    assert route_advice.requires == []
 
     assert prepare_upload is not None
     assert prepare_upload.side_effect is False
@@ -204,6 +213,7 @@ def test_build_planner_payload_contains_context_and_coarse_steps_only():
     assert "ensure_activity_summaries" in payload["instruction"]
     assert "arguments.force=true" in payload["instruction"]
     assert "只有明确比较/对比/差异" in payload["instruction"]
+    assert "summarize_recent_training_load" in payload["instruction"]
 
 
 def test_planner_catalog_guides_reanalysis_away_from_comparison():

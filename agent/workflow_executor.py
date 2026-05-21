@@ -23,6 +23,7 @@ from agent.step_selector import (
     StepSelectionResult,
     select_workflow_steps,
 )
+from agent.training_load import summarize_recent_training_load
 from agent.tools.workflow import (
     analyze_fit_file_tool,
     sync_garmin_activities_tool,
@@ -207,6 +208,8 @@ def _execute_default_handler(
         return _execute_summarize_activity_range(step, context)
     if step.name == "compare_activities":
         return compare_selected_activities(step, context)
+    if step.name == "summarize_recent_training_load":
+        return summarize_recent_training_load(step, context)
     if step.name == "analyze_single_activity":
         empty_answer = _empty_activity_resolution_answer(
             str((context.last_tool_result or {}).get("step_name") or ""),

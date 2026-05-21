@@ -30,6 +30,9 @@ PLANNER_SYSTEM_PROMPT = """你是 Personal FIT Agent 的工作流规划器.
 ensure_activity_summaries 并设置 arguments.force=true,同时 plan.allow_side_effects=true.
 如果用户只是要查看/总结多条活动,使用 summarize_activity_range;只有明确出现
 "比较","对比","差异","哪次更好"等意图时才使用 compare_activities.
+如果用户请求路线建议,可以直接选择 generate_route_advice;如果请求明显涉及
+训练状态、恢复、强度安排,再先定位相关活动范围并选择 summarize_recent_training_load.
+不要让 generate_route_advice 直接读取原始 FIT.
 """
 
 
@@ -44,6 +47,8 @@ def build_planner_payload(user_message: str, context: AgentContext) -> dict[str,
             "ensure_activity_summaries,arguments.force=true,并设置 allow_side_effects=true."
             "查看或总结多条活动时使用 summarize_activity_range;只有明确比较/对比/差异时"
             "才使用 compare_activities."
+            "路线建议可以直接选择 generate_route_advice;只有涉及训练状态/恢复/强度安排时,"
+            "才先选择 summarize_recent_training_load 生成结构化训练负荷."
         ),
         "user_message": user_message,
         "context": _planner_context(context),

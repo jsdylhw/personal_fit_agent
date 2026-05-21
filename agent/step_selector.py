@@ -150,11 +150,17 @@ _BASE_EXECUTION_SPECS: dict[str, StepExecutionSpec] = {
         handler_name="generate_training_advice",
         allowed_tools=("read_activity_summary", "get_history"),
     ),
+    "summarize_recent_training_load": StepExecutionSpec(
+        step_name="summarize_recent_training_load",
+        executor_type="analysis",
+        handler_name="summarize_recent_training_load",
+        allowed_tools=("read_activity_summary",),
+    ),
     "generate_route_advice": StepExecutionSpec(
         step_name="generate_route_advice",
         executor_type="coaching",
         handler_name="generate_route_advice",
-        allowed_tools=("read_activity_summary", "get_history"),
+        allowed_tools=("training_load_summary",),
     ),
     "sync_garmin_activities": StepExecutionSpec(
         step_name="sync_garmin_activities",
