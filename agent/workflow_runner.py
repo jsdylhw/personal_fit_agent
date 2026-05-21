@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from agent.chat_logger import new_session_id, write_workflow_markdown_log
 from agent.context import AgentContext
 from agent.guided_chat import resolve_fit_path
 from agent.plan_schema import WorkflowPlan, WorkflowPlanStep
@@ -22,8 +23,9 @@ def run_planned_workflow(
 ) -> dict[str, Any]:
     """运行新规划执行链路:Planner -> Validator -> Selector -> Executor."""
     current_fit = resolve_fit_path(fit_path) if fit_path else None
+    session_id = new_session_id("planned_workflow")
     context = AgentContext(
-        session_id="planned_workflow",
+        session_id=session_id,
         current_fit_file=current_fit,
         history_enabled=use_history,
         messages=[{"role": "user", "content": message}],
@@ -35,9 +37,20 @@ def run_planned_workflow(
     )
     plan = normalize_workflow_plan(planner_result["plan"], user_message=message)
     execution = execute_workflow_plan(plan, context)
+    log_path = write_workflow_markdown_log(
+        session_id,
+        user_message=message,
+        planner_plan=planner_result["plan"].to_dict(),
+        normalized_plan=plan.to_dict(),
+        execution=execution.to_dict(),
+        selected_activities=context.selected_activities,
+        selected_activity_range=context.selected_activity_range,
+        current_fit_file=str(context.current_fit_file) if context.current_fit_file else None,
+    )
     output = {
         "answer": execution.final_response or _fallback_answer(execution),
         "status": execution.status,
+        "log_path": str(log_path),
         "plan": plan.to_dict(),
         "execution": execution.to_dict(),
         "selected_activities": context.selected_activities,

@@ -4,6 +4,7 @@ import json
 
 from agent.context import AgentContext
 from agent.plan_schema import WorkflowPlan, WorkflowPlanStep
+from agent.chat_logger import write_workflow_markdown_log
 from agent.workflow_executor import execute_workflow_plan
 from agent.workflow_runner import normalize_workflow_plan
 
@@ -37,6 +38,60 @@ def test_planned_workflow_executor_path_compares_existing_summaries(tmp_path, mo
     assert result.status == "completed"
     assert result.final_response is not None
     assert "没有重新解析 FIT" in result.final_response
+
+
+def test_write_workflow_markdown_log_is_readable_and_md_only(tmp_path):
+    path = write_workflow_markdown_log(
+        "planned_workflow_test",
+        user_message="分析所有历史活动",
+        planner_plan={
+            "task_type": "history_overview",
+            "steps": [{"name": "resolve_activity_range", "reason": "定位所有活动", "arguments": {"range": "all"}}],
+        },
+        normalized_plan={
+            "task_type": "history_overview",
+            "steps": [{"name": "resolve_activity_range", "reason": "定位所有活动", "arguments": {"range": "all"}}],
+        },
+        execution={
+            "status": "completed",
+            "final_response": "整体情况良好。",
+            "validation": {"warnings": [], "errors": []},
+            "step_results": [
+                {
+                    "index": 0,
+                    "step_name": "resolve_activity_range",
+                    "status": "completed",
+                    "result": {"result": {"schema_version": "activity_list.v1", "count": 1}},
+                }
+            ],
+        },
+        selected_activities=[
+            {
+                "activity_index": 1,
+                "start_time_local": "2026-05-18T08:36:17",
+                "summary_label": "晨间轻松骑",
+                "distance_km": 9.38,
+                "duration_min": 26.9,
+                "summary_path": "data/summaries/morning.summary.json",
+                "fit_path": "garmin_cn_fit_files/morning.fit",
+            }
+        ],
+        selected_activity_range={"type": "all_history"},
+        current_fit_file=None,
+        log_dir=tmp_path,
+    )
+
+    text = path.read_text(encoding="utf-8")
+
+    assert path.suffix == ".md"
+    assert not path.with_suffix(".jsonl").exists()
+    assert "# Workflow Log: planned_workflow_test" in text
+    assert "## Final Answer" in text
+    assert "整体情况良好。" in text
+    assert "## Planner Plan" in text
+    assert "## Execution" in text
+    assert "晨间轻松骑" in text
+    assert "data/summaries/morning.summary.json" in text
 
 
 def test_normalize_workflow_plan_moves_recent_scope_to_step_arguments():

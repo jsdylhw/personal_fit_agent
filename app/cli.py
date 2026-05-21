@@ -50,6 +50,8 @@ def workflow_command(
     typer.echo(result["answer"])
     typer.echo("")
     typer.echo(f"workflow_status: {result['status']}")
+    if result.get("log_path"):
+        typer.echo(f"workflow_log_md: {result['log_path']}")
     if result.get("current_fit_file"):
         typer.echo(f"current_fit_file: {result['current_fit_file']}")
 

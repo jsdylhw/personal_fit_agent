@@ -53,6 +53,36 @@ def readable_chat_log_path(path: str | Path) -> Path:
     return source.with_suffix(".md")
 
 
+def write_workflow_markdown_log(
+    session_id: str,
+    *,
+    user_message: str,
+    planner_plan: dict[str, Any],
+    normalized_plan: dict[str, Any],
+    execution: dict[str, Any],
+    selected_activities: list[dict[str, Any]],
+    selected_activity_range: dict[str, Any] | None,
+    current_fit_file: str | None,
+    log_dir: str | Path = DEFAULT_CHAT_LOG_DIR,
+) -> Path:
+    """写入 workflow 总览日志,只生成可读 Markdown,不再额外生成 JSONL。"""
+    target_dir = Path(log_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"{session_id}.md"
+    lines = _format_workflow_log(
+        session_id=session_id,
+        user_message=user_message,
+        planner_plan=planner_plan,
+        normalized_plan=normalized_plan,
+        execution=execution,
+        selected_activities=selected_activities,
+        selected_activity_range=selected_activity_range,
+        current_fit_file=current_fit_file,
+    )
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return path
+
+
 def append_readable_chat_log(jsonl_path: Path, record: dict[str, Any]) -> Path:
     """追加一条可读事件到对应的 .md 日志."""
     path = readable_chat_log_path(jsonl_path)
@@ -98,6 +128,180 @@ def _format_record(record: dict[str, Any]) -> list[str]:
 
     lines.extend(_markdown_block("Record Summary", _compact_json(record)))
     return lines
+
+
+def _format_workflow_log(
+    *,
+    session_id: str,
+    user_message: str,
+    planner_plan: dict[str, Any],
+    normalized_plan: dict[str, Any],
+    execution: dict[str, Any],
+    selected_activities: list[dict[str, Any]],
+    selected_activity_range: dict[str, Any] | None,
+    current_fit_file: str | None,
+) -> list[str]:
+    status = execution.get("status")
+    final_response = str(execution.get("final_response") or "").strip()
+    lines = [
+        f"# Workflow Log: {session_id}",
+        "",
+        f"- logged_at: `{datetime.now(timezone.utc).isoformat()}`",
+        f"- workflow_status: `{status}`",
+    ]
+    if current_fit_file:
+        lines.append(f"- current_fit_file: `{current_fit_file}`")
+    lines.extend(["", "## User Request", "", user_message.strip() or "(empty)", ""])
+
+    if final_response:
+        lines.extend(["## Final Answer", "", final_response, ""])
+
+    lines.extend(_workflow_plan_section("Planner Plan", planner_plan))
+    if normalized_plan != planner_plan:
+        lines.extend(_workflow_plan_section("Normalized Plan", normalized_plan))
+
+    validation = execution.get("validation") if isinstance(execution.get("validation"), dict) else {}
+    warnings = validation.get("warnings") if isinstance(validation.get("warnings"), list) else []
+    errors = validation.get("errors") if isinstance(validation.get("errors"), list) else []
+    if warnings or errors:
+        lines.extend(["## Validation", ""])
+        for error in errors:
+            lines.append(f"- error: {error}")
+        for warning in warnings:
+            lines.append(f"- warning: {warning}")
+        lines.append("")
+
+    lines.extend(_workflow_execution_section(execution))
+    lines.extend(_workflow_activity_section(selected_activities, selected_activity_range))
+    return lines
+
+
+def _workflow_plan_section(title: str, plan: dict[str, Any]) -> list[str]:
+    lines = [f"## {title}", ""]
+    lines.append(f"- task_type: `{plan.get('task_type')}`")
+    scope = plan.get("activity_scope")
+    if scope:
+        lines.append(f"- activity_scope: `{_inline_json(scope)}`")
+    lines.append("")
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    if not steps:
+        lines.extend(["No steps.", ""])
+        return lines
+    for index, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            continue
+        lines.append(f"### {index}. {step.get('name')}")
+        reason = step.get("reason")
+        if reason:
+            lines.append(f"- reason: {reason}")
+        arguments = step.get("arguments") if isinstance(step.get("arguments"), dict) else {}
+        if arguments:
+            lines.append(f"- arguments: `{_inline_json(arguments)}`")
+        lines.append("")
+    return lines
+
+
+def _workflow_execution_section(execution: dict[str, Any]) -> list[str]:
+    lines = ["## Execution", ""]
+    step_results = execution.get("step_results") if isinstance(execution.get("step_results"), list) else []
+    if not step_results:
+        return lines + ["No executed steps.", ""]
+    for result in step_results:
+        if not isinstance(result, dict):
+            continue
+        index = int(result.get("index") or 0) + 1
+        name = result.get("step_name")
+        status = result.get("status")
+        lines.append(f"### {index}. {name}")
+        lines.append(f"- status: `{status}`")
+        if result.get("message"):
+            lines.append(f"- message: {result.get('message')}")
+        if result.get("error"):
+            lines.append(f"- error: `{result.get('error')}`")
+        lines.extend(_workflow_result_summary(result.get("result")))
+        lines.append("")
+    return lines
+
+
+def _workflow_result_summary(result: Any) -> list[str]:
+    if not isinstance(result, dict):
+        return []
+    payload = result.get("result") if isinstance(result.get("result"), dict) else result
+    lines: list[str] = []
+    answer = result.get("answer")
+    if isinstance(answer, str) and answer.strip():
+        lines.extend(_markdown_block("Step Answer", answer))
+    if not isinstance(payload, dict):
+        return lines
+
+    for key in ("count", "matched_count", "schema_version"):
+        if payload.get(key) is not None:
+            lines.append(f"- {key}: `{payload.get(key)}`")
+
+    analyses = payload.get("analyses") if isinstance(payload.get("analyses"), list) else []
+    if analyses:
+        lines.append("- generated_reports:")
+        for item in analyses:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                "  - "
+                + ", ".join(
+                    part for part in [
+                        f"fit=`{item.get('fit_path')}`" if item.get("fit_path") else "",
+                        f"summary=`{item.get('summary_path')}`" if item.get("summary_path") else "",
+                        f"status=`{item.get('status')}`" if item.get("status") else "",
+                    ] if part
+                )
+            )
+    activities = payload.get("activities") if isinstance(payload.get("activities"), list) else []
+    if activities:
+        lines.append("- activities:")
+        for activity in activities[:20]:
+            if isinstance(activity, dict):
+                lines.append(f"  - {_activity_line(activity)}")
+    return lines
+
+
+def _workflow_activity_section(
+    selected_activities: list[dict[str, Any]],
+    selected_activity_range: dict[str, Any] | None,
+) -> list[str]:
+    lines = ["## Selected Activities", ""]
+    if selected_activity_range:
+        lines.append(f"- scope: `{_inline_json(selected_activity_range)}`")
+    if not selected_activities:
+        lines.extend(["No selected activities.", ""])
+        return lines
+    for activity in selected_activities:
+        if not isinstance(activity, dict):
+            continue
+        lines.append(f"- {_activity_line(activity)}")
+        if activity.get("summary_path"):
+            lines.append(f"  - summary: `{activity.get('summary_path')}`")
+        if activity.get("fit_path"):
+            lines.append(f"  - fit: `{activity.get('fit_path')}`")
+    lines.append("")
+    return lines
+
+
+def _activity_line(activity: dict[str, Any]) -> str:
+    label = activity.get("summary_label") or activity.get("file_name") or activity.get("activity_key") or "activity"
+    started = activity.get("start_time_local") or activity.get("date_local") or "unknown_time"
+    index = activity.get("activity_index") or "?"
+    distance = activity.get("distance_km")
+    duration = activity.get("duration_min")
+    metrics = []
+    if distance is not None:
+        metrics.append(f"{distance} km")
+    if duration is not None:
+        metrics.append(f"{duration} min")
+    suffix = f" ({', '.join(metrics)})" if metrics else ""
+    return f"#{index} {started}: {label}{suffix}"
+
+
+def _inline_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _format_tool_loop(record: dict[str, Any]) -> list[str]:

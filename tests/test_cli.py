@@ -30,3 +30,22 @@ def test_sync_garmin_command_calls_workflow_tool(monkeypatch):
     assert result.exit_code == 0
     assert captured["count"] == 3
     assert '"status": "ok"' in result.output
+
+
+def test_workflow_command_prints_markdown_log_path(monkeypatch):
+    def fake_run_planned_workflow(*args, **kwargs):
+        return {
+            "answer": "整体总结",
+            "status": "completed",
+            "log_path": "log/planned_workflow_test.md",
+            "current_fit_file": None,
+        }
+
+    monkeypatch.setattr("app.cli.run_planned_workflow", fake_run_planned_workflow)
+
+    result = CliRunner().invoke(app, ["workflow", "分析所有历史活动"])
+
+    assert result.exit_code == 0
+    assert "整体总结" in result.output
+    assert "workflow_log_md: log/planned_workflow_test.md" in result.output
+    assert "chat_log_jsonl" not in result.output
