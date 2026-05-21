@@ -436,43 +436,43 @@ class TestAnalyzeFitFileResultTimes:
 
 class TestStrictBool:
     def test_true_is_true(self):
-        from core.workflow_tools import _parse_strict_bool
+        from agent.tools.workflow import _parse_strict_bool
         assert _parse_strict_bool(True) is True
 
     def test_false_is_false(self):
-        from core.workflow_tools import _parse_strict_bool
+        from agent.tools.workflow import _parse_strict_bool
         assert _parse_strict_bool(False) is False
 
     def test_string_false_is_false(self):
         """字符串 'false' 不会被 bool() 误判为 True."""
-        from core.workflow_tools import _parse_strict_bool
+        from agent.tools.workflow import _parse_strict_bool
         assert _parse_strict_bool("false") is False
 
     def test_string_true_is_false(self):
-        from core.workflow_tools import _parse_strict_bool
+        from agent.tools.workflow import _parse_strict_bool
         assert _parse_strict_bool("true") is False
 
     def test_none_is_default(self):
-        from core.workflow_tools import _parse_strict_bool
+        from agent.tools.workflow import _parse_strict_bool
         assert _parse_strict_bool(None) is False
 
     def test_number_one_is_false(self):
         """数字 1 也不是 True."""
-        from core.workflow_tools import _parse_strict_bool
+        from agent.tools.workflow import _parse_strict_bool
         assert _parse_strict_bool(1) is False
 
 
 class TestSyncCountLimit:
     def test_count_capped(self):
-        from core.workflow_tools import sync_garmin_activities_tool
+        from agent.tools.workflow import sync_garmin_activities_tool
         # 只测 count 上限逻辑,不实际调用 Garmin(会因无凭证报错)
-        from core.workflow_tools import MAX_SYNC_COUNT
+        from agent.tools.workflow import MAX_SYNC_COUNT
         assert MAX_SYNC_COUNT == 20
 
 
 class TestUploadErrorStates:
     def test_no_summary(self):
-        from core.workflow_tools import upload_to_strava_tool
+        from agent.tools.workflow import upload_to_strava_tool
         result = upload_to_strava_tool("/tmp/nonexistent_activity.fit")
         assert result["error"] == "no_summary"
 
@@ -483,7 +483,7 @@ class TestUploadErrorStates:
         """
         import json
         from unittest.mock import MagicMock
-        from core.workflow_tools import upload_to_strava_tool
+        from agent.tools.workflow import upload_to_strava_tool
 
         # 创建临时 summary
         fit_file = tmp_path / "test.fit"
@@ -517,7 +517,7 @@ class TestUploadErrorStates:
         """Python True 正常触发上传."""
         import json
         from unittest.mock import MagicMock
-        from core.workflow_tools import upload_to_strava_tool
+        from agent.tools.workflow import upload_to_strava_tool
 
         fit_file = tmp_path / "test.fit"
         fit_file.write_bytes(b"mock")

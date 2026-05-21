@@ -1,7 +1,7 @@
-"""Agent 模式工作流工具:下载 / 分析 / 上传.
+"""工作流执行器使用的业务工具封装:下载 / 分析 / 上传.
 
-这些工具有副作用(网络 I/O,写文件,上传 Strava),只在 agent 模式暴露,
-不会出现在 analyze-file 的 hidden tool loop 中.
+这些工具由 workflow executor 按计划调用,不直接暴露给 planner 选择。
+FIT 分析内部的只读工具路由放在 fit_analysis.py。
 """
 
 from __future__ import annotations

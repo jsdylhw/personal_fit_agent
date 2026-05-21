@@ -8,7 +8,7 @@ from typing import Any
 from agent.activity_comparison import read_activity_summary
 from agent.context import AgentContext
 from agent.plan_schema import WorkflowPlanStep
-from core.workflow_tools import analyze_fit_file_tool
+from agent.tools.workflow import analyze_fit_file_tool
 
 
 def show_selected_activity_report(

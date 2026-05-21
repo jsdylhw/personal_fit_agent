@@ -23,7 +23,7 @@ from agent.step_selector import (
     StepSelectionResult,
     select_workflow_steps,
 )
-from core.workflow_tools import (
+from agent.tools.workflow import (
     analyze_fit_file_tool,
     sync_garmin_activities_tool,
     upload_to_strava_tool,

@@ -9,7 +9,7 @@ import typer
 
 from agent.workflow_runner import run_planned_workflow
 from agent.fit_paths import resolve_fit_path
-from core.workflow_tools import analyze_fit_file_tool, sync_garmin_activities_tool
+from agent.tools.workflow import analyze_fit_file_tool, sync_garmin_activities_tool
 from core.strava_workflow import (
     update_strava_description_from_summary,
     upload_summary_to_strava,
