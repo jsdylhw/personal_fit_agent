@@ -10,12 +10,12 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from agent.activity_resolution.context_update import (
+from agent.activity.resolution.context_update import (
     activity_from_context,
     update_context_from_activity_list,
     update_context_from_single_activity,
 )
-from agent.activity_resolution.date_parser import (
+from agent.activity.resolution.date_parser import (
     activity_index_from_text,
     date_argument,
     date_range_arguments,
@@ -23,7 +23,7 @@ from agent.activity_resolution.date_parser import (
     order_argument,
 )
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlanStep
+from agent.workflow.plan_schema import WorkflowPlanStep
 from core.activity_index import get_activities_in_range, list_activities, resolve_activity
 
 ACTIVITY_RESOLUTION_STEPS = {

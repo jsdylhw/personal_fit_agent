@@ -11,7 +11,7 @@ from typing import Any
 
 from agent.context import AgentContext
 from agent.llm import AnthropicMessagesClient, extract_text
-from agent.plan_schema import (
+from agent.workflow.plan_schema import (
     PLAN_JSON_SCHEMA,
     WorkflowPlan,
     available_workflow_steps_catalog,

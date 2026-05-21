@@ -7,7 +7,7 @@ import json
 
 import typer
 
-from agent.workflow_runner import run_planned_workflow
+from agent.workflow.runner import run_planned_workflow
 from agent.fit_paths import resolve_fit_path
 from agent.tools.workflow import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
 from core.strava_workflow import (

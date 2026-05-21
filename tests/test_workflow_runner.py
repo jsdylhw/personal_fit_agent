@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlan, WorkflowPlanStep
+from agent.workflow.plan_schema import WorkflowPlan, WorkflowPlanStep
 from agent.chat_logger import write_workflow_markdown_log
-from agent.workflow_executor import execute_workflow_plan
-from agent.workflow_runner import normalize_workflow_plan
+from agent.workflow.executor import execute_workflow_plan
+from agent.workflow.runner import normalize_workflow_plan
 
 
 def test_planned_workflow_executor_path_compares_existing_summaries(tmp_path, monkeypatch):

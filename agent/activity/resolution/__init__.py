@@ -9,6 +9,6 @@
 - context_update: AgentContext 副作用更新
 """
 
-from agent.activity_resolution.executor import ACTIVITY_RESOLUTION_STEPS, execute_activity_resolution_step
+from agent.activity.resolution.executor import ACTIVITY_RESOLUTION_STEPS, execute_activity_resolution_step
 
 __all__ = ["ACTIVITY_RESOLUTION_STEPS", "execute_activity_resolution_step"]

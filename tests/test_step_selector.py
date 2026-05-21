@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent.plan_schema import WorkflowPlan, WorkflowPlanStep, available_workflow_steps
-from agent.step_selector import (
+from agent.workflow.plan_schema import WorkflowPlan, WorkflowPlanStep, available_workflow_steps
+from agent.workflow.step_selector import (
     FIT_DATA_TOOLS,
     get_step_execution_spec,
     select_workflow_steps,

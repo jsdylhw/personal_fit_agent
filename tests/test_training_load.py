@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlanStep
-from agent.training_load import summarize_recent_training_load
+from agent.workflow.plan_schema import WorkflowPlanStep
+from agent.activity.training_load import summarize_recent_training_load
 
 
 def _write_summary(path, *, key: str, tss: float, intensity_factor: float, distance_km: float, duration_min: float):

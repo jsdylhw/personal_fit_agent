@@ -11,19 +11,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from agent.activity_comparison import compare_selected_activities
-from agent.activity_report import show_selected_activity_report
-from agent.activity_resolution import execute_activity_resolution_step
+from agent.activity.comparison import compare_selected_activities
+from agent.activity.report import show_selected_activity_report
+from agent.activity.resolution import execute_activity_resolution_step
 from agent.context import AgentContext
 from agent.llm import AnthropicMessagesClient, extract_text
-from agent.plan_schema import WorkflowPlan, WorkflowPlanStep
-from agent.plan_validator import PlanValidationResult, validate_workflow_plan
-from agent.step_selector import (
+from agent.workflow.plan_schema import WorkflowPlan, WorkflowPlanStep
+from agent.workflow.plan_validator import PlanValidationResult, validate_workflow_plan
+from agent.workflow.step_selector import (
     SelectedWorkflowStep,
     StepSelectionResult,
     select_workflow_steps,
 )
-from agent.training_load import summarize_recent_training_load
+from agent.activity.training_load import summarize_recent_training_load
 from agent.tools.workflow import (
     analyze_fit_file_tool,
     sync_garmin_activities_tool,

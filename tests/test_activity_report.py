@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 
-from agent.activity_report import show_selected_activity_report
+from agent.activity.report import show_selected_activity_report
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlanStep
+from agent.workflow.plan_schema import WorkflowPlanStep
 
 
 def test_show_selected_activity_report_reads_markdown_report(tmp_path):
@@ -69,7 +69,7 @@ def test_show_selected_activity_report_generates_summary_when_fit_exists(monkeyp
             "history_entry": {"summary_label": "高功率区间"},
         }
 
-    monkeypatch.setattr("agent.activity_report.analyze_fit_file_tool", fake_analyze_fit_file_tool)
+    monkeypatch.setattr("agent.activity.report.analyze_fit_file_tool", fake_analyze_fit_file_tool)
     context = AgentContext(
         session_id="activity-report-test",
         selected_activities=[{"activity_key": "a1", "fit_path": "/tmp/latest.fit"}],

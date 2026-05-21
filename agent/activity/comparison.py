@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlanStep
+from agent.workflow.plan_schema import WorkflowPlanStep
 
 
 def compare_selected_activities(

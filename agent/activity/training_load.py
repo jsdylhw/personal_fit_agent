@@ -10,9 +10,9 @@ import re
 from datetime import date, datetime
 from typing import Any
 
-from agent.activity_comparison import read_activity_summary
+from agent.activity.comparison import read_activity_summary
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlanStep
+from agent.workflow.plan_schema import WorkflowPlanStep
 
 
 def summarize_recent_training_load(

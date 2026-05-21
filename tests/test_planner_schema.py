@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent.context import AgentContext
-from agent.plan_schema import (
+from agent.workflow.plan_schema import (
     WorkflowPlan,
     WorkflowPlanStep,
     available_workflow_steps,
@@ -13,7 +13,7 @@ from agent.plan_schema import (
     get_workflow_step,
     workflow_steps_by_category,
 )
-from agent.planner import build_planner_payload, parse_workflow_plan_text, plan_initial_workflow
+from agent.workflow.planner import build_planner_payload, parse_workflow_plan_text, plan_initial_workflow
 
 
 def test_available_workflow_step_names_are_unique():

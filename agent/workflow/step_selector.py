@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.plan_schema import WorkflowPlan, WorkflowPlanStep, get_workflow_step
+from agent.workflow.plan_schema import WorkflowPlan, WorkflowPlanStep, get_workflow_step
 
 
 FIT_DATA_TOOLS = (

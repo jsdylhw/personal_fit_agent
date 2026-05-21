@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 
-from agent.activity_comparison import compare_selected_activities
+from agent.activity.comparison import compare_selected_activities
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlanStep
+from agent.workflow.plan_schema import WorkflowPlanStep
 
 
 def _write_summary(path, *, key: str, label: str, distance_km: float, duration_min: float):

@@ -11,10 +11,10 @@ from typing import Any
 
 import typer
 
-from agent.activity_resolution import ACTIVITY_RESOLUTION_STEPS, execute_activity_resolution_step
+from agent.activity.resolution import ACTIVITY_RESOLUTION_STEPS, execute_activity_resolution_step
 from agent.context import AgentContext
 from agent.fit_paths import resolve_fit_path
-from agent.planner import plan_initial_workflow
+from agent.workflow.planner import plan_initial_workflow
 from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
 from core.activity_index import (
     get_activities_in_range,

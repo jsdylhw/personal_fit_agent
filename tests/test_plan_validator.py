@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlan, WorkflowPlanStep
-from agent.plan_validator import validate_workflow_plan
+from agent.workflow.plan_schema import WorkflowPlan, WorkflowPlanStep
+from agent.workflow.plan_validator import validate_workflow_plan
 
 
 def _plan(*steps: WorkflowPlanStep, **kwargs) -> WorkflowPlan:

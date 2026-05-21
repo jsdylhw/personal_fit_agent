@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlan, WorkflowPlanStep
-from agent.workflow_executor import execute_workflow_plan
+from agent.workflow.plan_schema import WorkflowPlan, WorkflowPlanStep
+from agent.workflow.executor import execute_workflow_plan
 
 
 def _plan(*steps: WorkflowPlanStep, **kwargs) -> WorkflowPlan:
@@ -194,7 +194,7 @@ def test_executor_runs_single_activity_analysis_when_summary_missing(monkeypatch
             "status": "analyzed",
         }
 
-    monkeypatch.setattr("agent.activity_report.analyze_fit_file_tool", fake_analyze_fit_file_tool)
+    monkeypatch.setattr("agent.activity.report.analyze_fit_file_tool", fake_analyze_fit_file_tool)
 
     result = execute_workflow_plan(plan, context)
 
@@ -384,7 +384,7 @@ def test_executor_summarizes_range_generates_missing_summary_and_reloads_index(t
         })
         return {"summary_path": "data/summaries/a1.summary.json"}
 
-    monkeypatch.setattr("agent.workflow_executor.analyze_fit_file_tool", fake_analyze_fit_file_tool)
+    monkeypatch.setattr("agent.workflow.executor.analyze_fit_file_tool", fake_analyze_fit_file_tool)
     context = AgentContext(
         session_id="executor-test",
         selected_activities=[
@@ -453,7 +453,7 @@ def test_executor_range_ai_summary_uses_local_report_brief(tmp_path, monkeypatch
             captured.update(kwargs)
             return {"content": [{"type": "text", "text": "这是 AI 生成的整体总结"}]}
 
-    monkeypatch.setattr("agent.workflow_executor.AnthropicMessagesClient", lambda: FakeClient())
+    monkeypatch.setattr("agent.workflow.executor.AnthropicMessagesClient", lambda: FakeClient())
     context = AgentContext(
         session_id="executor-test",
         messages=[{"role": "user", "content": "分析所有活动 生成ai总结报告，详细一点"}],

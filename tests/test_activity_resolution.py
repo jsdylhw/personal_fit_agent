@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from agent.activity_resolution import execute_activity_resolution_step
+from agent.activity.resolution import execute_activity_resolution_step
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlanStep
+from agent.workflow.plan_schema import WorkflowPlanStep
 from core.activity_index import save_activity_index
 
 

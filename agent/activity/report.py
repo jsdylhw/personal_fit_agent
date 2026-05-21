@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agent.activity_comparison import read_activity_summary
+from agent.activity.comparison import read_activity_summary
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlanStep
+from agent.workflow.plan_schema import WorkflowPlanStep
 from agent.tools.workflow import analyze_fit_file_tool
 
 

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent.context import AgentContext
-from agent.plan_schema import WorkflowPlan, get_workflow_step
+from agent.workflow.plan_schema import WorkflowPlan, get_workflow_step
 from agent.tools.workflow import MAX_SYNC_COUNT
 
 
