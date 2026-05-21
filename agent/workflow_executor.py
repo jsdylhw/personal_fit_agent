@@ -349,7 +349,6 @@ def _execute_summarize_activity_range(
     step: WorkflowPlanStep,
     context: AgentContext,
 ) -> dict[str, Any]:
-    # 范围汇总只做索引层面的轻量概览，避免为“上个月有哪些活动”触发逐个 FIT 深度分析。
     activities = [
         activity
         for activity in context.selected_activities
@@ -370,6 +369,13 @@ def _execute_summarize_activity_range(
             },
         }
 
+    # 范围汇总优先使用 summary 中的语义标签;缺失时先补齐,再做轻量汇总。
+    _ensure_summaries_for_activities(activities, force=bool(step.arguments.get("force")))
+
+    # analyze_fit_file_tool 会回写 activity_index,这里重新读取以拿到最新标签。
+    activities = _reload_activities_from_index(activities)
+    context.selected_activities = activities
+
     normalized = [_compact_range_activity(activity) for activity in activities]
     total_distance = round(sum(float(item.get("distance_km") or 0) for item in normalized), 2)
     total_duration = round(sum(float(item.get("duration_min") or 0) for item in normalized), 1)
@@ -389,6 +395,38 @@ def _execute_summarize_activity_range(
         "answer": _format_range_summary_answer(result),
         "result": result,
     }
+
+
+def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force: bool = False) -> None:
+    """为缺失 summary 的活动补齐报告,已有 summary 时保持跳过。"""
+    for activity in activities:
+        fit_path = activity.get("fit_path")
+        if not fit_path:
+            continue
+        summary_path = activity.get("summary_path")
+        if summary_path and Path(str(summary_path)).expanduser().exists() and not force:
+            continue
+        analyze_fit_file_tool(str(fit_path), force=force)
+
+
+def _reload_activities_from_index(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from core.activity_index import load_activity_index
+
+    index = load_activity_index()
+    index_map: dict[str, dict[str, Any]] = {}
+    for entry in index.get("activities") or []:
+        key = entry.get("activity_key")
+        if key:
+            index_map[key] = entry
+
+    refreshed: list[dict[str, Any]] = []
+    for activity in activities:
+        key = activity.get("activity_key")
+        if key and key in index_map:
+            refreshed.append(index_map[key])
+        else:
+            refreshed.append(activity)
+    return refreshed
 
 
 def _build_final_response(context: AgentContext) -> dict[str, Any]:

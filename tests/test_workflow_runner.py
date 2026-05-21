@@ -123,7 +123,8 @@ def test_normalize_workflow_plan_moves_range_scope_to_step_arguments():
     }
 
 
-def test_normalize_workflow_plan_rewrites_all_history_range_to_recent_all():
+def test_normalize_workflow_plan_preserves_all_history_range_step_name():
+    """Normalize 不做语义重写，"全部活动"由 executor 的 fallback 处理."""
     plan = WorkflowPlan(
         task_type="history_overview",
         steps=[
@@ -142,8 +143,8 @@ def test_normalize_workflow_plan_rewrites_all_history_range_to_recent_all():
 
     normalized = normalize_workflow_plan(plan)
 
-    assert normalized.steps[0].name == "resolve_recent_activities"
-    assert normalized.steps[0].arguments == {"limit": 0}
+    assert normalized.steps[0].name == "resolve_activity_range"
+    assert normalized.steps[0].arguments == {"range": "all"}
 
 
 def test_normalize_workflow_plan_moves_top_level_clarifying_question_to_step():

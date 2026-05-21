@@ -130,7 +130,7 @@ _BASE_EXECUTION_SPECS: dict[str, StepExecutionSpec] = {
         step_name="summarize_activity_range",
         executor_type="analysis",
         handler_name="summarize_activity_range",
-        allowed_tools=("read_activity_summary",),
+        allowed_tools=("read_activity_summary", "analyze_fit_file"),
     ),
     "compare_with_history": StepExecutionSpec(
         step_name="compare_with_history",

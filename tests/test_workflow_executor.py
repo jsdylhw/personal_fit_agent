@@ -333,6 +333,71 @@ def test_executor_summarizes_selected_activity_range():
     assert "周末骑行" in result.final_response
 
 
+def test_executor_summarizes_range_generates_missing_summary_and_reloads_index(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    missing_fit = tmp_path / "missing.fit"
+    missing_fit.write_bytes(b"fit")
+    existing_summary = tmp_path / "existing.summary.json"
+    existing_summary.write_text("{}", encoding="utf-8")
+    calls = []
+
+    def fake_analyze_fit_file_tool(fit_path: str, *, force: bool = False):
+        calls.append((fit_path, force))
+        from core.activity_index import upsert_activity_entry
+
+        upsert_activity_entry({
+            "activity_index": 1,
+            "activity_key": "a1",
+            "fit_path": fit_path,
+            "file_name": Path(fit_path).name,
+            "start_time_local": "2026-04-01T08:00:00",
+            "distance_km": 10.5,
+            "duration_min": 30.0,
+            "summary_path": "data/summaries/a1.summary.json",
+            "has_summary": True,
+            "summary_label": "补齐后的报告标签",
+        })
+        return {"summary_path": "data/summaries/a1.summary.json"}
+
+    monkeypatch.setattr("agent.workflow_executor.analyze_fit_file_tool", fake_analyze_fit_file_tool)
+    context = AgentContext(
+        session_id="executor-test",
+        selected_activities=[
+            {
+                "activity_index": 1,
+                "activity_key": "a1",
+                "file_name": "missing.fit",
+                "fit_path": str(missing_fit),
+                "start_time_local": "2026-04-01T08:00:00",
+                "distance_km": 10.5,
+                "duration_min": 30.0,
+                "has_summary": False,
+            },
+            {
+                "activity_index": 2,
+                "activity_key": "a2",
+                "file_name": "existing.fit",
+                "fit_path": str(tmp_path / "existing.fit"),
+                "summary_path": str(existing_summary),
+                "summary_label": "已有报告标签",
+                "start_time_local": "2026-04-03T08:00:00",
+                "distance_km": 20.0,
+                "duration_min": 60.0,
+                "has_summary": True,
+            },
+        ],
+    )
+    plan = _plan(WorkflowPlanStep(name="summarize_activity_range", reason="汇总活动"))
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert calls == [(str(missing_fit), False)]
+    assert context.selected_activities[0]["summary_label"] == "补齐后的报告标签"
+    assert "补齐后的报告标签" in (result.final_response or "")
+    assert "已有报告标签" in (result.final_response or "")
+
+
 def test_executor_summarizes_empty_activity_range():
     context = AgentContext(
         session_id="executor-test",

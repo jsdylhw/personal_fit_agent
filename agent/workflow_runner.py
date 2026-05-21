@@ -80,9 +80,6 @@ def _normalize_step_arguments(
     if step.name == "ask_user_clarification":
         return _normalize_clarification_step(step, clarifying_question)
     if step.name == "resolve_activity_range":
-        all_scope = _is_all_activities_scope(scope) or _is_all_activities_scope(step.arguments)
-        if all_scope:
-            return _normalize_all_activities_step(step, scope)
         return _normalize_activity_range_step(step, scope)
     if step.name != "resolve_recent_activities":
         return step
@@ -153,35 +150,6 @@ def _normalize_activity_range_step(
         arguments=arguments,
     )
 
-
-def _normalize_all_activities_step(
-    step: WorkflowPlanStep,
-    scope: dict[str, Any],
-) -> WorkflowPlanStep:
-    arguments = dict(step.arguments)
-    arguments.pop("range", None)
-    arguments.pop("date_range", None)
-    arguments.pop("time_range", None)
-    arguments["limit"] = 0
-
-    if "sport_type" not in arguments:
-        sport_type = scope.get("sport_type") or scope.get("activity_type")
-        if sport_type:
-            arguments["sport_type"] = sport_type
-
-    return WorkflowPlanStep(
-        name="resolve_recent_activities",
-        reason=step.reason,
-        arguments=arguments,
-    )
-
-
-def _is_all_activities_scope(data: dict[str, Any]) -> bool:
-    text = " ".join(
-        str(data.get(key) or "")
-        for key in ("type", "scope", "scope_type", "range", "date_range", "time_range", "description")
-    ).lower()
-    return any(token in text for token in ("all_history", "all activities", "all", "全部", "所有", "历史活动"))
 
 
 def _order_from_scope(scope: dict[str, Any], reason: str = "") -> str | None:
