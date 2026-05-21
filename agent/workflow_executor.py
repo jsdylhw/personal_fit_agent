@@ -205,6 +205,8 @@ def _execute_default_handler(
         return _execute_prepare_strava_upload(context)
     if step.name == "confirm_strava_upload":
         return _execute_confirm_strava_upload(context)
+    if step.name == "summarize_activity_range":
+        return _execute_summarize_activity_range(step, context)
     if step.name == "compare_activities":
         return compare_selected_activities(step, context)
     if step.name == "analyze_single_activity":
@@ -329,6 +331,52 @@ def _execute_confirm_strava_upload(context: AgentContext) -> dict[str, Any]:
     return {"step": "confirm_strava_upload", "result": result}
 
 
+def _execute_summarize_activity_range(
+    step: WorkflowPlanStep,
+    context: AgentContext,
+) -> dict[str, Any]:
+    # 范围汇总只做索引层面的轻量概览，避免为“上个月有哪些活动”触发逐个 FIT 深度分析。
+    activities = [
+        activity
+        for activity in context.selected_activities
+        if isinstance(activity, dict)
+    ]
+    scope = context.selected_activity_range or {}
+    if not activities:
+        answer = _empty_range_answer(scope)
+        return {
+            "step": step.name,
+            "status": "completed",
+            "answer": answer,
+            "result": {
+                "schema_version": "activity_range_summary.v1",
+                "count": 0,
+                "scope": scope,
+                "activities": [],
+            },
+        }
+
+    normalized = [_compact_range_activity(activity) for activity in activities]
+    total_distance = round(sum(float(item.get("distance_km") or 0) for item in normalized), 2)
+    total_duration = round(sum(float(item.get("duration_min") or 0) for item in normalized), 1)
+    result = {
+        "schema_version": "activity_range_summary.v1",
+        "count": len(normalized),
+        "scope": scope,
+        "totals": {
+            "distance_km": total_distance,
+            "duration_min": total_duration,
+        },
+        "activities": normalized,
+    }
+    return {
+        "step": step.name,
+        "status": "completed",
+        "answer": _format_range_summary_answer(result),
+        "result": result,
+    }
+
+
 def _build_final_response(context: AgentContext) -> dict[str, Any]:
     last = context.last_tool_result or {}
     return {
@@ -361,4 +409,77 @@ def _summarize_last_result(last: dict[str, Any]) -> str:
     result = last.get("result") if isinstance(last.get("result"), dict) else {}
     if result.get("answer"):
         return str(result["answer"])
+    empty_answer = _empty_activity_resolution_answer(step_name, result)
+    if empty_answer:
+        return empty_answer
     return f"{step_name} 已完成."
+
+
+def _compact_range_activity(activity: dict[str, Any]) -> dict[str, Any]:
+    # 输出给 final_response 和日志的字段保持紧凑，避免把索引里的完整路径等细节塞进回答。
+    return {
+        "activity_index": activity.get("activity_index"),
+        "activity_key": activity.get("activity_key"),
+        "file_name": activity.get("file_name"),
+        "start_time_local": activity.get("start_time_local"),
+        "date_local": activity.get("date_local"),
+        "sport_type": activity.get("sport_type"),
+        "duration_min": activity.get("duration_min"),
+        "distance_km": activity.get("distance_km"),
+        "has_summary": activity.get("has_summary"),
+        "summary_label": activity.get("summary_label"),
+        "main_stimulus": activity.get("main_stimulus"),
+        "training_load": activity.get("training_load"),
+    }
+
+
+def _format_range_summary_answer(summary: dict[str, Any]) -> str:
+    scope = summary.get("scope") if isinstance(summary.get("scope"), dict) else {}
+    title = _range_title(scope)
+    totals = summary.get("totals") if isinstance(summary.get("totals"), dict) else {}
+    lines = [
+        f"{title}找到 {summary.get('count')} 条已索引活动。",
+        f"总量: {totals.get('distance_km', 0)} km, {totals.get('duration_min', 0)} 分钟。",
+    ]
+    for activity in summary.get("activities") or []:
+        label = activity.get("summary_label") or activity.get("file_name") or activity.get("activity_key")
+        lines.append(
+            f"- #{activity.get('activity_index') or '?'} "
+            f"{activity.get('start_time_local') or activity.get('date_local') or '未知时间'}: "
+            f"{label}, {activity.get('distance_km') or 0} km / {activity.get('duration_min') or 0} 分钟"
+        )
+    return "\n".join(lines)
+
+
+def _empty_range_answer(scope: dict[str, Any]) -> str:
+    return f"{_range_title(scope)}没有找到已索引的活动。你可以先重建索引，或同步 Garmin 活动后再试。"
+
+
+def _range_title(scope: dict[str, Any]) -> str:
+    start = scope.get("start_date")
+    end = scope.get("end_date")
+    if start and end:
+        return f"{start} 到 {end} "
+    return ""
+
+
+def _empty_activity_resolution_answer(step_name: str, result: dict[str, Any]) -> str | None:
+    payload = result.get("result") if isinstance(result.get("result"), dict) else result
+    if not isinstance(payload, dict):
+        return None
+
+    matched_count = payload.get("matched_count")
+    count = payload.get("count")
+    is_empty = matched_count == 0 or count == 0
+    if not is_empty:
+        return None
+
+    if step_name == "resolve_activity_range":
+        start = payload.get("start_date")
+        end = payload.get("end_date")
+        if start and end:
+            return f"{start} 到 {end} 没有找到已索引的活动。"
+        return "这个时间范围内没有找到已索引的活动。"
+    if step_name == "resolve_recent_activities":
+        return "没有找到已索引的最近活动。你可以先重建索引或同步 Garmin 活动。"
+    return "没有找到符合条件的活动。你可以先重建索引，或确认日期、序号、活动名称是否正确。"

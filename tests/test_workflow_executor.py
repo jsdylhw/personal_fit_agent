@@ -52,6 +52,46 @@ def test_executor_runs_activity_resolution_and_final_response():
     assert result.final_response == "resolve_current_activity 已完成."
 
 
+def test_executor_final_response_handles_empty_activity_resolution():
+    context = AgentContext(session_id="executor-test")
+    plan = _plan(
+        WorkflowPlanStep(
+            name="resolve_activity_by_date",
+            reason="定位不存在的活动",
+            arguments={"date": "2099-01-01"},
+        ),
+        WorkflowPlanStep(name="final_response", reason="说明空结果"),
+    )
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.step_results[0].status == "completed"
+    assert result.step_results[0].result["result"]["matched_count"] == 0
+    assert result.final_response is not None
+    assert "没有找到符合条件的活动" in result.final_response
+
+
+def test_executor_analysis_handles_empty_selected_activity():
+    context = AgentContext(session_id="executor-test")
+    plan = _plan(
+        WorkflowPlanStep(
+            name="resolve_activity_by_date",
+            reason="定位不存在的活动",
+            arguments={"date": "2099-01-01"},
+        ),
+        WorkflowPlanStep(name="analyze_single_activity", reason="分析未找到的活动"),
+        WorkflowPlanStep(name="final_response", reason="说明空结果"),
+    )
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.step_results[0].status == "completed"
+    assert result.final_response is not None
+    assert "没有找到符合条件的活动" in result.final_response
+
+
 def test_executor_runs_casual_chat_without_dedicated_handler():
     context = AgentContext(session_id="executor-test")
     plan = _plan(
@@ -245,6 +285,74 @@ def test_executor_runs_compare_activities_from_existing_summaries(tmp_path, monk
     assert result.step_results[0].result["result"]["count"] == 2
     assert result.final_response is not None
     assert "没有重新解析 FIT" in result.final_response
+
+
+def test_executor_summarizes_selected_activity_range():
+    context = AgentContext(
+        session_id="executor-test",
+        selected_activities=[
+            {
+                "activity_index": 1,
+                "activity_key": "a1",
+                "file_name": "first.fit",
+                "start_time_local": "2026-04-01T08:00:00",
+                "distance_km": 10.5,
+                "duration_min": 30.0,
+                "has_summary": False,
+            },
+            {
+                "activity_index": 2,
+                "activity_key": "a2",
+                "file_name": "second.fit",
+                "start_time_local": "2026-04-03T08:00:00",
+                "distance_km": 20.0,
+                "duration_min": 60.0,
+                "summary_label": "周末骑行",
+                "has_summary": True,
+            },
+        ],
+        selected_activity_range={
+            "type": "date_range",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-30",
+        },
+    )
+    plan = _plan(
+        WorkflowPlanStep(name="summarize_activity_range", reason="汇总上个月活动"),
+        WorkflowPlanStep(name="final_response", reason="输出汇总"),
+    )
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.step_results[0].result["result"]["count"] == 2
+    assert result.step_results[0].result["result"]["totals"]["distance_km"] == 30.5
+    assert result.final_response is not None
+    assert "找到 2 条已索引活动" in result.final_response
+    assert "#1" in result.final_response
+    assert "周末骑行" in result.final_response
+
+
+def test_executor_summarizes_empty_activity_range():
+    context = AgentContext(
+        session_id="executor-test",
+    )
+    plan = _plan(
+        WorkflowPlanStep(
+            name="resolve_activity_range",
+            reason="定位没有活动的时间范围",
+            arguments={"start_date": "2099-04-01", "end_date": "2099-04-30"},
+        ),
+        WorkflowPlanStep(name="summarize_activity_range", reason="汇总上个月活动"),
+        WorkflowPlanStep(name="final_response", reason="输出空结果"),
+    )
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.step_results[0].status == "completed"
+    assert result.final_response is not None
+    assert "没有找到已索引的活动" in result.final_response
 
 
 def test_executor_serializes_result():
