@@ -116,8 +116,6 @@ def execute_workflow_plan(
         context.last_tool_result = step_result.to_dict()
         if step_result.result and step_result.result.get("answer"):
             final_response = str(step_result.result["answer"])
-        if selected.execution.executor_type == "response" and step_result.result:
-            final_response = str(step_result.result.get("answer") or "")
         if step_result.status == "failed" and stop_on_error:
             return WorkflowExecutionResult(
                 status="failed",
@@ -189,8 +187,6 @@ def _execute_default_handler(
 
     if executor_type == "activity_resolution":
         return execute_activity_resolution_step(step, context)
-    if executor_type == "response":
-        return _build_final_response(context)
     if step.name == "casual_chat":
         return _execute_casual_chat(step)
     if step.name == "ask_user_clarification":
@@ -371,8 +367,8 @@ def _execute_summarize_activity_range(
             },
         }
 
-    # 范围汇总优先使用 summary 中的语义标签;缺失时先补齐,再做轻量汇总。
-    _ensure_summaries_for_activities(activities, force=bool(step.arguments.get("force")))
+    # 范围汇总优先使用 summary 中的语义标签;缺失时先补齐,并记录补齐过程。
+    summary_generation = _ensure_summaries_for_activities(activities, force=bool(step.arguments.get("force")))
 
     # analyze_fit_file_tool 会回写 activity_index,这里重新读取以拿到最新标签。
     activities = _reload_activities_from_index(activities)
@@ -390,6 +386,7 @@ def _execute_summarize_activity_range(
             "duration_min": total_duration,
         },
         "activities": normalized,
+        "summary_generation": summary_generation,
     }
     answer = (
         _generate_range_ai_summary(result, activities, step, context)
@@ -404,16 +401,36 @@ def _execute_summarize_activity_range(
     }
 
 
-def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force: bool = False) -> None:
-    """为缺失 summary 的活动补齐报告,已有 summary 时保持跳过。"""
+def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force: bool = False) -> dict[str, Any]:
+    """为缺失 summary 的活动补齐报告,并返回生成/跳过明细供 workflow 日志展示。"""
+    generated: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     for activity in activities:
         fit_path = activity.get("fit_path")
         if not fit_path:
             continue
         summary_path = activity.get("summary_path")
         if summary_path and Path(str(summary_path)).expanduser().exists() and not force:
+            skipped.append(_summary_generation_item(activity, status="skipped_existing_summary"))
             continue
-        analyze_fit_file_tool(str(fit_path), force=force)
+        result = analyze_fit_file_tool(str(fit_path), force=force)
+        generated.append(_summary_generation_item({**activity, **result}, status=str(result.get("status") or "analyzed")))
+    return {
+        "generated_count": len(generated),
+        "skipped_count": len(skipped),
+        "generated": generated,
+        "skipped": skipped,
+    }
+
+
+def _summary_generation_item(activity: dict[str, Any], *, status: str) -> dict[str, Any]:
+    return {
+        "activity_index": activity.get("activity_index"),
+        "activity_key": activity.get("activity_key"),
+        "fit_path": activity.get("fit_path"),
+        "summary_path": activity.get("summary_path"),
+        "status": status,
+    }
 
 
 def _reload_activities_from_index(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -514,15 +531,6 @@ def _read_summary_detail(summary_path: Any) -> dict[str, Any]:
     }
 
 
-def _build_final_response(context: AgentContext) -> dict[str, Any]:
-    last = context.last_tool_result or {}
-    return {
-        "step": "final_response",
-        "answer": _summarize_last_result(last),
-        "last_tool_result": last,
-    }
-
-
 def _current_fit_path(context: AgentContext) -> Path:
     if not context.current_fit_file:
         raise ValueError("current_fit_file is required")
@@ -539,21 +547,8 @@ def _fit_paths_from_items(items: list[Any]) -> list[Path]:
     return paths
 
 
-def _summarize_last_result(last: dict[str, Any]) -> str:
-    step_name = last.get("step_name") or last.get("step") or "上一步"
-    if last.get("status") == "failed":
-        return f"{step_name} 执行失败:{last.get('message') or last.get('error')}"
-    result = last.get("result") if isinstance(last.get("result"), dict) else {}
-    if result.get("answer"):
-        return str(result["answer"])
-    empty_answer = _empty_activity_resolution_answer(step_name, result)
-    if empty_answer:
-        return empty_answer
-    return f"{step_name} 已完成."
-
-
 def _compact_range_activity(activity: dict[str, Any]) -> dict[str, Any]:
-    # 输出给 final_response 和日志的字段保持紧凑，避免把索引里的完整路径等细节塞进回答。
+    # 输出给用户回答和日志的字段保持紧凑，避免把索引里的完整路径等细节塞进回答。
     return {
         "activity_index": activity.get("activity_index"),
         "activity_key": activity.get("activity_key"),

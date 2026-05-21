@@ -192,11 +192,6 @@ _BASE_EXECUTION_SPECS: dict[str, StepExecutionSpec] = {
         handler_name="upload_to_strava_confirmed",
         allowed_tools=("upload_to_strava",),
     ),
-    "final_response": StepExecutionSpec(
-        step_name="final_response",
-        executor_type="response",
-        handler_name="build_final_response",
-    ),
 }
 
 

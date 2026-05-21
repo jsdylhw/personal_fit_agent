@@ -77,6 +77,7 @@ def normalize_workflow_plan(plan: WorkflowPlan, *, user_message: str = "") -> Wo
             user_message=user_message,
         )
         for step in plan.steps
+        if step.name != "final_response"
     ]
     return WorkflowPlan(
         task_type=plan.task_type,

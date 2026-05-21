@@ -30,7 +30,7 @@ def test_executor_stops_before_selection_when_validation_fails():
     assert result.step_results == []
 
 
-def test_executor_runs_activity_resolution_and_final_response():
+def test_executor_runs_activity_resolution_without_output_step():
     context = AgentContext(
         session_id="executor-test",
         current_fit_file=Path("/tmp/current.fit"),
@@ -38,7 +38,6 @@ def test_executor_runs_activity_resolution_and_final_response():
     )
     plan = _plan(
         WorkflowPlanStep(name="resolve_current_activity", reason="使用当前活动"),
-        WorkflowPlanStep(name="final_response", reason="汇总结果"),
     )
 
     result = execute_workflow_plan(plan, context)
@@ -46,13 +45,12 @@ def test_executor_runs_activity_resolution_and_final_response():
     assert result.status == "completed"
     assert [step.step_name for step in result.step_results] == [
         "resolve_current_activity",
-        "final_response",
     ]
     assert context.selected_activities[0]["activity_key"] == "activity-1"
-    assert result.final_response == "resolve_current_activity 已完成."
+    assert result.final_response is None
 
 
-def test_executor_final_response_handles_empty_activity_resolution():
+def test_executor_analysis_handles_empty_activity_resolution():
     context = AgentContext(session_id="executor-test")
     plan = _plan(
         WorkflowPlanStep(
@@ -60,7 +58,7 @@ def test_executor_final_response_handles_empty_activity_resolution():
             reason="定位不存在的活动",
             arguments={"date": "2099-01-01"},
         ),
-        WorkflowPlanStep(name="final_response", reason="说明空结果"),
+        WorkflowPlanStep(name="analyze_single_activity", reason="说明空结果"),
     )
 
     result = execute_workflow_plan(plan, context)
@@ -81,7 +79,6 @@ def test_executor_analysis_handles_empty_selected_activity():
             arguments={"date": "2099-01-01"},
         ),
         WorkflowPlanStep(name="analyze_single_activity", reason="分析未找到的活动"),
-        WorkflowPlanStep(name="final_response", reason="说明空结果"),
     )
 
     result = execute_workflow_plan(plan, context)
@@ -128,7 +125,6 @@ def test_executor_can_use_injected_step_handler():
     )
     plan = _plan(
         WorkflowPlanStep(name="analyze_single_activity", reason="分析当前活动"),
-        WorkflowPlanStep(name="final_response", reason="汇总结果"),
     )
     calls = []
 
@@ -215,15 +211,13 @@ def test_executor_can_continue_after_step_error_when_requested():
     )
     plan = _plan(
         WorkflowPlanStep(name="analyze_single_activity", reason="分析当前活动"),
-        WorkflowPlanStep(name="final_response", reason="汇总失败"),
     )
 
     result = execute_workflow_plan(plan, context, stop_on_error=False)
 
     assert result.status == "completed"
     assert result.step_results[0].status == "failed"
-    assert result.step_results[1].step_name == "final_response"
-    assert "执行失败" in (result.final_response or "")
+    assert result.final_response is None
 
 
 def test_executor_runs_compare_activities_from_existing_summaries(tmp_path, monkeypatch):
@@ -275,7 +269,6 @@ def test_executor_runs_compare_activities_from_existing_summaries(tmp_path, monk
     )
     plan = _plan(
         WorkflowPlanStep(name="compare_activities", reason="对比已有报告"),
-        WorkflowPlanStep(name="final_response", reason="输出对比结果"),
     )
 
     result = execute_workflow_plan(plan, context)
@@ -319,7 +312,6 @@ def test_executor_summarizes_selected_activity_range():
     )
     plan = _plan(
         WorkflowPlanStep(name="summarize_activity_range", reason="汇总上个月活动"),
-        WorkflowPlanStep(name="final_response", reason="输出汇总"),
     )
 
     result = execute_workflow_plan(plan, context)
@@ -393,6 +385,11 @@ def test_executor_summarizes_range_generates_missing_summary_and_reloads_index(t
 
     assert result.status == "completed"
     assert calls == [(str(missing_fit), False)]
+    generation = result.step_results[0].result["result"]["summary_generation"]
+    assert generation["generated_count"] == 1
+    assert generation["skipped_count"] == 1
+    assert generation["generated"][0]["fit_path"] == str(missing_fit)
+    assert generation["generated"][0]["summary_path"] == "data/summaries/a1.summary.json"
     assert context.selected_activities[0]["summary_label"] == "补齐后的报告标签"
     assert "补齐后的报告标签" in (result.final_response or "")
     assert "已有报告标签" in (result.final_response or "")
@@ -470,7 +467,6 @@ def test_executor_summarizes_empty_activity_range():
             arguments={"start_date": "2099-04-01", "end_date": "2099-04-30"},
         ),
         WorkflowPlanStep(name="summarize_activity_range", reason="汇总上个月活动"),
-        WorkflowPlanStep(name="final_response", reason="输出空结果"),
     )
 
     result = execute_workflow_plan(plan, context)

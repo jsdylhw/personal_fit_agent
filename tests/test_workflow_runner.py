@@ -29,7 +29,6 @@ def test_planned_workflow_executor_path_compares_existing_summaries(tmp_path, mo
         task_type="comparison",
         steps=[
             WorkflowPlanStep(name="compare_activities", reason="对比已有报告"),
-            WorkflowPlanStep(name="final_response", reason="输出最终回答"),
         ],
     )
 
@@ -46,11 +45,17 @@ def test_write_workflow_markdown_log_is_readable_and_md_only(tmp_path):
         user_message="分析所有历史活动",
         planner_plan={
             "task_type": "history_overview",
-            "steps": [{"name": "resolve_activity_range", "reason": "定位所有活动", "arguments": {"range": "all"}}],
+            "steps": [
+                {"name": "resolve_activity_range", "reason": "定位所有活动", "arguments": {"range": "all"}},
+                {"name": "final_response", "reason": "组织最终回答"},
+            ],
         },
         normalized_plan={
             "task_type": "history_overview",
-            "steps": [{"name": "resolve_activity_range", "reason": "定位所有活动", "arguments": {"range": "all"}}],
+            "steps": [
+                {"name": "resolve_activity_range", "reason": "定位所有活动", "arguments": {"range": "all"}},
+                {"name": "final_response", "reason": "组织最终回答"},
+            ],
         },
         execution={
             "status": "completed",
@@ -62,6 +67,37 @@ def test_write_workflow_markdown_log_is_readable_and_md_only(tmp_path):
                     "step_name": "resolve_activity_range",
                     "status": "completed",
                     "result": {"result": {"schema_version": "activity_list.v1", "count": 1}},
+                },
+                {
+                    "index": 1,
+                    "step_name": "summarize_activity_range",
+                    "status": "completed",
+                    "result": {
+                        "answer": "整体情况良好。",
+                        "result": {
+                            "schema_version": "activity_range_summary.v1",
+                            "count": 1,
+                            "summary_generation": {
+                                "generated_count": 1,
+                                "skipped_count": 0,
+                                "generated": [
+                                    {
+                                        "activity_index": 1,
+                                        "status": "analyzed",
+                                        "fit_path": "garmin_cn_fit_files/morning.fit",
+                                        "summary_path": "data/summaries/morning.summary.json",
+                                    }
+                                ],
+                                "skipped": [],
+                            },
+                        },
+                    },
+                },
+                {
+                    "index": 2,
+                    "step_name": "final_response",
+                    "status": "completed",
+                    "result": {"answer": "整体情况良好。"},
                 }
             ],
         },
@@ -89,7 +125,11 @@ def test_write_workflow_markdown_log_is_readable_and_md_only(tmp_path):
     assert "## Final Answer" in text
     assert "整体情况良好。" in text
     assert "## Planner Plan" in text
+    assert "final_response" not in text
     assert "## Execution" in text
+    assert "summary_generation" in text
+    assert "generated_count: `1`" in text
+    assert "status=`analyzed`" in text
     assert "晨间轻松骑" in text
     assert "data/summaries/morning.summary.json" in text
 
@@ -220,6 +260,20 @@ def test_normalize_workflow_plan_marks_ai_range_summary_request():
         "response_mode": "ai_summary",
         "detail_level": "detailed",
     }
+
+
+def test_normalize_workflow_plan_drops_legacy_final_response_step():
+    plan = WorkflowPlan(
+        task_type="range_summary",
+        steps=[
+            WorkflowPlanStep(name="summarize_activity_range", reason="汇总活动"),
+            WorkflowPlanStep(name="final_response", reason="旧 planner 输出的空转步骤"),
+        ],
+    )
+
+    normalized = normalize_workflow_plan(plan, user_message="分析所有活动")
+
+    assert [step.name for step in normalized.steps] == ["summarize_activity_range"]
 
 
 def test_normalize_workflow_plan_moves_top_level_clarifying_question_to_step():

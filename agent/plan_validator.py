@@ -97,7 +97,6 @@ def validate_workflow_plan(
         produced_state.update(spec.produces)
 
     _validate_confirmation_flow(plan, context, errors)
-    _validate_final_response(plan, warnings)
     return PlanValidationResult(errors=errors, warnings=warnings)
 
 
@@ -147,16 +146,6 @@ def _validate_confirmation_flow(
         errors.append("confirm_strava_upload 需要已有 pending_action 上传预览")
     elif context.pending_action.get("type") not in {"upload_preview", "strava_upload_preview"}:
         errors.append("confirm_strava_upload 的 pending_action 不是上传预览")
-
-
-def _validate_final_response(plan: WorkflowPlan, warnings: list[str]) -> None:
-    if not _has_step(plan, "final_response"):
-        warnings.append("计划没有 final_response,后续 executor 需要自行组织最终回答")
-        return
-
-    first_step = plan.steps[0].name if plan.steps else None
-    if first_step == "final_response" and plan.task_type not in {"casual_chat", "unknown"}:
-        warnings.append("final_response 是第一个步骤,请确认前面不需要分析或操作步骤")
 
 
 def _validate_step_arguments(

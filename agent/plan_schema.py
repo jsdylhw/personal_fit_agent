@@ -206,11 +206,6 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
         requires_confirmation=True,
         idempotent=False,
     ),
-    WorkflowStepSpec(
-        name="final_response",
-        description="根据已完成步骤的结果组织最终用户回答,不重新分析活动数据.",
-        category="output",
-    ),
 )
 
 

@@ -171,7 +171,7 @@ def _format_workflow_log(
             lines.append(f"- warning: {warning}")
         lines.append("")
 
-    lines.extend(_workflow_execution_section(execution))
+    lines.extend(_workflow_execution_section(execution, final_response=final_response))
     lines.extend(_workflow_activity_section(selected_activities, selected_activity_range))
     return lines
 
@@ -184,6 +184,10 @@ def _workflow_plan_section(title: str, plan: dict[str, Any]) -> list[str]:
         lines.append(f"- activity_scope: `{_inline_json(scope)}`")
     lines.append("")
     steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    steps = [
+        step for step in steps
+        if not (isinstance(step, dict) and step.get("name") == "final_response")
+    ]
     if not steps:
         lines.extend(["No steps.", ""])
         return lines
@@ -201,13 +205,15 @@ def _workflow_plan_section(title: str, plan: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _workflow_execution_section(execution: dict[str, Any]) -> list[str]:
+def _workflow_execution_section(execution: dict[str, Any], *, final_response: str = "") -> list[str]:
     lines = ["## Execution", ""]
     step_results = execution.get("step_results") if isinstance(execution.get("step_results"), list) else []
     if not step_results:
         return lines + ["No executed steps.", ""]
     for result in step_results:
         if not isinstance(result, dict):
+            continue
+        if _is_redundant_final_response_step(result, final_response):
             continue
         index = int(result.get("index") or 0) + 1
         name = result.get("step_name")
@@ -218,18 +224,26 @@ def _workflow_execution_section(execution: dict[str, Any]) -> list[str]:
             lines.append(f"- message: {result.get('message')}")
         if result.get("error"):
             lines.append(f"- error: `{result.get('error')}`")
-        lines.extend(_workflow_result_summary(result.get("result")))
+        lines.extend(_workflow_result_summary(result.get("result"), final_response=final_response))
         lines.append("")
     return lines
 
 
-def _workflow_result_summary(result: Any) -> list[str]:
+def _is_redundant_final_response_step(result: dict[str, Any], final_response: str) -> bool:
+    if result.get("step_name") != "final_response":
+        return False
+    payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+    answer = str(payload.get("answer") or "").strip()
+    return bool(answer and final_response and answer == final_response)
+
+
+def _workflow_result_summary(result: Any, *, final_response: str = "") -> list[str]:
     if not isinstance(result, dict):
         return []
     payload = result.get("result") if isinstance(result.get("result"), dict) else result
     lines: list[str] = []
     answer = result.get("answer")
-    if isinstance(answer, str) and answer.strip():
+    if isinstance(answer, str) and answer.strip() and answer.strip() != final_response:
         lines.extend(_markdown_block("Step Answer", answer))
     if not isinstance(payload, dict):
         return lines
@@ -254,6 +268,9 @@ def _workflow_result_summary(result: Any) -> list[str]:
                     ] if part
                 )
             )
+    generation = payload.get("summary_generation") if isinstance(payload.get("summary_generation"), dict) else {}
+    if generation:
+        lines.extend(_summary_generation_lines(generation))
     activities = payload.get("activities") if isinstance(payload.get("activities"), list) else []
     if activities:
         lines.append("- activities:")
@@ -261,6 +278,37 @@ def _workflow_result_summary(result: Any) -> list[str]:
             if isinstance(activity, dict):
                 lines.append(f"  - {_activity_line(activity)}")
     return lines
+
+
+def _summary_generation_lines(generation: dict[str, Any]) -> list[str]:
+    lines = [
+        "- summary_generation:",
+        f"  - generated_count: `{generation.get('generated_count', 0)}`",
+        f"  - skipped_count: `{generation.get('skipped_count', 0)}`",
+    ]
+    generated = generation.get("generated") if isinstance(generation.get("generated"), list) else []
+    skipped = generation.get("skipped") if isinstance(generation.get("skipped"), list) else []
+    if generated:
+        lines.append("  - generated:")
+        for item in generated:
+            if isinstance(item, dict):
+                lines.append(f"    - {_summary_generation_line(item)}")
+    if skipped:
+        lines.append("  - skipped:")
+        for item in skipped:
+            if isinstance(item, dict):
+                lines.append(f"    - {_summary_generation_line(item)}")
+    return lines
+
+
+def _summary_generation_line(item: dict[str, Any]) -> str:
+    parts = [
+        f"activity=#{item.get('activity_index')}" if item.get("activity_index") is not None else "",
+        f"status=`{item.get('status')}`" if item.get("status") else "",
+        f"fit=`{item.get('fit_path')}`" if item.get("fit_path") else "",
+        f"summary=`{item.get('summary_path')}`" if item.get("summary_path") else "",
+    ]
+    return ", ".join(part for part in parts if part)
 
 
 def _workflow_activity_section(

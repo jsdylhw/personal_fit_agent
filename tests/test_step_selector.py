@@ -29,10 +29,6 @@ def test_selector_maps_plan_steps_to_execution_specs():
                 name="analyze_single_activity",
                 reason="分析定位到的活动",
             ),
-            WorkflowPlanStep(
-                name="final_response",
-                reason="汇总分析结果",
-            ),
         ],
     )
 
@@ -43,7 +39,6 @@ def test_selector_maps_plan_steps_to_execution_specs():
     assert [step.execution.executor_type for step in result.selected_steps] == [
         "activity_resolution",
         "subworkflow",
-        "response",
     ]
     assert result.selected_steps[1].execution.handler_name == "run_single_activity_react_analysis"
     assert result.selected_steps[1].execution.allowed_tools == FIT_DATA_TOOLS

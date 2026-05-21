@@ -27,7 +27,6 @@ def test_validator_accepts_resolution_before_single_activity_analysis():
             name="analyze_single_activity",
             reason="定位活动后分析单条 FIT",
         ),
-        WorkflowPlanStep(name="final_response", reason="汇总分析结果"),
     )
 
     result = validate_workflow_plan(plan, context)
@@ -86,7 +85,6 @@ def test_validator_uses_existing_context_state():
     )
     plan = _plan(
         WorkflowPlanStep(name="analyze_single_activity", reason="分析当前活动"),
-        WorkflowPlanStep(name="final_response", reason="汇总分析结果"),
     )
 
     result = validate_workflow_plan(plan, context)
