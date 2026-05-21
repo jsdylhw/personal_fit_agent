@@ -129,21 +129,21 @@ python -m app.cli analyze-file "garmin_cn_fit_files/path/to/activity.fit" --hist
 
 `--history` 表示可以参考已经生成的紧凑历史.`--force` 表示即使 summary 已经存在,也重新请求大模型分析.
 
-## Agent 工作流模式
+## 规划执行工作流
 
-如果希望让大模型自己决定调用下载 / 分析 / 上传工具,可以使用完整工具集 agent:
-
-```bash
-python -m app.cli agent "下载最近 3 条 Garmin 活动,分析最新一条,先不要上传 Strava"
-```
-
-如果要让 agent 围绕某个本地 FIT 文件继续查询细节,传入 `--fit`:
+如果希望让大模型先规划步骤,再由程序侧按固定执行器调度,使用 `workflow`:
 
 ```bash
-python -m app.cli agent "看一下 100-200 秒是不是有短冲刺,然后给训练建议" --fit latest
+python -m app.cli workflow "下载最近 3 条 Garmin 活动,分析最新一条,先不要上传 Strava"
 ```
 
-`agent` 模式会暴露 11 个工具:5 个单活动只读数据工具 + 3 个活动发现工具 + `sync_garmin_activities`,`analyze_fit_file`,`upload_to_strava`.上传 Strava 仍然需要二次确认,第一次只返回预览.
+如果要围绕某个本地 FIT 文件继续查询细节,传入 `--fit`:
+
+```bash
+python -m app.cli workflow "看一下 100-200 秒是不是有短冲刺,然后给训练建议" --fit latest
+```
+
+`workflow` 模式会先让 planner 选择粗粒度步骤,再由 validator / selector / executor 执行.底层 FIT 工具不会直接暴露给 planner.上传 Strava 仍然需要二次确认,第一次只返回预览.
 
 ## 输出文件
 

@@ -5,6 +5,17 @@ from typer.testing import CliRunner
 from app.cli import app
 
 
+def test_cli_exposes_workflow_command_and_removes_old_agent_command():
+    result = CliRunner().invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "workflow" in result.output
+    assert " agent " not in result.output
+
+    missing = CliRunner().invoke(app, ["agent", "你好"])
+    assert missing.exit_code != 0
+
+
 def test_sync_garmin_command_calls_workflow_tool(monkeypatch):
     captured: dict[str, int] = {}
 
