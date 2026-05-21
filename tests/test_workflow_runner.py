@@ -147,6 +147,26 @@ def test_normalize_workflow_plan_preserves_all_history_range_step_name():
     assert normalized.steps[0].arguments == {"range": "all"}
 
 
+def test_normalize_workflow_plan_marks_ai_range_summary_request():
+    plan = WorkflowPlan(
+        task_type="history_overview",
+        steps=[
+            WorkflowPlanStep(name="resolve_activity_range", reason="定位全部历史活动", arguments={"range": "all"}),
+            WorkflowPlanStep(name="summarize_activity_range", reason="汇总所有历史活动"),
+        ],
+    )
+
+    normalized = normalize_workflow_plan(
+        plan,
+        user_message="分析所有活动 生成ai总结报告，详细一点",
+    )
+
+    assert normalized.steps[1].arguments == {
+        "response_mode": "ai_summary",
+        "detail_level": "detailed",
+    }
+
+
 def test_normalize_workflow_plan_moves_top_level_clarifying_question_to_step():
     plan = WorkflowPlan(
         task_type="clarification",

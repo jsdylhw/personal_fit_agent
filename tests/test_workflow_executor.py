@@ -398,6 +398,67 @@ def test_executor_summarizes_range_generates_missing_summary_and_reloads_index(t
     assert "已有报告标签" in (result.final_response or "")
 
 
+def test_executor_range_ai_summary_uses_local_report_brief(tmp_path, monkeypatch):
+    summary_path = tmp_path / "activity.summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "markdown_report": "# 很长的单活动报告\n这里不应该传给范围总结模型",
+                "history_entry": {
+                    "summary_label": "夜骑间歇训练",
+                    "brief": "43km 夜骑,多组超 FTP 间歇,NP 210W,TSS 114。",
+                    "main_stimulus": "间歇爬坡与阈值输出",
+                    "training_load": "中等",
+                    "quality_notes": ["心率后段明显升高", "功率数据完整"],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    class FakeClient:
+        def create_message(self, **kwargs):
+            captured.update(kwargs)
+            return {"content": [{"type": "text", "text": "这是 AI 生成的整体总结"}]}
+
+    monkeypatch.setattr("agent.workflow_executor.AnthropicMessagesClient", lambda: FakeClient())
+    context = AgentContext(
+        session_id="executor-test",
+        messages=[{"role": "user", "content": "分析所有活动 生成ai总结报告，详细一点"}],
+        selected_activities=[
+            {
+                "activity_index": 1,
+                "activity_key": "a1",
+                "file_name": "activity.fit",
+                "summary_path": str(summary_path),
+                "summary_label": "夜骑间歇训练",
+                "start_time_local": "2024-07-26T19:25:13",
+                "distance_km": 43.23,
+                "duration_min": 111.3,
+                "has_summary": True,
+            }
+        ],
+    )
+    plan = _plan(
+        WorkflowPlanStep(
+            name="summarize_activity_range",
+            reason="生成 AI 总结报告",
+            arguments={"response_mode": "ai_summary", "detail_level": "detailed"},
+        )
+    )
+
+    result = execute_workflow_plan(plan, context)
+    payload = json.loads(captured["user"])
+
+    assert result.final_response == "这是 AI 生成的整体总结"
+    assert payload["user_message"] == "分析所有活动 生成ai总结报告，详细一点"
+    assert payload["activity_details"][0]["summary_detail"]["brief"].startswith("43km 夜骑")
+    assert payload["activity_details"][0]["summary_detail"]["quality_notes"] == ["心率后段明显升高", "功率数据完整"]
+    assert "markdown_report" not in json.dumps(payload, ensure_ascii=False)
+
+
 def test_executor_summarizes_empty_activity_range():
     context = AgentContext(
         session_id="executor-test",

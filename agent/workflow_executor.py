@@ -6,6 +6,7 @@ validator 和 selector,再按 selector 给出的执行映射逐步调度.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -14,6 +15,7 @@ from agent.activity_comparison import compare_selected_activities
 from agent.activity_report import show_selected_activity_report
 from agent.activity_resolution import execute_activity_resolution_step
 from agent.context import AgentContext
+from agent.llm import AnthropicMessagesClient, extract_text
 from agent.plan_schema import WorkflowPlan, WorkflowPlanStep
 from agent.plan_validator import PlanValidationResult, validate_workflow_plan
 from agent.step_selector import (
@@ -389,10 +391,15 @@ def _execute_summarize_activity_range(
         },
         "activities": normalized,
     }
+    answer = (
+        _generate_range_ai_summary(result, activities, step, context)
+        if _should_generate_ai_range_summary(step)
+        else _format_range_summary_answer(result)
+    )
     return {
         "step": step.name,
         "status": "completed",
-        "answer": _format_range_summary_answer(result),
+        "answer": answer,
         "result": result,
     }
 
@@ -427,6 +434,84 @@ def _reload_activities_from_index(activities: list[dict[str, Any]]) -> list[dict
         else:
             refreshed.append(activity)
     return refreshed
+
+
+def _should_generate_ai_range_summary(step: WorkflowPlanStep) -> bool:
+    mode = str(step.arguments.get("response_mode") or step.arguments.get("summary_mode") or "").lower()
+    if mode in {"ai", "ai_summary", "llm", "llm_summary", "report"}:
+        return True
+    text = f"{step.reason} {step.arguments}".lower()
+    return any(token in text for token in ("ai", "大模型", "总结报告", "详细", "整体情况", "整体分析"))
+
+
+def _generate_range_ai_summary(
+    summary: dict[str, Any],
+    activities: list[dict[str, Any]],
+    step: WorkflowPlanStep,
+    context: AgentContext,
+) -> str:
+    user_message = _latest_user_message(context)
+    detail_level = str(step.arguments.get("detail_level") or "normal")
+    payload = {
+        "user_message": user_message,
+        "detail_level": detail_level,
+        "range_summary": summary,
+        "activity_details": [
+            _activity_for_range_llm(activity)
+            for activity in activities[:20]
+        ],
+    }
+    # 范围层只把本地 summary.json 的简要报告信息交给 LLM,不传整篇 markdown。
+    response = AnthropicMessagesClient().create_message(
+        system=(
+            "你是骑行训练分析助手.基于用户请求和本地已保存的活动简要报告,"
+            "输出中文活动整体总结报告.不要编造未提供的数据;不要输出 JSON."
+        ),
+        user=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        max_tokens=1800 if detail_level == "detailed" else 1000,
+        temperature=0.2,
+    )
+    text = extract_text(response)
+    return text.strip() or _format_range_summary_answer(summary)
+
+
+def _latest_user_message(context: AgentContext) -> str:
+    for message in reversed(context.messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            return str(message.get("content") or "")
+    return ""
+
+
+def _activity_for_range_llm(activity: dict[str, Any]) -> dict[str, Any]:
+    item = _compact_range_activity(activity)
+    summary_path = activity.get("summary_path")
+    if summary_path:
+        item["summary_detail"] = _read_summary_detail(summary_path)
+    return item
+
+
+def _read_summary_detail(summary_path: Any) -> dict[str, Any]:
+    try:
+        data = json.loads(Path(str(summary_path)).expanduser().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    history_entry = data.get("history_entry") if isinstance(data.get("history_entry"), dict) else {}
+    return {
+        key: history_entry.get(key)
+        for key in (
+            "summary_label",
+            "brief",
+            "main_stimulus",
+            "training_load",
+            "quality_notes",
+            "achievement",
+            "limiter",
+            "next_session_advice",
+        )
+        if history_entry.get(key) is not None
+    }
 
 
 def _build_final_response(context: AgentContext) -> dict[str, Any]:
