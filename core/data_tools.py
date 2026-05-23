@@ -76,6 +76,18 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
     avg_cadence = _first_number(session.get("avg_cadence"), _stats_value(stats, "cadence", "avg"))
     avg_speed = _first_number(session.get("enhanced_avg_speed"), session.get("avg_speed"), _stats_value(stats, "enhanced_speed", "avg"))
     total_ascent = _round_float(session.get("total_ascent"), 1)
+    normalized_power = _first_number(session.get("normalized_power"))
+    training_metadata = parsed.get("training_metadata") or {}
+    zones_target = training_metadata.get("zones_target") or {}
+    threshold_power = _first_number(session.get("threshold_power"), zones_target.get("functional_threshold_power"))
+    intensity_factor = _first_number(
+        session.get("intensity_factor"),
+        (normalized_power / threshold_power) if normalized_power and threshold_power else None,
+    )
+    tss = _first_number(
+        session.get("training_stress_score"),
+        _estimate_tss(normalized_power, threshold_power, duration_s) if normalized_power and threshold_power and duration_s else None,
+    )
 
     return {
         "schema_version": "activity_overview.v1",
@@ -96,12 +108,12 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
             "avg_speed_kmh": _mps_to_kmh(avg_speed),
             "avg_power_w": _round_float(avg_power, 1),
             "max_power_w": _round_float(max_power, 1),
-            "normalized_power_w": _round_float(session.get("normalized_power"), 1),
+            "normalized_power_w": _round_float(normalized_power, 1),
             "avg_hr_bpm": _round_float(avg_hr, 1),
             "max_hr_bpm": _round_float(max_hr, 1),
             "avg_cadence_rpm": _round_float(avg_cadence, 1),
-            "tss": _round_float(session.get("training_stress_score"), 1),
-            "intensity_factor": _round_float(session.get("intensity_factor"), 3),
+            "tss": _round_float(tss, 1),
+            "intensity_factor": _round_float(intensity_factor, 3),
         },
         "data_availability": {
             "record_count": summary.get("record_count"),
@@ -144,7 +156,7 @@ def get_activity_summary_tool(parsed: dict[str, Any], *, sections: Any = None) -
         "speed": lambda: _build_speed(session, stats),
         "elevation": lambda: _build_elevation(session, stats),
         "energy_load": lambda: _build_energy_load(session),
-        "training_zones": lambda: _build_training_zones(metadata),
+        "training_zones": lambda: _build_training_zones(metadata, parsed),
         "laps": lambda: _build_laps(parsed.get("laps") or []),
         "device_profile": lambda: _build_device_profile(metadata),
     }
@@ -399,6 +411,11 @@ def _build_power(session: dict[str, Any], stats: dict[str, dict[str, Any]], meta
     avg_power = _first_number(session.get("avg_power"), _stats_value(stats, "power", "avg"))
     normalized_power = _first_number(session.get("normalized_power"))
 
+    threshold_power = _first_number(session.get("threshold_power"), zones_target.get("functional_threshold_power"))
+    intensity_factor = _first_number(
+        session.get("intensity_factor"),
+        (normalized_power / threshold_power) if normalized_power and threshold_power else None,
+    )
     return {
         "available": bool(power_stats),
         "record_count_with_data": power_stats.get("count"),
@@ -407,8 +424,8 @@ def _build_power(session: dict[str, Any], stats: dict[str, dict[str, Any]], meta
             "avg_power_w": _round_float(avg_power, 1),
             "max_power_w": _round_float(_first_number(session.get("max_power"), _stats_value(stats, "power", "max")), 1),
             "normalized_power_w": _round_float(normalized_power, 1),
-            "threshold_power_w": _round_float(_first_number(session.get("threshold_power"), zones_target.get("functional_threshold_power")), 1),
-            "intensity_factor": _round_float(session.get("intensity_factor"), 3),
+            "threshold_power_w": _round_float(threshold_power, 1),
+            "intensity_factor": _round_float(intensity_factor, 3),
             # VI = NP / AP,> 1.05 通常表示节奏不稳定
             "variability_index": _round_float((normalized_power / avg_power) if avg_power and normalized_power else None, 3),
             "total_work_kj": _round_float(_first_number(session.get("total_work")) / 1000 if _first_number(session.get("total_work")) is not None else None, 1),
@@ -486,10 +503,103 @@ def _build_energy_load(session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_training_zones(metadata: dict[str, Any]) -> dict[str, Any]:
-    """FIT 文件中的原始区间定义和时间分布."""
+def _build_training_zones(metadata: dict[str, Any], parsed: dict[str, Any] | None = None) -> dict[str, Any]:
+    """区间定义和时间分布,缺失时从 records 计算."""
     zones_target = metadata.get("zones_target") or {}
-    return {"zones_target": zones_target, "time_in_zone": metadata.get("time_in_zone")}
+    time_in_zone = metadata.get("time_in_zone") or []
+
+    # 如果 time_in_zone 有边界但缺少实际时间分布,从 records 计算
+    if parsed is not None and time_in_zone:
+        time_in_zone = _ensure_time_in_zone_values(time_in_zone, parsed)
+
+    return {"zones_target": zones_target, "time_in_zone": time_in_zone}
+
+
+def _ensure_time_in_zone_values(
+    time_in_zone: list[dict[str, Any]],
+    parsed: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """如果 time_in_zone 条目有边界但无时间数据,从 records 补算."""
+    needs_power = any(
+        e.get("power_zone_high_boundary") and not e.get("time_in_power_zone")
+        for e in time_in_zone
+    )
+    needs_hr = any(
+        e.get("hr_zone_high_boundary") and not e.get("time_in_hr_zone")
+        for e in time_in_zone
+    )
+    if not needs_power and not needs_hr:
+        return time_in_zone
+
+    df = records_dataframe(parsed.get("records", []))
+    if df.empty:
+        return time_in_zone
+
+    result: list[dict[str, Any]] = []
+    for entry in time_in_zone:
+        enriched = dict(entry)
+        if needs_power and entry.get("power_zone_high_boundary") and not entry.get("time_in_power_zone"):
+            boundaries = entry["power_zone_high_boundary"]
+            if "power" in df.columns:
+                enriched["time_in_power_zone"] = _compute_zone_times(
+                    df, "power", boundaries, entry.get("functional_threshold_power")
+                )
+                enriched["pwr_calc_type"] = entry.get("pwr_calc_type", "computed_from_records")
+        if needs_hr and entry.get("hr_zone_high_boundary") and not entry.get("time_in_hr_zone"):
+            boundaries = entry["hr_zone_high_boundary"]
+            if "heart_rate" in df.columns:
+                enriched["time_in_hr_zone"] = _compute_zone_times(
+                    df, "heart_rate", boundaries, entry.get("max_heart_rate")
+                )
+                enriched["hr_calc_type"] = entry.get("hr_calc_type", "computed_from_records")
+        result.append(enriched)
+    return result
+
+
+def _compute_zone_times(
+    df: Any,
+    column: str,
+    boundaries: list[float],
+    _reference: Any = None,
+) -> list[float]:
+    """根据区间上界数组计算每区累计时间(秒).
+
+    区间定义: Z1 ≤ boundaries[0], Z2 ≤ boundaries[1], ..., ZN ≤ ∞
+    每条 record 的时间增量用 elapsed_s 的 diff,末条记 1 秒.
+    """
+    if column not in df.columns:
+        return []
+    records = df[["elapsed_s", column]].dropna().copy()
+    if records.empty:
+        return []
+    values = records[column].astype(float)
+    # 估算每条记录的时间增量
+    elapsed = records["elapsed_s"].astype(float)
+    diffs = elapsed.diff().fillna(1.0)
+    diffs = diffs.clip(lower=0.5)  # 单条至少 0.5s,避免大量 0
+    zone_times: list[float] = []
+    prev = 0.0
+    for bound in boundaries:
+        in_zone = diffs[(values > prev) & (values <= bound)].sum()
+        zone_times.append(round(float(in_zone), 1))
+        prev = bound
+    # 最后一区: > 最大边界
+    in_zone = diffs[values > prev].sum()
+    zone_times.append(round(float(in_zone), 1))
+    return zone_times
+
+
+def _estimate_tss(np_w: float | None, ftp_w: float | None, duration_s: float | None) -> float | None:
+    """从 NP / FTP / 时长估算 TSS(简化 Coggan 公式).
+
+    TSS = (duration_s * NP * IF) / (FTP * 3600) * 100
+    其中 IF = NP / FTP.
+    """
+    if not np_w or not ftp_w or not duration_s or ftp_w <= 0:
+        return None
+    if_val = np_w / ftp_w
+    tss = (duration_s * np_w * if_val) / (ftp_w * 3600) * 100
+    return round(tss, 1)
 
 
 def _build_laps(laps: list[dict[str, Any]]) -> dict[str, Any]:

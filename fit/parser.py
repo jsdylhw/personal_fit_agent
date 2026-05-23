@@ -75,6 +75,7 @@ def parse_fit(path: str | Path) -> dict[str, Any]:
 
     summary = summarize_fit(records, laps, sessions, sports)
     training_metadata = summarize_training_metadata(training_messages)
+    training_metadata = _enrich_with_athlete_profile(training_metadata)
     return {
         "path": str(fit_path),
         "summary": summary,
@@ -300,3 +301,9 @@ def _num(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _enrich_with_athlete_profile(metadata: dict[str, Any]) -> dict[str, Any]:
+    """用 data/athlete.json 补全 FIT 中缺失的 FTP/心率/区间设定."""
+    from core.athlete import enrich_training_metadata
+    return enrich_training_metadata(metadata)

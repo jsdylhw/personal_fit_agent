@@ -8,5 +8,6 @@ docs/
 
 
 config.yaml
+data/athlete.json
 .garmin_cn_tokens/
 
