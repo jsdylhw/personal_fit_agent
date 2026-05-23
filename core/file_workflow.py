@@ -114,7 +114,7 @@ def analyze_fit_file(
         "schema_version": "llm_fit_file_analysis.v1",
         "status": "analyzed",
         "activity_key": _activity_key(path),
-        "fit_path": str(path),
+        "fit_path": str(path.resolve().relative_to(Path.cwd())),
         "fit_summary": llm_safe_fit_summary(parsed["summary"]),
         "model": model_result.get("model"),
         "session_id": model_result.get("session_id"),
@@ -299,7 +299,7 @@ def normalize_history_entry(entry: dict[str, Any], *, path: Path, parsed: dict[s
     normalized = dict(entry)
     normalized.setdefault("schema_version", "llm_activity_history_entry.v1")
     normalized["activity_key"] = _activity_key(path)
-    normalized["file_path"] = str(path)
+    normalized["file_path"] = str(path.resolve().relative_to(Path.cwd()))
     local_start = local_time_without_timezone(
         summary.get("start_time_local")
         or normalized.get("start_time_local")

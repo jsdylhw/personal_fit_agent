@@ -96,7 +96,7 @@ def upsert_activity_from_summary(summary_path: str | Path, *, path: str | Path |
         activity_key=data.get("activity_key"),
     )
     entry.update({
-        "summary_path": str(summary_file),
+        "summary_path": str(summary_file.resolve().relative_to(Path.cwd())),
         "has_summary": True,
         "has_strava_summary": bool(data.get("strava_summary")),
         "status": data.get("status"),
@@ -257,7 +257,7 @@ def _entry_from_fit_summary(
     summary_path = Path("data") / "summaries" / f"{fit_path.stem}.summary.json"
     return prune_empty_values({
         "activity_key": key,
-        "fit_path": str(fit_path),
+        "fit_path": str(fit_path.resolve().relative_to(Path.cwd())),
         "summary_path": str(summary_path) if summary_path.exists() else None,
         "file_name": fit_path.name,
         "sport_type": summary.get("sport_type"),
