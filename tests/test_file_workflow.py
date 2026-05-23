@@ -193,6 +193,7 @@ class TestFitAnalysisToolCatalog:
 
 class TestActivityIndex:
     def test_upsert_and_resolve_activity_from_fit(self, tmp_path, monkeypatch, sample_parsed_fit):
+        monkeypatch.chdir(tmp_path)
         from core.activity_index import (
             get_activities_in_range,
             list_activities,
@@ -214,7 +215,7 @@ class TestActivityIndex:
         assert listed["activities"][0]["activity_index"] == 1
         resolved = resolve_activity(date_local="2026-05-14", path=index_path)
         assert resolved["matched_count"] == 1
-        assert resolved["activity"]["fit_path"] == str(fit_file.resolve())
+        assert resolved["activity"]["fit_path"] == "ride.fit"
         ranged = get_activities_in_range(start_date="2026-05-01", end_date="2026-05-31", path=index_path)
         assert ranged["count"] == 1
         assert ranged["totals"]["distance_km"] == 5.0
@@ -345,7 +346,8 @@ class TestGetActivitySummaryTool:
 
 
 class TestNormalizeHistoryEntry:
-    def test_fills_default_fields(self, sample_parsed_fit, tmp_path):
+    def test_fills_default_fields(self, sample_parsed_fit, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         fit_path = tmp_path / "test_activity.fit"
         fit_path.write_bytes(b"mock fit content")
         entry = {}
@@ -356,7 +358,8 @@ class TestNormalizeHistoryEntry:
         assert result["start_time"] == "2026-05-14T16:00:00"
         assert result["start_time_local"] == "2026-05-14T16:00:00"
 
-    def test_preserves_existing_fields(self, sample_parsed_fit, tmp_path):
+    def test_preserves_existing_fields(self, sample_parsed_fit, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         fit_path = tmp_path / "test_activity.fit"
         fit_path.write_bytes(b"mock fit content")
         entry = {"brief": "自定义笔记", "custom_field": "keep_me"}
@@ -364,7 +367,8 @@ class TestNormalizeHistoryEntry:
         assert result["brief"] == "自定义笔记"
         assert result["custom_field"] == "keep_me"
 
-    def test_strips_timezone_from_llm_history_time(self, sample_parsed_fit, tmp_path):
+    def test_strips_timezone_from_llm_history_time(self, sample_parsed_fit, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         fit_path = tmp_path / "test_activity.fit"
         fit_path.write_bytes(b"mock fit content")
         entry = {"start_time": "2026-05-14T16:00:00+08:00"}
@@ -531,6 +535,7 @@ class TestUploadErrorStates:
         summary_dir = tmp_path / "data" / "summaries"
         summary_dir.mkdir(parents=True)
         summary = {
+            "fit_path": "test.fit",
             "strava_summary": "测试总结",
             "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-15T08:00:00+08:00"},
             "activity_key": "abc123",
@@ -545,7 +550,7 @@ class TestUploadErrorStates:
         mock_sink.upload_fit.return_value = {"id": 99999}
         mock_sink.wait_for_upload.return_value = {"activity_id": 88888}
         mock_sink_cls = MagicMock(return_value=mock_sink)
-        monkeypatch.setattr("sinks.strava.StravaSink", mock_sink_cls)
+        monkeypatch.setattr("core.strava_workflow.StravaSink", mock_sink_cls)
 
         result = upload_to_strava_tool(str(fit_file), confirmed=True)
         assert result["status"] == "uploaded"
