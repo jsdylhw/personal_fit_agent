@@ -105,12 +105,13 @@ def analyze_fit_file_tool(fit_path: str, *, force: bool = False) -> dict[str, An
     }
 
 
-def upload_to_strava_tool(fit_path: str, *, confirmed: bool = False) -> dict[str, Any]:
+def upload_to_strava_tool(fit_path: str, *, confirmed: bool = False, force: bool = False) -> dict[str, Any]:
     """上传 FIT 文件到 Strava 并写入描述。需要两次调用:第一次预览,第二次 confirmed=true 执行。
 
     Args:
         fit_path: .fit 文件路径。
         confirmed: 是否确认执行上传。只接受 Python True,不接受字符串。
+        force: 遇到重复活动时改为更新已有活动的描述。
 
     Returns:
         dict: 第一次返回 {action_required, preview},执行成功返回 {status, strava_activity_id}。
@@ -136,33 +137,30 @@ def upload_to_strava_tool(fit_path: str, *, confirmed: bool = False) -> dict[str
             "message": "Are you sure you want to upload to Strava? Call again with confirmed=true to execute.",
         }
 
-    from sinks.strava import StravaSink
+    from core.strava_workflow import upload_summary_to_strava
 
-    fit_summary = summary.get("fit_summary") or {}
-    sport = fit_summary.get("sport_type") or "activity"
-    start = str(fit_summary.get("start_time_local") or fit_summary.get("start_time") or "")[:10]
-    title = f"{start} {sport}" if start else path.stem
-
-    sink = StravaSink()
-    upload = sink.upload_fit(
-        str(path), title=title, description=strava_summary,
-        external_id=summary.get("activity_key"),
-    )
-    upload_id = upload.get("id")
-    if not upload_id:
-        return {"error": "upload_failed", "message": "Strava did not return an upload ID", "raw": upload}
-
-    status = sink.wait_for_upload(upload_id)
-    activity_id = status.get("activity_id") if status else None
+    result = upload_summary_to_strava(str(summary_path), wait=True, force=force)
+    if result.get("status") == "duplicate":
+        return {
+            "status": "duplicate",
+            "strava_activity_id": result.get("strava_activity_id"),
+            "message": result.get("message"),
+        }
+    if result.get("status") == "description_updated":
+        return {
+            "status": "description_updated",
+            "strava_activity_id": result.get("strava_activity_id"),
+            "message": f"已更新 Strava 活动 {result.get('strava_activity_id')} 的描述。",
+        }
+    upload_status = result.get("upload_status") or {}
+    activity_id = upload_status.get("activity_id")
     if not activity_id:
-        return {"error": "upload_processing_failed", "upload_id": upload_id, "status": status}
-
+        return {"error": "upload_processing_failed", "status": result}
     return {
         "status": "uploaded",
         "strava_activity_id": activity_id,
-        "upload_id": upload_id,
-        "title": title,
-        "strava_summary_snippet": strava_summary[:120],
+        "title": result.get("title"),
+        "strava_summary_snippet": str(result.get("description", ""))[:120],
     }
 
 

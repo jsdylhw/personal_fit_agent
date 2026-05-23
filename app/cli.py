@@ -85,15 +85,19 @@ def upload_strava_command(
     summary_path: str,
     title: str | None = None,
     wait: bool = True,
+    force: bool = typer.Option(False, "--force", help="遇到重复活动时不报错,改为更新已有活动的描述"),
 ) -> None:
-    result = upload_summary_to_strava(summary_path, title=title, wait=wait)
+    result = upload_summary_to_strava(summary_path, title=title, wait=wait, force=force)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 
 @app.command("update-strava-description")
 def update_strava_description_command(activity_id: str, summary_path: str) -> None:
     result = update_strava_description_from_summary(activity_id, summary_path)
-    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    typer.echo(f"已更新 Strava 活动 {activity_id} 的描述。")
+    detail = result.get("description")
+    if detail:
+        typer.echo(f"描述长度: {len(detail)} 字符")
 
 
 @app.command("strava-auth-url")

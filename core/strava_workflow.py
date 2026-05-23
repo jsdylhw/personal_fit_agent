@@ -14,6 +14,7 @@ from sinks.strava import StravaSink
 
 def upload_summary_to_strava(
     summary_path: str | Path, *, title: str | None = None, wait: bool = True,
+    force: bool = False,
 ) -> dict[str, Any]:
     """从 summary JSON 读取 strava_summary 和 fit_path,上传到 Strava.
 
@@ -21,6 +22,7 @@ def upload_summary_to_strava(
         summary_path: data/summaries/*.summary.json 路径.
         title: 自定义活动标题,默认用日期+运动类型.
         wait: 是否轮询等待 Strava 处理完成.
+        force: 遇到 duplicate 时不报错,改为更新已有活动的描述.
 
     Returns:
         dict: {summary_path, fit_path, title, description, upload, upload_status?}
@@ -52,6 +54,27 @@ def upload_summary_to_strava(
     upload_id = upload.get("id")
     if wait and upload_id is not None:
         result["upload_status"] = sink.wait_for_upload(upload_id)
+    elif not wait and upload_id is None:
+        # upload_fit 直接返回了错误(如 duplicate)
+        result["upload_status"] = upload
+
+    # 处理 duplicate 错误:提取已有活动 ID,根据 force 决定报错还是更新描述
+    duplicate_id = _parse_duplicate_activity_id(result.get("upload_status") or {})
+    if duplicate_id:
+        if force:
+            updated = sink.update_description(duplicate_id, strava_summary)
+            result["status"] = "description_updated"
+            result["strava_activity_id"] = duplicate_id
+            result["update_result"] = updated
+            result.pop("upload_status", None)
+        else:
+            return {
+                "summary_path": str(path),
+                "fit_path": fit_path,
+                "status": "duplicate",
+                "strava_activity_id": duplicate_id,
+                "message": f"该活动已上传到 Strava (activity_id={duplicate_id})。使用 --force 更新描述,或手动调用 update-strava-description。",
+            }
     return result
 
 
@@ -75,6 +98,20 @@ def update_strava_description_from_summary(
     if not strava_summary:
         raise RuntimeError(f"summary does not contain strava_summary: {path}")
     return StravaSink().update_description(activity_id, strava_summary)
+
+
+def _parse_duplicate_activity_id(status: dict[str, Any]) -> str | None:
+    """从 Strava upload status 的 error 字段提取已有活动 ID.
+
+    Strava duplicate 错误格式:
+      "xxx.fit duplicate of <a href='/activities/18619000064' ...>Title</a>"
+    """
+    import re
+    error = status.get("error")
+    if not isinstance(error, str):
+        return None
+    match = re.search(r"/activities/(\d+)", error)
+    return match.group(1) if match else None
 
 
 def _default_title(fit_summary: dict[str, Any], fit_path: Path) -> str:
