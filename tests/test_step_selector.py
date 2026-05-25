@@ -46,16 +46,17 @@ def test_selector_maps_plan_steps_to_execution_specs():
 
 def test_selector_keeps_schema_constraints_on_execution_spec():
     sync_spec = get_step_execution_spec("sync_garmin_activities")
-    confirm_spec = get_step_execution_spec("confirm_strava_upload")
+    upload_spec = get_step_execution_spec("upload_strava_activity")
     analyze_spec = get_step_execution_spec("analyze_single_activity")
 
     assert sync_spec.side_effect is True
     assert sync_spec.idempotent is False
     assert sync_spec.produces == ("synced_fit_files",)
 
-    assert confirm_spec.side_effect is True
-    assert confirm_spec.requires_confirmation is True
-    assert confirm_spec.requires == ("current_fit_file", "upload_preview")
+    assert upload_spec.side_effect is True
+    assert upload_spec.requires_confirmation is False
+    assert upload_spec.requires == ("current_fit_file",)
+    assert upload_spec.handler_name == "upload_to_strava_confirmed"
 
     assert analyze_spec.side_effect is False
     assert analyze_spec.requires == ("current_fit_file",)

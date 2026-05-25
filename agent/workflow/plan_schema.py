@@ -197,20 +197,12 @@ WORKFLOW_STEP_SPECS: tuple[WorkflowStepSpec, ...] = (
         side_effect=True,
     ),
     WorkflowStepSpec(
-        name="prepare_strava_upload",
-        description="准备 Strava 上传预览,但不真正上传.",
+        name="upload_strava_activity",
+        description="用户明确要求上传 Strava 时,直接调用上传工具;不生成或刷新分析报告,工具成功或错误结果都交给 LLM 总结.",
         category="strava",
         requires=["current_fit_file"],
-        produces=["upload_preview"],
-    ),
-    WorkflowStepSpec(
-        name="confirm_strava_upload",
-        description="只在用户明确确认上传预览后执行 Strava 上传.",
-        category="strava",
-        requires=["current_fit_file", "upload_preview"],
         produces=["strava_upload_result"],
         side_effect=True,
-        requires_confirmation=True,
         idempotent=False,
     ),
 )

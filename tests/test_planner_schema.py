@@ -30,8 +30,7 @@ def test_key_workflow_step_flags_are_declared():
     sync_garmin = get_workflow_step("sync_garmin_activities")
     training_load = get_workflow_step("summarize_recent_training_load")
     route_advice = get_workflow_step("generate_route_advice")
-    prepare_upload = get_workflow_step("prepare_strava_upload")
-    confirm_upload = get_workflow_step("confirm_strava_upload")
+    direct_upload = get_workflow_step("upload_strava_activity")
 
     assert single_activity is not None
     assert single_activity.requires_current_fit is True
@@ -59,15 +58,11 @@ def test_key_workflow_step_flags_are_declared():
     assert route_advice is not None
     assert route_advice.requires == []
 
-    assert prepare_upload is not None
-    assert prepare_upload.side_effect is False
-    assert prepare_upload.requires_confirmation is False
-    assert prepare_upload.requires == ["current_fit_file"]
-
-    assert confirm_upload is not None
-    assert confirm_upload.side_effect is True
-    assert confirm_upload.requires_confirmation is True
-    assert confirm_upload.idempotent is False
+    assert direct_upload is not None
+    assert direct_upload.side_effect is True
+    assert direct_upload.requires_confirmation is False
+    assert direct_upload.requires == ["current_fit_file"]
+    assert direct_upload.produces == ["strava_upload_result"]
 
 
 def test_steps_can_be_filtered_by_category():
@@ -192,7 +187,7 @@ def test_build_planner_payload_contains_context_and_coarse_steps_only():
         current_fit_file=Path("/tmp/activity.fit"),
         current_activity_key="activity-1",
         history_enabled=True,
-        pending_action={"type": "upload_preview"},
+        pending_action={"type": "manual_review"},
     )
 
     payload = build_planner_payload("帮我看看最近一周训练情况，明天怎么练", context)
@@ -202,7 +197,7 @@ def test_build_planner_payload_contains_context_and_coarse_steps_only():
     assert payload["user_message"] == "帮我看看最近一周训练情况，明天怎么练"
     assert payload["context"]["current_fit_file"] == "/tmp/activity.fit"
     assert payload["context"]["current_activity_key"] == "activity-1"
-    assert payload["context"]["pending_action"] == {"type": "upload_preview"}
+    assert payload["context"]["pending_action"] == {"type": "manual_review"}
     assert "resolve_activity_range" in step_names
     assert "compare_activities" in step_names
     assert "ensure_activity_summaries" in step_names
@@ -214,6 +209,9 @@ def test_build_planner_payload_contains_context_and_coarse_steps_only():
     assert "arguments.force=true" in payload["instruction"]
     assert "只有明确比较/对比/差异" in payload["instruction"]
     assert "summarize_recent_training_load" in payload["instruction"]
+    assert "upload_strava_activity" in payload["instruction"]
+    assert "不要为了上传额外分析" in payload["instruction"]
+    assert "arguments.force=true" in payload["instruction"]
 
 
 def test_planner_catalog_guides_reanalysis_away_from_comparison():

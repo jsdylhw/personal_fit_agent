@@ -186,14 +186,8 @@ _BASE_EXECUTION_SPECS: dict[str, StepExecutionSpec] = {
         handler_name="ensure_activity_summaries",
         allowed_tools=("analyze_fit_file",),
     ),
-    "prepare_strava_upload": StepExecutionSpec(
-        step_name="prepare_strava_upload",
-        executor_type="tool",
-        handler_name="upload_to_strava_preview",
-        allowed_tools=("upload_to_strava",),
-    ),
-    "confirm_strava_upload": StepExecutionSpec(
-        step_name="confirm_strava_upload",
+    "upload_strava_activity": StepExecutionSpec(
+        step_name="upload_strava_activity",
         executor_type="tool",
         handler_name="upload_to_strava_confirmed",
         allowed_tools=("upload_to_strava",),

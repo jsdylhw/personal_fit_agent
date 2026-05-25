@@ -92,38 +92,35 @@ def test_validator_uses_existing_context_state():
     assert result.valid is True
 
 
-def test_validator_requires_existing_upload_preview_for_confirm_upload():
+def test_validator_accepts_direct_upload_with_side_effect_permission():
     context = AgentContext(
         session_id="validator-test",
         current_fit_file=Path("/tmp/current.fit"),
     )
     plan = _plan(
-        WorkflowPlanStep(name="confirm_strava_upload", reason="用户确认上传"),
+        WorkflowPlanStep(name="upload_strava_activity", reason="用户明确要求上传 Strava"),
         allow_side_effects=True,
-        requires_confirmation=True,
-    )
-
-    result = validate_workflow_plan(plan, context)
-
-    assert result.valid is False
-    assert any("pending_action" in error for error in result.errors)
-
-
-def test_validator_accepts_confirm_upload_with_pending_preview():
-    context = AgentContext(
-        session_id="validator-test",
-        current_fit_file=Path("/tmp/current.fit"),
-        pending_action={"type": "upload_preview", "fit_path": "/tmp/current.fit"},
-    )
-    plan = _plan(
-        WorkflowPlanStep(name="confirm_strava_upload", reason="用户确认上传"),
-        allow_side_effects=True,
-        requires_confirmation=True,
     )
 
     result = validate_workflow_plan(plan, context)
 
     assert result.valid is True
+
+
+def test_validator_rejects_direct_upload_without_side_effect_permission():
+    context = AgentContext(
+        session_id="validator-test",
+        current_fit_file=Path("/tmp/current.fit"),
+    )
+    plan = _plan(
+        WorkflowPlanStep(name="upload_strava_activity", reason="用户明确要求上传 Strava"),
+        allow_side_effects=False,
+    )
+
+    result = validate_workflow_plan(plan, context)
+
+    assert result.valid is False
+    assert any("allow_side_effects=false" in error for error in result.errors)
 
 
 def test_validator_checks_simple_argument_bounds():

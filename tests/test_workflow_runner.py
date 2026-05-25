@@ -276,6 +276,19 @@ def test_normalize_workflow_plan_drops_legacy_final_response_step():
     assert [step.name for step in normalized.steps] == ["summarize_activity_range"]
 
 
+def test_normalize_workflow_plan_marks_force_strava_upload():
+    plan = WorkflowPlan(
+        task_type="strava_upload",
+        steps=[
+            WorkflowPlanStep(name="upload_strava_activity", reason="上传 Strava"),
+        ],
+    )
+
+    normalized = normalize_workflow_plan(plan, user_message="强制上传 Strava")
+
+    assert normalized.steps[0].arguments == {"force": True}
+
+
 def test_normalize_workflow_plan_moves_top_level_clarifying_question_to_step():
     plan = WorkflowPlan(
         task_type="clarification",

@@ -97,7 +97,6 @@ def validate_workflow_plan(
         _validate_step_arguments(step.name, step.arguments, index, errors, warnings)
         produced_state.update(spec.produces)
 
-    _validate_confirmation_flow(plan, context, errors)
     return PlanValidationResult(errors=errors, warnings=warnings)
 
 
@@ -125,28 +124,11 @@ def _context_state(context: AgentContext) -> set[str]:
         state.add("activity_summary")
     if context.pending_action:
         state.add("pending_action")
-        if context.pending_action.get("type") in {"upload_preview", "strava_upload_preview"}:
-            state.add("upload_preview")
     return state
 
 
 def _has_step(plan: WorkflowPlan, step_name: str) -> bool:
     return any(step.name == step_name for step in plan.steps)
-
-
-def _validate_confirmation_flow(
-    plan: WorkflowPlan,
-    context: AgentContext,
-    errors: list[str],
-) -> None:
-    if not _has_step(plan, "confirm_strava_upload"):
-        return
-
-    # 上传确认必须来自上一轮 prepare 的 pending_action,不能在同一轮规划里自造确认.
-    if not context.pending_action:
-        errors.append("confirm_strava_upload 需要已有 pending_action 上传预览")
-    elif context.pending_action.get("type") not in {"upload_preview", "strava_upload_preview"}:
-        errors.append("confirm_strava_upload 的 pending_action 不是上传预览")
 
 
 def _validate_step_arguments(

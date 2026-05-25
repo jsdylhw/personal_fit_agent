@@ -200,10 +200,8 @@ def _execute_default_handler(
         return _execute_generate_summary_file(step, context)
     if step.name == "ensure_activity_summaries":
         return _execute_ensure_activity_summaries(step, context)
-    if step.name == "prepare_strava_upload":
-        return _execute_prepare_strava_upload(context)
-    if step.name == "confirm_strava_upload":
-        return _execute_confirm_strava_upload(context)
+    if step.name == "upload_strava_activity":
+        return _execute_upload_strava_activity(step, context)
     if step.name == "summarize_activity_range":
         return _execute_summarize_activity_range(step, context)
     if step.name == "compare_activities":
@@ -326,24 +324,63 @@ def _execute_ensure_activity_summaries(
     }
 
 
-def _execute_prepare_strava_upload(context: AgentContext) -> dict[str, Any]:
+def _execute_upload_strava_activity(
+    step: WorkflowPlanStep,
+    context: AgentContext,
+) -> dict[str, Any]:
     fit_path = _current_fit_path(context)
-    result = upload_to_strava_tool(str(fit_path), confirmed=False)
-    if result.get("action_required") == "confirm_upload":
-        context.pending_action = {
-            "type": "upload_preview",
+    upload_result = upload_to_strava_tool(
+        str(fit_path),
+        confirmed=True,
+        force=bool(step.arguments.get("force")),
+    )
+    return {
+        "step": step.name,
+        "status": "completed",
+        "result": {
+            "schema_version": "strava_upload_execution.v1",
             "fit_path": str(fit_path),
-            "preview": result.get("preview"),
-        }
-    return {"step": "prepare_strava_upload", "result": result}
+            "upload_result": upload_result,
+        },
+        "answer": _generate_upload_result_response(upload_result, step, context),
+    }
 
 
-def _execute_confirm_strava_upload(context: AgentContext) -> dict[str, Any]:
-    fit_path = _current_fit_path(context)
-    result = upload_to_strava_tool(str(fit_path), confirmed=True)
-    if result.get("status") == "uploaded":
-        context.pending_action = None
-    return {"step": "confirm_strava_upload", "result": result}
+def _generate_upload_result_response(
+    upload_result: dict[str, Any],
+    step: WorkflowPlanStep,
+    context: AgentContext,
+) -> str:
+    payload = {
+        "user_message": _latest_user_message(context),
+        "step": step.to_dict(),
+        "upload_result": upload_result,
+    }
+    response = AnthropicMessagesClient().create_message(
+        system=(
+            "你是 Personal FIT Agent 的 Strava 上传结果说明助手."
+            "只基于 upload_result 用中文简洁说明上传成功、重复、更新描述或失败原因;"
+            "不要补充新的活动分析,不要建议重新分析,除非工具错误明确要求先分析生成 summary."
+        ),
+        user=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        max_tokens=600,
+        temperature=0,
+    )
+    text = extract_text(response).strip()
+    return text or _format_upload_result_fallback(upload_result)
+
+
+def _format_upload_result_fallback(upload_result: dict[str, Any]) -> str:
+    if upload_result.get("error"):
+        return str(upload_result.get("message") or f"Strava 上传失败:{upload_result.get('error')}")
+    status = upload_result.get("status")
+    if status == "uploaded":
+        return f"Strava 上传成功,活动 ID: {upload_result.get('strava_activity_id')}。"
+    if status == "duplicate":
+        return str(upload_result.get("message") or "该活动已在 Strava 上存在。")
+    if status == "description_updated":
+        return str(upload_result.get("message") or "已更新 Strava 活动描述。")
+    return f"Strava 上传工具已返回结果: {status or 'unknown'}。"
 
 
 def _execute_summarize_activity_range(

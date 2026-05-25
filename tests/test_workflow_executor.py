@@ -280,6 +280,81 @@ def test_executor_runs_compare_activities_from_existing_summaries(tmp_path, monk
     assert "没有重新解析 FIT" in result.final_response
 
 
+def test_executor_direct_strava_upload_sends_tool_error_to_llm(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_upload_to_strava_tool(fit_path: str, *, confirmed: bool = False, force: bool = False):
+        captured["upload_call"] = {"fit_path": fit_path, "confirmed": confirmed, "force": force}
+        return {"error": "no_summary", "message": "Please analyze the activity first"}
+
+    def fake_analyze_fit_file_tool(*args, **kwargs):
+        raise AssertionError("upload step should not analyze FIT")
+
+    class FakeClient:
+        def create_message(self, **kwargs):
+            captured["llm_payload"] = kwargs
+            return {"content": [{"type": "text", "text": "上传失败:缺少 summary。"}]}
+
+    monkeypatch.setattr("agent.workflow.executor.upload_to_strava_tool", fake_upload_to_strava_tool)
+    monkeypatch.setattr("agent.workflow.executor.analyze_fit_file_tool", fake_analyze_fit_file_tool)
+    monkeypatch.setattr("agent.workflow.executor.AnthropicMessagesClient", lambda: FakeClient())
+    context = AgentContext(
+        session_id="executor-test",
+        current_fit_file=Path("/tmp/current.fit"),
+        messages=[{"role": "user", "content": "上传 Strava"}],
+    )
+    plan = _plan(
+        WorkflowPlanStep(name="upload_strava_activity", reason="用户明确要求上传"),
+        allow_side_effects=True,
+    )
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.step_results[0].status == "completed"
+    assert result.step_results[0].result["result"]["upload_result"]["error"] == "no_summary"
+    assert result.final_response == "上传失败:缺少 summary。"
+    assert captured["upload_call"] == {"fit_path": "/tmp/current.fit", "confirmed": True, "force": False}
+    assert "no_summary" in captured["llm_payload"]["user"]
+
+
+def test_executor_direct_strava_upload_sends_success_to_llm(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_upload_to_strava_tool(fit_path: str, *, confirmed: bool = False, force: bool = False):
+        captured["upload_call"] = {"fit_path": fit_path, "confirmed": confirmed, "force": force}
+        return {"status": "uploaded", "strava_activity_id": 12345}
+
+    class FakeClient:
+        def create_message(self, **kwargs):
+            captured["llm_payload"] = kwargs
+            return {"content": [{"type": "text", "text": "上传成功,Strava 活动 ID 是 12345。"}]}
+
+    monkeypatch.setattr("agent.workflow.executor.upload_to_strava_tool", fake_upload_to_strava_tool)
+    monkeypatch.setattr("agent.workflow.executor.AnthropicMessagesClient", lambda: FakeClient())
+    context = AgentContext(
+        session_id="executor-test",
+        current_fit_file=Path("/tmp/current.fit"),
+        messages=[{"role": "user", "content": "上传 Strava"}],
+    )
+    plan = _plan(
+        WorkflowPlanStep(
+            name="upload_strava_activity",
+            reason="用户明确要求上传",
+            arguments={"force": True},
+        ),
+        allow_side_effects=True,
+    )
+
+    result = execute_workflow_plan(plan, context)
+
+    assert result.status == "completed"
+    assert result.step_results[0].result["result"]["upload_result"]["status"] == "uploaded"
+    assert result.final_response == "上传成功,Strava 活动 ID 是 12345。"
+    assert captured["upload_call"] == {"fit_path": "/tmp/current.fit", "confirmed": True, "force": True}
+    assert "12345" in captured["llm_payload"]["user"]
+
+
 def test_executor_runs_training_load_summary_without_local_answer(tmp_path):
     summary = tmp_path / "activity.summary.json"
     summary.write_text(

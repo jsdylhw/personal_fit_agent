@@ -33,6 +33,12 @@ ensure_activity_summaries 并设置 arguments.force=true,同时 plan.allow_side_
 如果用户请求路线建议,可以直接选择 generate_route_advice;如果请求明显涉及
 训练状态、恢复、强度安排,再先定位相关活动范围并选择 summarize_recent_training_load.
 不要让 generate_route_advice 直接读取原始 FIT.
+如果用户明确说上传 Strava,应先定位要上传的活动,再选择 upload_strava_activity,
+并设置 plan.allow_side_effects=true;不要为了上传额外选择 analyze_single_activity、
+generate_summary_file 或 ensure_activity_summaries.如果上传工具返回错误,后续由执行器
+把工具结果交给 LLM 总结.
+如果用户说"强制上传","force","覆盖"或"更新已有",upload_strava_activity.arguments
+必须包含 {"force": true}.
 """
 
 
@@ -49,6 +55,9 @@ def build_planner_payload(user_message: str, context: AgentContext) -> dict[str,
             "才使用 compare_activities."
             "路线建议可以直接选择 generate_route_advice;只有涉及训练状态/恢复/强度安排时,"
             "才先选择 summarize_recent_training_load 生成结构化训练负荷."
+            "用户明确要求上传 Strava 时,先定位活动,再选择 upload_strava_activity,"
+            "设置 allow_side_effects=true;不要为了上传额外分析或刷新 summary."
+            "用户说强制上传/force/覆盖/更新已有时,upload_strava_activity.arguments.force=true."
         ),
         "user_message": user_message,
         "context": _planner_context(context),

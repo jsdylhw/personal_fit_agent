@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import requests
+
 MAX_SYNC_COUNT = 20
 
 
@@ -126,6 +128,7 @@ def upload_to_strava_tool(fit_path: str, *, confirmed: bool = False, force: bool
     strava_summary = summary.get("strava_summary")
     if not strava_summary:
         return {"error": "no_strava_summary", "message": "Summary does not contain strava_summary"}
+    pending_activity = _pending_strava_activity_info(path, summary, summary_path)
 
     # 防御层:即使调用方绕过路由直接传字符串,也不会误触发上传
     confirmed = _parse_strict_bool(confirmed)
@@ -139,17 +142,42 @@ def upload_to_strava_tool(fit_path: str, *, confirmed: bool = False, force: bool
 
     from core.strava_workflow import upload_summary_to_strava
 
-    result = upload_summary_to_strava(str(summary_path), wait=True, force=force)
+    try:
+        result = upload_summary_to_strava(str(summary_path), wait=True, force=force)
+    except requests.RequestException as exc:
+        return {
+            "error": "network_error",
+            "message": f"Strava network request failed: {exc}",
+            "pending_activity": pending_activity,
+        }
+    except TimeoutError as exc:
+        return {
+            "error": "network_error",
+            "message": f"Strava upload timed out: {exc}",
+            "pending_activity": pending_activity,
+        }
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {
+            "error": "upload_failed",
+            "message": str(exc),
+            "pending_activity": pending_activity,
+        }
     if result.get("status") == "duplicate":
+        existing_activity = _existing_strava_activity_info(result.get("strava_activity_id"))
         return {
             "status": "duplicate",
             "strava_activity_id": result.get("strava_activity_id"),
+            "existing_activity": existing_activity,
+            "pending_activity": pending_activity,
             "message": result.get("message"),
         }
     if result.get("status") == "description_updated":
+        existing_activity = _existing_strava_activity_info(result.get("strava_activity_id"))
         return {
             "status": "description_updated",
             "strava_activity_id": result.get("strava_activity_id"),
+            "existing_activity": existing_activity,
+            "pending_activity": pending_activity,
             "message": f"已更新 Strava 活动 {result.get('strava_activity_id')} 的描述。",
         }
     upload_status = result.get("upload_status") or {}
@@ -159,9 +187,37 @@ def upload_to_strava_tool(fit_path: str, *, confirmed: bool = False, force: bool
     return {
         "status": "uploaded",
         "strava_activity_id": activity_id,
+        "pending_activity": pending_activity,
         "title": result.get("title"),
         "strava_summary_snippet": str(result.get("description", ""))[:120],
     }
+
+
+def _pending_strava_activity_info(path: Path, summary: dict[str, Any], summary_path: Path) -> dict[str, Any]:
+    fit_summary = summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {}
+    return {
+        "activity_key": summary.get("activity_key"),
+        "fit_path": str(path),
+        "summary_path": str(summary_path),
+        "sport_type": fit_summary.get("sport_type"),
+        "start_time_local": fit_summary.get("start_time_local") or fit_summary.get("start_time"),
+        "title": _default_upload_title(fit_summary, path),
+        "strava_summary_snippet": str(summary.get("strava_summary") or "")[:120],
+    }
+
+
+def _existing_strava_activity_info(activity_id: Any) -> dict[str, Any]:
+    activity_id_text = str(activity_id or "")
+    return {
+        "strava_activity_id": activity_id_text or None,
+        "url": f"https://www.strava.com/activities/{activity_id_text}" if activity_id_text else None,
+    }
+
+
+def _default_upload_title(fit_summary: dict[str, Any], fit_path: Path) -> str:
+    start = str(fit_summary.get("start_time_local") or fit_summary.get("start_time") or "")[:10]
+    sport = fit_summary.get("sport_type") or "activity"
+    return f"{start} {sport}" if start else fit_path.stem
 
 
 def _parse_strict_bool(value: Any, default: bool = False) -> bool:

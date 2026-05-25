@@ -555,3 +555,103 @@ class TestUploadErrorStates:
         result = upload_to_strava_tool(str(fit_file), confirmed=True)
         assert result["status"] == "uploaded"
         assert result["strava_activity_id"] == 88888
+        assert result["pending_activity"]["fit_path"] == str(fit_file)
+
+    def test_duplicate_returns_existing_and_pending_activity(self, tmp_path, monkeypatch):
+        import json
+        from agent.tools.workflow import upload_to_strava_tool
+
+        fit_file = tmp_path / "test.fit"
+        fit_file.write_bytes(b"mock")
+        summary_dir = tmp_path / "data" / "summaries"
+        summary_dir.mkdir(parents=True)
+        summary = {
+            "fit_path": str(fit_file),
+            "strava_summary": "测试总结",
+            "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-15T08:00:00"},
+            "activity_key": "abc123",
+        }
+        (summary_dir / "test.summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        def fake_upload_summary_to_strava(summary_path: str, *, wait: bool = True, force: bool = False):
+            assert force is False
+            return {
+                "status": "duplicate",
+                "strava_activity_id": "18619000064",
+                "message": "该活动已上传到 Strava。",
+            }
+
+        monkeypatch.setattr("core.strava_workflow.upload_summary_to_strava", fake_upload_summary_to_strava)
+
+        result = upload_to_strava_tool(str(fit_file), confirmed=True)
+
+        assert result["status"] == "duplicate"
+        assert result["existing_activity"]["strava_activity_id"] == "18619000064"
+        assert result["existing_activity"]["url"] == "https://www.strava.com/activities/18619000064"
+        assert result["pending_activity"]["activity_key"] == "abc123"
+        assert result["pending_activity"]["title"] == "2026-05-15 cycling"
+
+    def test_force_duplicate_updates_existing_description(self, tmp_path, monkeypatch):
+        import json
+        from agent.tools.workflow import upload_to_strava_tool
+
+        fit_file = tmp_path / "test.fit"
+        fit_file.write_bytes(b"mock")
+        summary_dir = tmp_path / "data" / "summaries"
+        summary_dir.mkdir(parents=True)
+        summary = {
+            "fit_path": str(fit_file),
+            "strava_summary": "测试总结",
+            "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-15T08:00:00"},
+            "activity_key": "abc123",
+        }
+        (summary_dir / "test.summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        def fake_upload_summary_to_strava(summary_path: str, *, wait: bool = True, force: bool = False):
+            assert force is True
+            return {"status": "description_updated", "strava_activity_id": "18619000064"}
+
+        monkeypatch.setattr("core.strava_workflow.upload_summary_to_strava", fake_upload_summary_to_strava)
+
+        result = upload_to_strava_tool(str(fit_file), confirmed=True, force=True)
+
+        assert result["status"] == "description_updated"
+        assert result["existing_activity"]["strava_activity_id"] == "18619000064"
+        assert result["pending_activity"]["activity_key"] == "abc123"
+
+    def test_network_error_is_structured(self, tmp_path, monkeypatch):
+        import json
+        import requests
+        from agent.tools.workflow import upload_to_strava_tool
+
+        fit_file = tmp_path / "test.fit"
+        fit_file.write_bytes(b"mock")
+        summary_dir = tmp_path / "data" / "summaries"
+        summary_dir.mkdir(parents=True)
+        summary = {
+            "fit_path": str(fit_file),
+            "strava_summary": "测试总结",
+            "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-15T08:00:00"},
+            "activity_key": "abc123",
+        }
+        (summary_dir / "test.summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        def fake_upload_summary_to_strava(summary_path: str, *, wait: bool = True, force: bool = False):
+            raise requests.exceptions.ConnectTimeout("timeout")
+
+        monkeypatch.setattr("core.strava_workflow.upload_summary_to_strava", fake_upload_summary_to_strava)
+
+        result = upload_to_strava_tool(str(fit_file), confirmed=True)
+
+        assert result["error"] == "network_error"
+        assert "timeout" in result["message"]
+        assert result["pending_activity"]["activity_key"] == "abc123"

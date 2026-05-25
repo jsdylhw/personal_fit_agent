@@ -104,6 +104,8 @@ def _normalize_step_arguments(
         return _normalize_activity_range_step(step, scope)
     if step.name == "summarize_activity_range":
         return _normalize_range_summary_step(step, user_message)
+    if step.name == "upload_strava_activity":
+        return _normalize_strava_upload_step(step, user_message)
     if step.name != "resolve_recent_activities":
         return step
 
@@ -167,6 +169,20 @@ def _normalize_range_summary_step(step: WorkflowPlanStep, user_message: str) -> 
     )
 
 
+def _normalize_strava_upload_step(step: WorkflowPlanStep, user_message: str) -> WorkflowPlanStep:
+    if not _wants_force_strava_upload(user_message):
+        return step
+    arguments = dict(step.arguments)
+    arguments.setdefault("force", True)
+    if arguments == step.arguments:
+        return step
+    return WorkflowPlanStep(
+        name=step.name,
+        reason=step.reason,
+        arguments=arguments,
+    )
+
+
 def _wants_ai_range_summary(message: str) -> bool:
     text = message.lower()
     return any(token in text for token in ("ai", "大模型", "总结报告", "详细", "整体情况", "整体分析"))
@@ -174,6 +190,11 @@ def _wants_ai_range_summary(message: str) -> bool:
 
 def _wants_detailed_answer(message: str) -> bool:
     return any(token in message.lower() for token in ("详细", "详细一点", "展开", "报告"))
+
+
+def _wants_force_strava_upload(message: str) -> bool:
+    text = message.lower()
+    return "上传" in text and any(token in text for token in ("强制", "force", "--force", "覆盖", "更新已有"))
 
 
 def _normalize_activity_range_step(
