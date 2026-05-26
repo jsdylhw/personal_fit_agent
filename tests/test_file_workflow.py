@@ -220,6 +220,36 @@ class TestActivityIndex:
         assert ranged["count"] == 1
         assert ranged["totals"]["distance_km"] == 5.0
 
+    def test_fit_upsert_preserves_existing_summary_flags(self, tmp_path, monkeypatch, sample_parsed_fit):
+        monkeypatch.chdir(tmp_path)
+        from core.activity_index import (
+            load_activity_index,
+            upsert_activity_entry,
+            upsert_activity_from_fit,
+        )
+
+        fit_file = tmp_path / "ride.fit"
+        fit_file.write_bytes(b"mock fit")
+        index_path = tmp_path / "data" / "activity_index.json"
+        monkeypatch.setattr("core.activity_index.parse_fit", lambda path: sample_parsed_fit)
+        upsert_activity_entry(
+            {
+                "activity_key": "same",
+                "fit_path": "ride.fit",
+                "has_summary": True,
+                "has_strava_summary": True,
+                "summary_path": "data/summaries/ride.summary.json",
+            },
+            path=index_path,
+        )
+
+        upsert_activity_from_fit(fit_file, path=index_path)
+
+        row = load_activity_index(index_path)["activities"][0]
+        assert row["has_summary"] is True
+        assert row["has_strava_summary"] is True
+        assert row["summary_path"] == "data/summaries/ride.summary.json"
+
 
 class TestCallFitAnalysisTool:
     def test_unknown_tool_returns_error(self, sample_parsed_fit):

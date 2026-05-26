@@ -43,11 +43,14 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
 
     downloaded: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    indexed: list[dict[str, Any]] = []
+    index_errors: list[dict[str, Any]] = []
 
     for activity in activities:
         activity_id = activity.get("activityId")
         existing = existing_fit_paths(output_dir, activity)
         if existing:
+            _index_fit_paths(existing, activity_id=activity_id, indexed=indexed, errors=index_errors)
             skipped.append({
                 "activity_id": activity_id,
                 "name": activity.get("activityName"),
@@ -58,6 +61,7 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
 
         raw_bytes = downloader.download_original(activity_id)
         saved = save_original_as_fit(raw_bytes, output_dir, activity)
+        _index_fit_paths(saved, activity_id=activity_id, indexed=indexed, errors=index_errors)
         downloaded.append({
             "activity_id": activity_id,
             "name": activity.get("activityName"),
@@ -72,7 +76,43 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
         "skipped": len(skipped),
         "downloaded_items": downloaded,
         "skipped_items": skipped,
+        "indexed": len(indexed),
+        "indexed_items": indexed,
+        "index_errors": index_errors,
     }
+
+
+def _index_fit_paths(
+    paths: list[Path],
+    *,
+    activity_id: Any,
+    indexed: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+) -> None:
+    from core.activity_index import upsert_activity_from_fit
+
+    for path in paths:
+        try:
+            entry = upsert_activity_from_fit(
+                path,
+                source="garmin_cn",
+                source_activity_id=str(activity_id) if activity_id is not None else None,
+            )
+        except Exception as exc:
+            errors.append({
+                "path": str(path),
+                "activity_id": activity_id,
+                "error": type(exc).__name__,
+                "message": str(exc),
+            })
+            continue
+        indexed.append({
+            "path": str(path),
+            "activity_id": activity_id,
+            "activity_key": entry.get("activity_key"),
+            "sport_type": entry.get("sport_type"),
+            "start_time_local": entry.get("start_time_local"),
+        })
 
 
 def analyze_fit_file_tool(fit_path: str, *, force: bool = False) -> dict[str, Any]:

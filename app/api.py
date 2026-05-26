@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from core.config import cfg_get, load_config
+from core.activity_index import upsert_activity_from_fit
 from core.file_workflow import analyze_fit_file
 from core.garmin_cn import (
     DEFAULT_OUTPUT_DIR,
@@ -98,26 +99,31 @@ def garmin_download_endpoint(request: DownloadGarminRequest) -> dict[str, Any]:
     activities = downloader.list_activities(count)
     results: list[dict[str, Any]] = []
     for activity in activities:
+        activity_id = activity.get("activityId")
         existing_paths = existing_fit_paths(output_dir, activity)
         if existing_paths:
+            index_results = _index_downloaded_fit_paths(existing_paths, activity_id)
             results.append(
                 {
-                    "activity_id": activity.get("activityId"),
+                    "activity_id": activity_id,
                     "name": activity.get("activityName"),
                     "status": "skipped_existing",
                     "paths": [str(path) for path in existing_paths],
+                    "index_results": index_results,
                 }
             )
             continue
 
-        raw_bytes = downloader.download_original(activity.get("activityId"))
+        raw_bytes = downloader.download_original(activity_id)
         saved_paths = save_original_as_fit(raw_bytes, output_dir, activity)
+        index_results = _index_downloaded_fit_paths(saved_paths, activity_id)
         results.append(
             {
-                "activity_id": activity.get("activityId"),
+                "activity_id": activity_id,
                 "name": activity.get("activityName"),
                 "status": "downloaded",
                 "paths": [str(path) for path in saved_paths],
+                "index_results": index_results,
             }
         )
 
@@ -129,6 +135,33 @@ def garmin_download_endpoint(request: DownloadGarminRequest) -> dict[str, Any]:
         "skipped": sum(1 for item in results if item["status"] == "skipped_existing"),
         "results": results,
     }
+
+
+def _index_downloaded_fit_paths(paths: list[Path], activity_id: Any) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            entry = upsert_activity_from_fit(
+                path,
+                source="garmin_cn",
+                source_activity_id=str(activity_id) if activity_id is not None else None,
+            )
+        except Exception as exc:
+            results.append({
+                "path": str(path),
+                "status": "failed",
+                "error": type(exc).__name__,
+                "message": str(exc),
+            })
+            continue
+        results.append({
+            "path": str(path),
+            "status": "indexed",
+            "activity_key": entry.get("activity_key"),
+            "sport_type": entry.get("sport_type"),
+            "start_time_local": entry.get("start_time_local"),
+        })
+    return results
 
 
 @app.get("/api/fit-files")
