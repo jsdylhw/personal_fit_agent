@@ -1,34 +1,27 @@
-﻿# Personal FIT Agent
+# Personal FIT Agent
 
-这是一个本地 Garmin 中国 FIT 下载和大模型优先的运动分析工具.
+本项目是一个本地运动数据助手:下载 Garmin 中国 FIT 文件,用大模型生成活动报告,维护本地活动索引,再按需要上传到 Strava。
 
-当前主流程:
+当前主链路是:
 
 ```text
-Garmin 中国 -> 下载 FIT 文件 -> 单个 FIT 分析 / 规划执行工作流 -> 生成报告 / 总结 / 历史记录 -> 上传 FIT 和总结到 Strava
+Garmin 中国 / 本地 FIT -> 活动索引 -> Planner 生成粗粒度计划 -> 固定 Executor 执行 -> Markdown 报告 / summary JSON / Strava 上传
 ```
 
-现在使用文件式 workflow,不依赖本地 SQLite 数据库.程序会保留原始 FIT 文件,Markdown 报告,每条活动的 JSON summary,大模型分析日志,以及一份 JSONL 训练历史.
+Planner 只负责选择粗粒度 workflow step,不会直接调用底层 FIT 工具。真正执行由程序侧的 validator、selector 和 executor 控制。
 
 ## 功能
 
-- 从 Garmin 中国下载最近的活动为 `.fit` 文件.
-- 如果本地已经存在对应 FIT,则跳过重复下载.
-- 支持分析单个 FIT 文件.
-- 支持通过 `workflow` 让大模型先规划粗粒度步骤,再由程序侧固定执行器完成活动定位、分析、汇总和上传预览.
-- 分析走隐藏的大模型 tool loop:
-  - 第一次只发送简短 FIT 摘要;
-  - 模型按需请求活动概览,结构化摘要,时间/距离区间或历史记录;
-- 完整隐藏交互会保存到 `log/`,同时生成同名 `.md` 可读日志.
-- 每次分析生成:
-  - 完整 Markdown 活动报告;
-  - 约 200 个中文字符,适合 Strava 的活动总结;口吻会加权随机选择,包含正常训练日志,专业教练,轻松骑友,简洁复盘,轻微自嘲和猫娘风格,其中猫娘概率会稍高;
-  - 用于后续对比的紧凑 `history_entry`.
-- 支持上传原始 FIT 到 Strava,并把生成的 Strava 总结作为活动描述.
+- 下载 Garmin 中国最近活动为 `.fit` 文件,本地已存在时跳过。
+- 分析单个 FIT,生成 Markdown 活动报告和 `data/summaries/*.summary.json`。
+- 通过 `workflow` 用自然语言定位活动、分析单次活动、汇总活动范围、比较活动、总结训练负荷和上传 Strava。
+- 单活动分析内部仍是隐藏 LLM tool loop:模型只能按需读取概览、结构化摘要、区间数据、冲刺/爬坡扫描和历史记录。
+- workflow 日志以可读 Markdown 为主,记录 planner、归一化计划、执行步骤、选中活动和关键结果。
+- Strava 上传使用本地 summary 中的 `fit_path` 和 `strava_summary`;workflow 上传步骤会直接执行上传,再把工具返回结果交给大模型组织说明。
 
 ## 安装
 
-推荐 Python 3.12.
+推荐 Python 3.12 或更高版本。
 
 ```bash
 pip install -r requirements.txt
@@ -42,7 +35,7 @@ pip install -e .
 
 ## 配置
 
-在项目根目录创建 `config.yaml`.这个文件已经被 git 忽略.
+在项目根目录创建 `config.yaml`.这个文件不会提交到 git。
 
 ```yaml
 download_count: 5
@@ -63,15 +56,6 @@ agent:
   timeout_seconds: 300
   max_retries: 2
 
-athlete:
-  ftp: 250
-  weight_kg: 70
-  max_heart_rate: 190
-  resting_heart_rate: 50
-  threshold_heart_rate: 170
-  goals: "提升有氧耐力和 FTP"
-  notes: "可写伤病,训练偏好,近期目标等"
-
 strava:
   client_id: "your-strava-client-id"
   client_secret: "your-strava-client-secret"
@@ -79,151 +63,171 @@ strava:
   timeout_seconds: 120
 ```
 
-`agent.base_url` 需要兼容 Anthropic Messages API 的 `/v1/messages`.
+`agent.base_url` 需要兼容 Anthropic Messages API 的 `/v1/messages`。
 
-Strava 上传需要 token 具备 `activity:write` 权限.推荐配置 `client_id`,`client_secret` 和 `refresh_token`,程序会在请求前自动刷新短期 access token.
+运动员档案已经迁移到 `data/athlete.json`,用于补全 FIT 缺失的 FTP、最大心率、静息心率、阈值心率和区间信息。可以从示例文件复制:
 
-检查 Strava 认证是否可用:
+```bash
+cp data/athlete.example.json data/athlete.json
+```
+
+示例结构:
+
+```json
+{
+  "ftp": 250,
+  "max_heart_rate": 190,
+  "resting_heart_rate": 50,
+  "threshold_heart_rate": 170,
+  "weight": 70,
+  "height": 175
+}
+```
+
+Strava 上传需要 `activity:write` 权限。推荐配置 `client_id`、`client_secret` 和 `refresh_token`,程序会在请求前刷新短期 access token。
+
+检查 Strava 认证:
 
 ```bash
 python -m app.cli strava-check-auth
 ```
 
-如果上传时报 `activity:write_permission missing`,说明当前 Strava token 没有写入权限,需要重新授权:
+生成授权 URL:
 
 ```bash
 python -m app.cli strava-auth-url
 ```
 
-打开命令输出的 URL,授权后浏览器会跳转到一个带 `code` 参数的地址.复制这个 `code`,然后执行:
+拿浏览器回调地址里的 `code` 换 token:
 
 ```bash
 python -m app.cli strava-exchange-code "PASTE_CODE_HERE"
 ```
 
-把返回结果里的 `refresh_token` 写回 `config.yaml` 的 `strava.refresh_token`.
+把返回里的 `refresh_token` 写回 `config.yaml`。
 
-## 下载 FIT
+## 常用命令
 
 下载 Garmin 中国最近活动:
-
-```bash
-python -m app.cli sync-garmin
-```
-
-临时覆盖下载数量:
 
 ```bash
 python -m app.cli sync-garmin --count 1
 ```
 
-本地已有的 FIT 文件会自动跳过.
-
-## 分析 FIT
-
-分析单个 FIT 文件:
+分析单个 FIT:
 
 ```bash
 python -m app.cli analyze-file "garmin_cn_fit_files/path/to/activity.fit" --force
 ```
 
-也可以直接分析最近的本地 FIT:
+分析最近的本地 FIT:
 
 ```bash
 python -m app.cli analyze-file latest
 ```
 
-`analyze-file` 复用 workflow 内部的 `analyze_fit_file` 工具入口,会解析 `latest`、目录或具体 FIT 文件路径.`--force` 表示即使 summary 已经存在,也重新请求大模型分析.
-
-## 规划执行工作流
-
-如果希望让大模型先规划步骤,再由程序侧按固定执行器调度,使用 `workflow`:
+运行规划执行 workflow:
 
 ```bash
-python -m app.cli workflow "下载最近 3 条 Garmin 活动,分析最新一条,先不要上传 Strava"
+python -m app.cli workflow "分析最新的活动"
 ```
 
-如果要围绕某个本地 FIT 文件继续查询细节,传入 `--fit`:
+围绕某个 FIT 运行 workflow:
 
 ```bash
-python -m app.cli workflow "看一下 100-200 秒是不是有短冲刺,然后给训练建议" --fit latest
+python -m app.cli workflow "看一下 100-200 秒是不是有短冲刺" --fit latest
 ```
 
-`workflow` 模式会先让 planner 选择粗粒度步骤,再由 validator / selector / executor 执行.底层 FIT 工具不会直接暴露给 planner.上传 Strava 仍然需要二次确认,第一次只返回预览.
+输出完整 JSON 方便调试:
 
-## 输出文件
-
-```text
-garmin_cn_fit_files/          # 下载的原始 FIT 文件
-data/summaries/               # 每条活动的 JSON summary(包含 markdown_report + strava_summary)
-data/activity_index.json      # 本地活动索引,用于按日期/范围发现活动
-data/activity_history.jsonl   # 大模型生成的紧凑训练历史
-log/                          # 完整大模型请求 / 响应 / tool loop 日志,含 jsonl 和 md
+```bash
+python -m app.cli workflow "分析所有历史活动的整体情况" --json --include-details
 ```
 
-`data/summaries/*.summary.json` 是分析结果的唯一权威数据源,包含:
-
-- FIT 摘要;
-- 完整 Markdown 报告(`markdown_report`);
-- Strava 总结(`strava_summary`);
-- 本次随机选择的 Strava 总结口吻;
-- 大模型生成的历史条目;
-- 原始 FIT 文件路径;
-- 工具循环日志路径.
-
-`log/*.jsonl` + `log/*.md` 保存完整 LLM 交互记录,每次分析生成一对同名文件.
-
-## 上传到 Strava
-
-分析完成后,可以上传原始 FIT,并把生成的 Strava 总结作为活动描述:
+从 summary 上传到 Strava:
 
 ```bash
 python -m app.cli upload-strava "data/summaries/activity.summary.json"
 ```
 
-自定义 Strava 活动标题:
-
-```bash
-python -m app.cli upload-strava "data/summaries/activity.summary.json" --title "Morning Ride"
-```
-
-如果活动已经在 Strava 上,只想更新描述:
+更新已有 Strava 活动描述:
 
 ```bash
 python -m app.cli update-strava-description STRAVA_ACTIVITY_ID "data/summaries/activity.summary.json"
 ```
 
-`upload-strava` 会从 summary JSON 里读取 `fit_path` 和 `strava_summary`.默认会等待 Strava 处理上传结果;如果只想拿到上传请求返回,可以加 `--no-wait`.
+## Workflow 设计
 
-如果上传看起来"卡住",通常是等待 Strava 处理上传状态.可以先用:
+外层 workflow 的步骤定义在 `agent/workflow/plan_schema.py`。大模型只允许选择这些业务步骤,例如:
 
-```bash
-python -m app.cli upload-strava "data/summaries/activity.summary.json" --no-wait
+- `resolve_recent_activities`
+- `resolve_activity_by_date`
+- `resolve_activity_range`
+- `analyze_single_activity`
+- `summarize_activity_range`
+- `compare_activities`
+- `summarize_recent_training_load`
+- `sync_garmin_activities`
+- `ensure_activity_summaries`
+- `upload_strava_activity`
+
+执行映射在 `agent/workflow/step_selector.py`,具体执行在 `agent/workflow/executor.py`。如果 step 没有 handler,执行层会明确报 `handler_not_implemented`,不会让大模型假装已经完成。
+
+## 输出文件
+
+```text
+garmin_cn_fit_files/          # 下载的原始 FIT 文件
+data/activity_index.json      # 本地活动索引,用于按日期/序号/范围定位活动
+data/activity_history.jsonl   # 大模型生成的紧凑训练历史
+data/summaries/               # 每条活动的 summary JSON
+log/                          # workflow 和单活动分析日志,以 Markdown 可读日志为主
 ```
 
-本地 Web 界面的"上传 Strava"按钮默认不等待处理完成,只确认上传请求已提交.
+`data/summaries/*.summary.json` 是分析结果的主要结构化数据源,通常包含:
 
-## 分析工具
+- `fit_path`
+- `fit_summary`
+- `markdown_report`
+- `strava_summary`
+- `history_entry`
+- `activity_key`
 
-FIT 分析 workflow(`analyze-file`)通过隐藏的 LLM tool loop 工作:模型按需调用以下 5 个数据工具获取结构化信息,然后自行完成分析推理和报告写作.
+这些文件都是本地运行产物。仓库只保留必要示例,新的运行结果默认不应提交。
 
-| 工具 | 用途 |
-|---|---|
-| `get_activity_overview` | 高层活动概览(运动类型,时长,距离,基础指标,数据可用性) |
-| `get_activity_summary` | 按模块获取结构化摘要(功率,心率,踏频,海拔,训练负荷等) |
-| `get_time_intervals` | 固定时间窗口的聚合平均值,支持按时间范围过滤 |
-| `get_distance_intervals` | 固定距离窗口的聚合平均值,支持按距离范围过滤 |
-| `get_history` | 获取历史训练记录用于纵向对比 |
+## FIT 分析工具
 
-正常 CLI 分析时,这些工具调用不会展示给用户,但完整记录会保存在 `log/`.其中 `.jsonl` 适合程序读取,`.md` 适合直接查看.
-
-完整 `agent` 模式在上面 5 个数据工具之外,还会暴露:
+单活动分析内部可用的数据工具在 `agent/tools/fit_analysis.py`:
 
 | 工具 | 用途 |
 |---|---|
-| `list_activities` | 列出 `data/activity_index.json` 中的本地活动 |
-| `resolve_activity` | 按日期、文件名、activity_key、运动类型解析单条活动 |
-| `get_activities_in_range` | 获取一段日期范围内的活动,用于周/月总结 |
-| `sync_garmin_activities` | 下载 Garmin 中国最近活动,自动跳过已有 FIT |
-| `analyze_fit_file` | 批处理生成/刷新 summary JSON 和 Strava 总结 |
-| `upload_to_strava` | 上传 FIT 到 Strava,并写入生成的 Strava 总结;需要二次确认 |
+| `get_activity_overview` | 活动高层概览,适合清单和快速判断 |
+| `get_activity_summary` | 单活动完整分析的主要结构化数据 |
+| `scan_activity_segments` | 扫描 30 秒以上高功率区间,并标记明显爬升 |
+| `get_time_intervals` | 固定时间窗口聚合 |
+| `get_distance_intervals` | 固定距离窗口聚合 |
+| `get_history` | 读取历史训练记录 |
+
+外层 planner 不直接调用这些工具;它只选择 `analyze_single_activity` 或 `summarize_activity_range` 等粗粒度步骤。
+
+## 调试入口
+
+`app.debug_cli` 保留给开发调试,例如查看 planner 输出:
+
+```bash
+python -m app.debug_cli plan-workflow "比较昨天的两次活动"
+```
+
+列出本地索引活动:
+
+```bash
+python -m app.debug_cli list-activities --limit 10
+```
+
+## 实验脚本
+
+`demo/` 目录只放独立验证脚本,不接入主 workflow。
+
+- `demo/onelap_download_demo.py`: 验证 OneLap/迈金 FIT 下载链路。
+- `demo/codoon_tcx_to_strava.py`: 上传咕咚导出的 TCX 到 Strava,描述格式为 `同步自咕咚：YYYY-MM-DD HH:MM:SS`。
+
+第三方迁移脚本和本地临时文件不要混入主流程;确认稳定后再抽成正式模块。
