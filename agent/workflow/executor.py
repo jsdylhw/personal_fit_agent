@@ -23,6 +23,7 @@ from agent.workflow.step_selector import (
     StepSelectionResult,
     select_workflow_steps,
 )
+from agent.route.advice import generate_route_advice
 from agent.activity.training_load import summarize_recent_training_load
 from agent.tools.workflow import (
     analyze_fit_file_tool,
@@ -224,6 +225,8 @@ def _execute_default_handler(
                 },
             }
         return show_selected_activity_report(step, context)
+    if step.name == "generate_route_advice":
+        return generate_route_advice(step, context)
     if executor_type in {"conversation", "analysis", "coaching", "subworkflow"}:
         return {
             "error": "handler_not_implemented",

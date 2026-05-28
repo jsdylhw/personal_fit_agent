@@ -160,7 +160,7 @@ _BASE_EXECUTION_SPECS: dict[str, StepExecutionSpec] = {
         step_name="generate_route_advice",
         executor_type="coaching",
         handler_name="generate_route_advice",
-        allowed_tools=("training_load_summary",),
+        allowed_tools=(),
     ),
     "sync_garmin_activities": StepExecutionSpec(
         step_name="sync_garmin_activities",
