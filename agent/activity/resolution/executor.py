@@ -59,8 +59,10 @@ def _resolve_current_activity(
     **kwargs: Any,
 ) -> dict[str, Any]:
     activity = activity_from_context(context)
-    context.selected_activities = [activity] if activity else []
-    context.selected_activity_range = {"type": "current_activity"} if activity else None
+    if activity:
+        context.set_single_activity(activity)
+    else:
+        context.clear_activities()
     return {
         "step": step.name,
         "result": {
