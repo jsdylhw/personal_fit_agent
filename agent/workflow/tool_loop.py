@@ -103,7 +103,7 @@ def run_tool_loop(
         session_id = context.session_id
         context.messages.append({"role": "user", "content": message})
 
-    # pending 确认 → 直接执行 pending 工具,恢复 context 后继续下轮
+    # pending 确认 → 执行工具,记录到 context.messages, 返回后可继续下轮
     if context.pending_action and _is_confirm(message):
         pending = context.pending_action
         context.pending_action = None
@@ -115,10 +115,14 @@ def run_tool_loop(
             except Exception as exc:
                 output = {"error": type(exc).__name__, "message": str(exc)}
             context.last_tool_result = {"step_name": pending["tool"], "result": output}
+            # 写入 context.messages 保持追踪
+            result_json = json.dumps(output, ensure_ascii=False, default=str)
+            context.messages.append({"role": "user", "content": f"[确认执行] {pending['tool']}"})
+            context.messages.append({"role": "assistant", "content": [{"type": "text", "text": f"已执行 {pending['tool']}:\n{result_json[:300]}"}]})
             if verbose:
                 _log_confirm(pending["tool"], output)
             return {
-                "answer": f"已执行 {pending['tool']}。\n{json.dumps(output, ensure_ascii=False, default=str)[:200]}",
+                "answer": f"已执行 {pending['tool']}。\n{result_json[:200]}",
                 "status": "completed", "context": context, "intent": "confirmed",
                 "steps": [{"tool": pending["tool"], "input": pending.get("input", {})}],
             }

@@ -72,9 +72,15 @@ def route_intent(user_message: str) -> Intent:
     if any(g in text for g in greetings) and len(text) < 20:
         return Intent(kind=IntentKind.CHAT, tool_groups=INTENT_TOOL_GROUPS[IntentKind.CHAT])
 
-    # 副作用操作
+    # 副作用操作 — 检查是否混合意图(同步并分析/上传前分析)
     wants_sync = any(t in text for t in ("下载", "同步", "sync", "garmin"))
     wants_upload = any(t in text for t in ("上传", "strava", "upload"))
+    wants_analyze = any(t in text for t in ("分析", "查看", "报告", "总结", "汇总"))
+
+    if wants_sync and wants_analyze:
+        return Intent(kind=IntentKind.MIXED,
+                      tool_groups={"resolve", "analyze", "operation", "fit_query"},
+                      allow_side_effects=True)
 
     if wants_sync and not wants_upload:
         return Intent(kind=IntentKind.SYNC, tool_groups=INTENT_TOOL_GROUPS[IntentKind.SYNC],

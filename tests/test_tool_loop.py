@@ -82,6 +82,28 @@ def test_max_steps_exceeded_returns_not_completed():
     assert len(result["steps"]) > 0
 
 
+def test_side_effect_returns_needs_confirmation():
+    """LLM 请求 sync_garmin_activities 时返回 needs_confirmation."""
+    context = AgentContext(session_id="test-sidefx")
+
+    def fake_create_messages(**kwargs):
+        return {
+            "id": "msg-sync",
+            "content": [{"type": "tool_use", "name": "sync_garmin_activities", "id": "tu-1", "input": {"count": 3}}],
+            "stop_reason": "tool_use",
+        }
+
+    with patch("agent.workflow.tool_loop.AnthropicMessagesClient") as MockClient:
+        mock_client = MockClient.return_value
+        mock_client.create_messages.side_effect = fake_create_messages
+        result = run_tool_loop("下载最近3条Garmin活动", context=context)
+
+    assert result["status"] == "needs_confirmation"
+    assert result["context"].pending_action is not None
+    assert result["context"].pending_action["tool"] == "sync_garmin_activities"
+    assert result["context"].pending_action["input"] == {"count": 3}
+
+
 def test_completed_within_max_steps():
     """正常完成 → status=completed."""
     context = AgentContext(session_id="test-ok")
