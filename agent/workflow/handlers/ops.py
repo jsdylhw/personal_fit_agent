@@ -1,7 +1,7 @@
-"""工作流执行器使用的业务工具封装:下载 / 分析 / 上传.
+"""业务操作工具:下载 / 分析 / 上传.
 
-这些工具由 workflow executor 按计划调用,不直接暴露给 planner 选择。
-FIT 分析内部的只读工具路由放在 fit_analysis.py。
+这些是 executor / CLI 直接调用的 Python 函数,不是 LLM 工具。
+FIT 数据查询工具的 ToolDef 定义和路由在 fit_query.py。
 """
 
 from __future__ import annotations
