@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import pytest
 
+from agent.prompts import (
+    FIT_ANALYSIS_CORE,
+    FIT_ANALYSIS_OUTPUT_CONTRACT,
+    FIT_ANALYSIS_TOOL_GUIDANCE,
+    build_fit_analysis_system_prompt,
+)
 from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
 from core.data_tools import (
     DEFAULT_SECTIONS,
@@ -189,6 +195,35 @@ class TestFitAnalysisToolCatalog:
         for tool in fit_data_tool_catalog():
             assert "description" in tool
             assert len(tool["description"]) > 0
+
+    def test_each_tool_has_input_schema(self):
+        """ToolDef 每个工具返回 Anthropic 格式: name + description + input_schema."""
+        for tool in fit_data_tool_catalog():
+            assert "name" in tool
+            assert "input_schema" in tool
+            assert "description" in tool, f"{tool['name']} missing description"
+            assert len(tool["description"]) > 20, f"{tool['name']} description too short"
+
+
+class TestFitAnalysisPrompt:
+    """验证模块化 system prompt 组装."""
+
+    def test_sections_are_non_empty(self):
+        assert len(FIT_ANALYSIS_CORE.strip()) > 0
+        assert len(FIT_ANALYSIS_TOOL_GUIDANCE.strip()) > 0
+        assert len(FIT_ANALYSIS_OUTPUT_CONTRACT.strip()) > 0
+
+    def test_build_contains_all_sections(self):
+        prompt = build_fit_analysis_system_prompt()
+        assert "endurance training analysis assistant" in prompt
+        assert "get_activity_summary" in prompt
+        assert "markdown_report" in prompt
+        assert "strava_summary" in prompt
+
+    def test_llm_fit_analysis_system_prompt_is_built(self):
+        from agent.prompts import LLM_FIT_ANALYSIS_SYSTEM_PROMPT
+        assert len(LLM_FIT_ANALYSIS_SYSTEM_PROMPT) > 0
+        assert LLM_FIT_ANALYSIS_SYSTEM_PROMPT == build_fit_analysis_system_prompt()
 
 
 class TestActivityIndex:
@@ -424,6 +459,9 @@ class TestBuildInitialLoopPayload:
         assert "start_time" not in fit_summary
         assert "start_time_utc" not in fit_summary
         assert "timezone_note" not in fit_summary
+        # 工具已迁移到原生 tools 参数,不再出现在 payload 中
+        assert "available_tools" not in payload
+        assert "tool_request" not in payload.get("output_contract", {})
 
 
 class TestAnalyzeFitFileResultTimes:
@@ -470,42 +508,42 @@ class TestAnalyzeFitFileResultTimes:
 
 class TestStrictBool:
     def test_true_is_true(self):
-        from agent.tools.workflow import _parse_strict_bool
+        from agent.workflow.handlers.ops import _parse_strict_bool
         assert _parse_strict_bool(True) is True
 
     def test_false_is_false(self):
-        from agent.tools.workflow import _parse_strict_bool
+        from agent.workflow.handlers.ops import _parse_strict_bool
         assert _parse_strict_bool(False) is False
 
     def test_string_false_is_false(self):
         """字符串 'false' 不会被 bool() 误判为 True."""
-        from agent.tools.workflow import _parse_strict_bool
+        from agent.workflow.handlers.ops import _parse_strict_bool
         assert _parse_strict_bool("false") is False
 
     def test_string_true_is_false(self):
-        from agent.tools.workflow import _parse_strict_bool
+        from agent.workflow.handlers.ops import _parse_strict_bool
         assert _parse_strict_bool("true") is False
 
     def test_none_is_default(self):
-        from agent.tools.workflow import _parse_strict_bool
+        from agent.workflow.handlers.ops import _parse_strict_bool
         assert _parse_strict_bool(None) is False
 
     def test_number_one_is_false(self):
         """数字 1 也不是 True."""
-        from agent.tools.workflow import _parse_strict_bool
+        from agent.workflow.handlers.ops import _parse_strict_bool
         assert _parse_strict_bool(1) is False
 
 
 class TestSyncCountLimit:
     def test_max_sync_count_is_declared(self):
         # 只测同步上限常量,不实际调用 Garmin(会因无凭证报错)
-        from agent.tools.workflow import MAX_SYNC_COUNT
+        from agent.workflow.handlers.ops import MAX_SYNC_COUNT
         assert MAX_SYNC_COUNT == 20
 
     def test_count_above_limit_is_rejected(self):
         import pytest
 
-        from agent.tools.workflow import sync_garmin_activities_tool
+        from agent.workflow.handlers.ops import sync_garmin_activities_tool
 
         with pytest.raises(ValueError, match="between 1 and 20"):
             sync_garmin_activities_tool(count=50)
@@ -513,7 +551,7 @@ class TestSyncCountLimit:
 
 class TestUploadErrorStates:
     def test_no_summary(self):
-        from agent.tools.workflow import upload_to_strava_tool
+        from agent.workflow.handlers.ops import upload_to_strava_tool
         result = upload_to_strava_tool("/tmp/nonexistent_activity.fit")
         assert result["error"] == "no_summary"
 
@@ -524,7 +562,7 @@ class TestUploadErrorStates:
         """
         import json
         from unittest.mock import MagicMock
-        from agent.tools.workflow import upload_to_strava_tool
+        from agent.workflow.handlers.ops import upload_to_strava_tool
 
         # 创建临时 summary
         fit_file = tmp_path / "test.fit"
@@ -558,7 +596,7 @@ class TestUploadErrorStates:
         """Python True 正常触发上传."""
         import json
         from unittest.mock import MagicMock
-        from agent.tools.workflow import upload_to_strava_tool
+        from agent.workflow.handlers.ops import upload_to_strava_tool
 
         fit_file = tmp_path / "test.fit"
         fit_file.write_bytes(b"mock")
@@ -589,7 +627,7 @@ class TestUploadErrorStates:
 
     def test_duplicate_returns_existing_and_pending_activity(self, tmp_path, monkeypatch):
         import json
-        from agent.tools.workflow import upload_to_strava_tool
+        from agent.workflow.handlers.ops import upload_to_strava_tool
 
         fit_file = tmp_path / "test.fit"
         fit_file.write_bytes(b"mock")
@@ -626,7 +664,7 @@ class TestUploadErrorStates:
 
     def test_force_duplicate_updates_existing_description(self, tmp_path, monkeypatch):
         import json
-        from agent.tools.workflow import upload_to_strava_tool
+        from agent.workflow.handlers.ops import upload_to_strava_tool
 
         fit_file = tmp_path / "test.fit"
         fit_file.write_bytes(b"mock")
@@ -658,7 +696,7 @@ class TestUploadErrorStates:
     def test_network_error_is_structured(self, tmp_path, monkeypatch):
         import json
         import requests
-        from agent.tools.workflow import upload_to_strava_tool
+        from agent.workflow.handlers.ops import upload_to_strava_tool
 
         fit_file = tmp_path / "test.fit"
         fit_file.write_bytes(b"mock")

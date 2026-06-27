@@ -11,7 +11,7 @@ from typing import Any
 
 from agent.context import AgentContext
 from agent.workflow.plan_schema import WorkflowPlan, get_workflow_step
-from agent.tools.workflow import MAX_SYNC_COUNT
+from agent.workflow.handlers.ops import MAX_SYNC_COUNT
 
 
 LOW_LEVEL_TOOL_NAMES = {
@@ -62,6 +62,8 @@ def validate_workflow_plan(
     if not plan.steps:
         errors.append("workflow plan must contain at least one step")
 
+    has_resolved = "selected_activities" in available_state or "current_fit_file" in available_state
+
     for index, step in enumerate(plan.steps):
         if step.name in LOW_LEVEL_TOOL_NAMES:
             errors.append(
@@ -84,6 +86,14 @@ def validate_workflow_plan(
                 f"step[{index}] {step.name!r} 需要用户确认,但 plan.requires_confirmation=false"
             )
 
+        # 副作用步骤必须前有活动定位
+        if spec.side_effect and not has_resolved and not _is_side_effect_without_activity(step.name):
+            warnings.append(
+                f"step[{index}] {step.name!r} 有副作用,但前面没有活动定位步骤"
+            )
+        if spec.category == "activity_resolution":
+            has_resolved = True
+
         missing = [
             requirement
             for requirement in spec.requires
@@ -98,6 +108,11 @@ def validate_workflow_plan(
         produced_state.update(spec.produces)
 
     return PlanValidationResult(errors=errors, warnings=warnings)
+
+
+def _is_side_effect_without_activity(step_name: str) -> bool:
+    """sync_garmin_activities 可以在还没有本地活动时执行."""
+    return step_name == "sync_garmin_activities"
 
 
 def _requirement_satisfied(

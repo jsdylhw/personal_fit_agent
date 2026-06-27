@@ -25,7 +25,7 @@ from agent.workflow.step_selector import (
 )
 from agent.route.advice import generate_route_advice
 from agent.activity.training_load import summarize_recent_training_load
-from agent.tools.workflow import (
+from agent.workflow.handlers.ops import (
     analyze_fit_file_tool,
     sync_garmin_activities_tool,
     upload_to_strava_tool,
