@@ -123,7 +123,7 @@ def _requirement_satisfied(
     if requirement in available_state or requirement in produced_state:
         return True
     if requirement == "current_fit_file":
-        return "selected_activities" in available_state or "selected_activities" in produced_state
+        return "current_fit_file" in available_state or "current_fit_file" in produced_state
     return False
 
 

@@ -163,6 +163,7 @@ def test_executor_runs_single_activity_report_from_existing_summary(tmp_path):
     )
     context = AgentContext(
         session_id="executor-test",
+        current_fit_file=Path("/tmp/latest.fit"),
         selected_activities=[{"activity_key": "a1", "summary_path": str(summary)}],
     )
     plan = _plan(

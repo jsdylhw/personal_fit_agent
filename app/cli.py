@@ -21,30 +21,6 @@ from sinks.strava import StravaSink
 app = typer.Typer(help="Personal FIT Agent CLI")
 
 
-# -- chat helpers -----------------------------------------------------------
-
-def _chat_once(
-    message: str,
-    *,
-    fit_path: str | None = None,
-    max_tokens: int = 4096,
-) -> None:
-    """单次对话 — 调用 tool loop 并打印结果."""
-    result = run_tool_loop(
-        message,
-        fit_path=fit_path,
-        use_history=True,
-        max_tokens=max_tokens,
-        verbose=True,
-    )
-
-    typer.echo("")
-    typer.echo(result["answer"])
-    typer.echo("")
-    typer.echo(f"\033[2mstatus: {result['status']} | intent: {result.get('intent', '?')}\033[0m")
-    typer.echo("")
-
-
 @app.command("workflow")
 def workflow_command(
     message: str,
@@ -101,12 +77,14 @@ def chat_command(
 ) -> None:
     """对话模式 — 原生 tool use + tool 调用日志。不传 message 进入交互模式，q/quit 退出。"""
     if message:
-        _chat_once(message, fit_path=fit_path, max_tokens=max_tokens)
+        result = run_tool_loop(message, fit_path=fit_path, max_tokens=max_tokens, verbose=True)
+        typer.echo("")
+        typer.echo(result["answer"])
         return
 
     # 交互模式
     typer.echo("Personal FIT Agent (chat mode) — 输入 q/quit 退出")
-    history: list[dict[str, Any]] = []
+    context = None
     while True:
         try:
             user_input = typer.prompt(">").strip()
@@ -119,7 +97,14 @@ def chat_command(
         if user_input.lower() in ("q", "quit", "exit"):
             break
 
-        _chat_once(user_input, fit_path=fit_path, max_tokens=max_tokens)
+        result = run_tool_loop(user_input, fit_path=fit_path, max_tokens=max_tokens,
+                               verbose=True, context=context)
+        context = result.get("context")
+        typer.echo("")
+        typer.echo(result["answer"])
+        typer.echo("")
+        typer.echo(f"\033[2mstatus: {result['status']} | intent: {result.get('intent', '?')}\033[0m")
+        typer.echo("")
 
 
 @app.command("analyze-file")
