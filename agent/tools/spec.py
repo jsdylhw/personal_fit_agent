@@ -1,7 +1,6 @@
 """统一工具定义:ToolDef + ToolRegistry + renderers.
 
 所有 LLM 可调用工具都使用 ToolDef 定义，通过 renderer 转为不同 API 格式。
-Planner / Index / Data 三层工具统一用这一种格式。
 """
 
 from __future__ import annotations
@@ -25,8 +24,7 @@ CATEGORY_PLANNING = "planning"             # 内部计划/TODO 状态
 class ToolDef:
     """LLM 可调用工具的唯一定义格式.
 
-    Planner / Index / Data 三层工具统一使用此格式定义，
-    再通过 renderer 转为 Anthropic / OpenAI 原生 tools 参数.
+    所有工具统一使用此格式定义,再通过 renderer 转为 Anthropic / OpenAI 原生 tools 参数.
     """
 
     name: str

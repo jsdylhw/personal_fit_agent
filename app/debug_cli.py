@@ -11,10 +11,7 @@ from typing import Any
 
 import typer
 
-from agent.activity.resolution import ACTIVITY_RESOLUTION_STEPS, execute_activity_resolution_step
-from agent.context import AgentContext
 from core.fit_paths import resolve_fit_path
-from agent.workflow.planner import plan_initial_workflow
 from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
 from core.activity_index import (
     get_activities_in_range,
@@ -34,40 +31,6 @@ def list_tools_command() -> None:
     """列出 FIT hidden analysis loop 可用的只读工具."""
     tools = fit_data_tool_catalog()
     _echo_json({"count": len(tools), "tools": tools})
-
-
-@app.command("plan-workflow")
-def plan_workflow_command(
-    message: str,
-    fit_path: str | None = typer.Option(None, "--fit", help="可选:当前 FIT 文件路径或 latest."),
-    history: bool = True,
-    include_payload: bool = False,
-    max_tokens: int = typer.Option(4096, "--max-tokens", help="planner LLM 最大输出 token 数."),
-    resolve_activities: bool = typer.Option(False, "--resolve-activities", help="只执行 activity_resolution 步骤以定位活动."),
-) -> None:
-    """调用 LLM planner 生成初始工作流计划,不执行任何步骤."""
-    current_fit = resolve_fit_path(fit_path) if fit_path else None
-    context = AgentContext(
-        session_id="debug_planner",
-        current_fit_file=current_fit,
-        history_enabled=history,
-    )
-    result = plan_initial_workflow(message, context, max_tokens=max_tokens)
-    output = {
-        "plan": result["plan_json"],
-        "raw_text": result["raw_text"],
-    }
-    if resolve_activities:
-        resolution_results = []
-        for step in result["plan"].steps:
-            if step.name in ACTIVITY_RESOLUTION_STEPS:
-                resolution_results.append(execute_activity_resolution_step(step, context))
-        output["activity_resolution_results"] = resolution_results
-        output["selected_activities"] = context.selected_activities
-        output["selected_activity_range"] = context.selected_activity_range
-    if include_payload:
-        output["payload"] = result["payload"]
-    _echo_json(output)
 
 
 @app.command("tool-call")

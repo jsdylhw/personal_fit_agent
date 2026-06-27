@@ -1,6 +1,6 @@
 """活动索引查询工具:ToolDef 定义.
 
-这些工具由 activity_resolution executor 调用,对应 core/activity_index.py
+这些工具对应 core/activity_index.py
 中的 list_activities / resolve_activity / get_activities_in_range.
 """
 

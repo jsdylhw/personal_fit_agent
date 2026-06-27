@@ -8,19 +8,20 @@ from typing import Any
 
 from agent.context import AgentContext
 from agent.llm import AnthropicMessagesClient, extract_text
-from agent.workflow.plan_schema import WorkflowPlanStep
 
 
-def generate_route_advice(
-    step: WorkflowPlanStep,
+def generate_route_advice_tool(
     context: AgentContext,
+    *,
+    args: dict[str, Any] | None = None,
+    name: str = "generate_route_advice",
 ) -> dict[str, Any]:
     """根据用户输入生成骑行路线建议.
 
-    从 step.arguments 中提取位置、时长/距离、目标,从 context 中提取可选的训练负荷,
+    从 args 中提取位置、时长/距离、目标,从 context 中提取可选的训练负荷,
     调用 LLM 输出结构化建议 + 用户可读的 Markdown 回答.
     """
-    args = step.arguments
+    args = args or {}
     location = str(args.get("location") or args.get("area") or args.get("place") or "")
     duration = _num_arg(args.get("duration") or args.get("duration_min"))
     distance = _num_arg(args.get("distance") or args.get("distance_km"))
@@ -55,7 +56,7 @@ def generate_route_advice(
 
     if parsed is None:
         return {
-            "step": step.name,
+            "step": name,
             "status": "completed",
             "answer": raw or "暂时无法生成路线建议，请确认位置和骑行目标后再试。",
             "result": {
@@ -66,7 +67,7 @@ def generate_route_advice(
         }
 
     return {
-        "step": step.name,
+        "step": name,
         "status": "completed",
         "answer": _answer_text(parsed, raw),
         "result": {

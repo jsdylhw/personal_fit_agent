@@ -56,19 +56,19 @@ def test_analyze_file_command_uses_workflow_tool_and_resolves_path(tmp_path, mon
 
 
 def test_workflow_command_prints_markdown_log_path(monkeypatch):
-    def fake_run_planned_workflow(*args, **kwargs):
+    def fake_run_tool_loop(*args, **kwargs):
         return {
             "answer": "整体总结",
             "status": "completed",
-            "log_path": "log/planned_workflow_test.md",
+            "log_path": "log/tool_loop_test.md",
             "current_fit_file": None,
         }
 
-    monkeypatch.setattr("app.cli.run_planned_workflow", fake_run_planned_workflow)
+    monkeypatch.setattr("app.cli.run_tool_loop", fake_run_tool_loop)
 
     result = CliRunner().invoke(app, ["workflow", "分析所有历史活动"])
 
     assert result.exit_code == 0
     assert "整体总结" in result.output
-    assert "workflow_log_md: log/planned_workflow_test.md" in result.output
+    assert "workflow_log_md: log/tool_loop_test.md" in result.output
     assert "chat_log_jsonl" not in result.output

@@ -9,7 +9,6 @@ import typer
 
 from agent.chat_logger import new_session_id
 from agent.context import AgentContext
-from agent.workflow.runner import run_planned_workflow
 from agent.workflow.tool_loop import run_tool_loop
 from core.fit_paths import resolve_fit_path
 from agent.workflow.handlers.ops import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
@@ -33,28 +32,17 @@ def workflow_command(
     ),
     history: bool = True,
     max_tokens: int = typer.Option(4096, "--max-tokens", help="LLM 最大输出 token 数."),
-    json_output: bool = typer.Option(False, "--json", help="输出完整 plan/execution JSON."),
-    include_details: bool = typer.Option(False, "--include-details", help="JSON 输出中包含 planner 原文和 payload."),
-    tool_use: bool = typer.Option(False, "--tool-use", help="使用新的原生 tool use 链路 (Intent Router + Allowlist + Guard)."),
+    json_output: bool = typer.Option(False, "--json", help="输出完整执行 JSON."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="打印 tool 调用过程日志."),
 ) -> None:
-    """运行 workflow: Planner -> Validator -> Selector -> Executor (旧) 或 Intent Router -> Tool Use Loop (新)."""
-    if tool_use:
-        result = run_tool_loop(
-            message,
-            fit_path=fit_path,
-            use_history=history,
-            max_tokens=max_tokens,
-            verbose=verbose,
-        )
-    else:
-        result = run_planned_workflow(
-            message,
-            fit_path=fit_path,
-            use_history=history,
-            max_tokens=max_tokens,
-            include_details=include_details,
-        )
+    """运行 workflow: 原生 tool use loop."""
+    result = run_tool_loop(
+        message,
+        fit_path=fit_path,
+        use_history=history,
+        max_tokens=max_tokens,
+        verbose=verbose,
+    )
 
     if json_output:
         typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))

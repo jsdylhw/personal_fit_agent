@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import json
 
-from agent.activity.report import show_selected_activity_report
+from agent.activity.report import show_selected_activity_report_tool
 from agent.context import AgentContext
-from agent.workflow.plan_schema import WorkflowPlanStep
 
 
 def test_show_selected_activity_report_reads_markdown_report(tmp_path):
@@ -31,10 +30,7 @@ def test_show_selected_activity_report_reads_markdown_report(tmp_path):
         ],
     )
 
-    result = show_selected_activity_report(
-        WorkflowPlanStep(name="analyze_single_activity", reason="展示报告"),
-        context,
-    )
+    result = show_selected_activity_report_tool(context)
 
     assert result["status"] == "completed"
     assert result["answer"].startswith("# 最新骑行报告")
@@ -47,10 +43,7 @@ def test_show_selected_activity_report_reports_missing_summary():
         selected_activities=[{"activity_key": "a1"}],
     )
 
-    result = show_selected_activity_report(
-        WorkflowPlanStep(name="analyze_single_activity", reason="展示报告"),
-        context,
-    )
+    result = show_selected_activity_report_tool(context)
 
     assert result["error"] == "missing_activity_summary"
 
@@ -75,10 +68,7 @@ def test_show_selected_activity_report_generates_summary_when_fit_exists(monkeyp
         selected_activities=[{"activity_key": "a1", "fit_path": "/tmp/latest.fit"}],
     )
 
-    result = show_selected_activity_report(
-        WorkflowPlanStep(name="analyze_single_activity", reason="分析文件", arguments={"force": True}),
-        context,
-    )
+    result = show_selected_activity_report_tool(context, args={"force": True})
 
     assert result["status"] == "completed"
     assert result["answer"].startswith("# 新生成报告")

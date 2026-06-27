@@ -1,4 +1,4 @@
-"""Planner step 工具定义 — 粗粒度工作流步骤.
+"""Agent tool-use 工具定义.
 
 统一使用 ToolDef 格式,与 fit_query / index_query 一致.
 """
@@ -16,7 +16,7 @@ from agent.tools.spec import (
     ToolDef,
 )
 
-PLANNER_TOOLS: tuple[ToolDef, ...] = (
+AGENT_TOOLS: tuple[ToolDef, ...] = (
     # -- planning ------------------------------------------------------
     ToolDef(
         name="todo_write",

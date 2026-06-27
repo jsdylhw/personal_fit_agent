@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import json
 
-from agent.activity.comparison import compare_selected_activities
+from agent.activity.comparison import compare_selected_activities_tool
 from agent.context import AgentContext
-from agent.workflow.plan_schema import WorkflowPlanStep
 
 
 def _write_summary(path, *, key: str, label: str, distance_km: float, duration_min: float):
@@ -56,10 +55,7 @@ def test_compare_selected_activities_reads_existing_summaries(tmp_path, monkeypa
         ],
     )
 
-    result = compare_selected_activities(
-        WorkflowPlanStep(name="compare_activities", reason="对比两次活动"),
-        context,
-    )
+    result = compare_selected_activities_tool(context)
 
     assert result["status"] == "completed"
     assert result["result"]["count"] == 2
@@ -85,10 +81,7 @@ def test_compare_selected_activities_falls_back_from_windows_summary_path(tmp_pa
         ],
     )
 
-    result = compare_selected_activities(
-        WorkflowPlanStep(name="compare_activities", reason="对比两次活动"),
-        context,
-    )
+    result = compare_selected_activities_tool(context)
 
     assert result["status"] == "completed"
     assert [item["activity_key"] for item in result["result"]["activities"]] == ["a1", "a2"]
@@ -103,10 +96,7 @@ def test_compare_selected_activities_reports_missing_summary():
         ],
     )
 
-    result = compare_selected_activities(
-        WorkflowPlanStep(name="compare_activities", reason="对比两次活动"),
-        context,
-    )
+    result = compare_selected_activities_tool(context)
 
     assert result["error"] == "missing_activity_summary"
     assert len(result["missing"]) == 2

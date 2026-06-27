@@ -1,8 +1,4 @@
-"""日期 / 范围 / 排序参数解析工具.
-
-从 WorkflowPlanStep.arguments 中提取结构化日期/范围/索引信息，
-不依赖 AgentContext，纯函数。
-"""
+"""日期 / 范围 / 排序参数解析工具."""
 
 from __future__ import annotations
 

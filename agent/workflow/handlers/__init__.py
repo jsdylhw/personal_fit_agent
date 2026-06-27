@@ -1,6 +1,6 @@
-"""Workflow 业务 handler — executor 直接调用的 Python 函数.
+"""Workflow 业务 handler — CLI 和 tool runtime 直接调用的 Python 函数.
 
-这些不是 LLM 工具,是由 executor / CLI 按步骤名调用的业务实现.
+这些不是 LLM 工具定义,而是本地业务实现.
 """
 
 from agent.workflow.handlers.ops import (

@@ -131,8 +131,8 @@ def test_retry_executes_last_failed_action():
 
     with patch("agent.workflow.tool_loop.AnthropicMessagesClient"):
         with patch("agent.workflow.tool_loop.route_intent") as mock_route:
-            with patch("agent.workflow.executor.upload_to_strava_tool") as mock_upload:
-                with patch("agent.workflow.executor.AnthropicMessagesClient") as MockUploadLlm:
+            with patch("agent.workflow.tool_handlers.upload_to_strava_tool") as mock_upload:
+                with patch("agent.workflow.tool_handlers.AnthropicMessagesClient") as MockUploadLlm:
                     mock_upload.return_value = {"status": "uploaded", "strava_activity_id": 123}
                     MockUploadLlm.return_value.create_message.return_value = {
                         "content": [{"type": "text", "text": "上传成功"}],

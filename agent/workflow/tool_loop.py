@@ -14,11 +14,11 @@ from agent.chat_logger import new_session_id, write_workflow_markdown_log
 from agent.context import AgentContext
 from core.fit_paths import resolve_fit_path as _resolve_fit_path
 from agent.llm import AnthropicMessagesClient, build_tool_result_block
-from agent.tools import PLANNER_TOOLS, render_anthropic_tools
+from agent.tools import AGENT_TOOLS, render_anthropic_tools
 from agent.tools.spec import CATEGORY_PLANNING
 from agent.workflow.intent import route_intent, intent_tool_categories
 from agent.workflow.hooks import ToolLoopHooks
-from agent.workflow.tool_runtime import build_planner_handlers
+from agent.workflow.tool_runtime import build_tool_handlers
 from agent.workflow.turn_control import handle_control_turn, is_confirm
 
 MAX_TOOL_STEPS = 10
@@ -167,8 +167,8 @@ def _run_agent_turn(message, intent, allowed_cats, context, verbose, max_tokens,
     """执行 agent_loop 并同步 messages 回 context. 返回 step_count."""
     tool_categories = set(allowed_cats)
     tool_categories.add(CATEGORY_PLANNING)
-    tools = [render_anthropic_tools([t])[0] for t in PLANNER_TOOLS if t.category in tool_categories]
-    handlers = build_planner_handlers(context)
+    tools = [render_anthropic_tools([t])[0] for t in AGENT_TOOLS if t.category in tool_categories]
+    handlers = build_tool_handlers(context)
     system = _build_system_prompt(intent)
     has_resolved = {"value": bool(context.current_fit_file)}
     steps_taken: list[dict] = []
@@ -215,7 +215,7 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
         context.messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
         return {"answer": answer, "status": "permission_denied", "context": context, "intent": "confirmed", "steps": []}
 
-    handlers = build_planner_handlers(context)
+    handlers = build_tool_handlers(context)
     handler = handlers.get(tool_name)
     if not handler:
         answer = f"未知工具: {tool_name}"
@@ -224,7 +224,7 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
 
     allowed_cats = set(resume.get("allowed_categories") or [])
     allowed_cats.add(CATEGORY_PLANNING)
-    tools = [render_anthropic_tools([t])[0] for t in PLANNER_TOOLS if t.category in allowed_cats]
+    tools = [render_anthropic_tools([t])[0] for t in AGENT_TOOLS if t.category in allowed_cats]
     messages = list(resume.get("messages") or context.messages)
     results = list(resume.get("results_before_pause") or [])
     steps_taken: list[dict] = []
@@ -338,13 +338,9 @@ def _build_result(intent, context, message, fit_path, use_history, step_count=0,
             for b in (m.get("content") or []):
                 if isinstance(b, dict) and b.get("type") == "text":
                     final_answer = b.get("text", "")
-    if not final_answer and not steps:
-        return _fallback_planned(message, context, fit_path=fit_path, use_history=use_history)
-
     log_path = write_workflow_markdown_log(
         context.session_id, user_message=message,
-        planner_plan={"intent": _intent_kind(intent), "tool_groups": _intent_groups(intent)},
-        normalized_plan={},
+        tool_plan={"intent": _intent_kind(intent), "tool_groups": _intent_groups(intent)},
         execution={"status": "completed", "steps": steps},
         selected_activities=context.selected_activities,
         selected_activity_range=context.selected_activity_range,
@@ -399,12 +395,6 @@ def _build_state_preamble(context):
     if not parts:
         return ""
     return "\n".join(["[本轮状态]", *parts])
-
-
-def _fallback_planned(message, context, **kw):
-    from agent.workflow.runner import run_planned_workflow
-    return run_planned_workflow(message, fit_path=kw.get('fit_path'), use_history=kw.get('use_history', True))
-
 
 def _log_hdr(message, intent, tool_count, has_fit):
     from agent.workflow.hooks import _log

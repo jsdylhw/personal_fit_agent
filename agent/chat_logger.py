@@ -57,8 +57,7 @@ def write_workflow_markdown_log(
     session_id: str,
     *,
     user_message: str,
-    planner_plan: dict[str, Any],
-    normalized_plan: dict[str, Any],
+    tool_plan: dict[str, Any],
     execution: dict[str, Any],
     selected_activities: list[dict[str, Any]],
     selected_activity_range: dict[str, Any] | None,
@@ -72,8 +71,7 @@ def write_workflow_markdown_log(
     lines = _format_workflow_log(
         session_id=session_id,
         user_message=user_message,
-        planner_plan=planner_plan,
-        normalized_plan=normalized_plan,
+        tool_plan=tool_plan,
         execution=execution,
         selected_activities=selected_activities,
         selected_activity_range=selected_activity_range,
@@ -120,8 +118,7 @@ def _format_workflow_log(
     *,
     session_id: str,
     user_message: str,
-    planner_plan: dict[str, Any],
-    normalized_plan: dict[str, Any],
+    tool_plan: dict[str, Any],
     execution: dict[str, Any],
     selected_activities: list[dict[str, Any]],
     selected_activity_range: dict[str, Any] | None,
@@ -142,20 +139,7 @@ def _format_workflow_log(
     if final_response:
         lines.extend(["## Final Answer", "", final_response, ""])
 
-    lines.extend(_workflow_plan_section("Planner Plan", planner_plan))
-    if normalized_plan != planner_plan:
-        lines.extend(_workflow_plan_section("Normalized Plan", normalized_plan))
-
-    validation = execution.get("validation") if isinstance(execution.get("validation"), dict) else {}
-    warnings = validation.get("warnings") if isinstance(validation.get("warnings"), list) else []
-    errors = validation.get("errors") if isinstance(validation.get("errors"), list) else []
-    if warnings or errors:
-        lines.extend(["## Validation", ""])
-        for error in errors:
-            lines.append(f"- error: {error}")
-        for warning in warnings:
-            lines.append(f"- warning: {warning}")
-        lines.append("")
+    lines.extend(_workflow_plan_section("Tool Plan", tool_plan))
 
     lines.extend(_workflow_execution_section(execution, final_response=final_response))
     lines.extend(_workflow_activity_section(selected_activities, selected_activity_range))
@@ -164,7 +148,13 @@ def _format_workflow_log(
 
 def _workflow_plan_section(title: str, plan: dict[str, Any]) -> list[str]:
     lines = [f"## {title}", ""]
-    lines.append(f"- task_type: `{plan.get('task_type')}`")
+    if plan.get("intent"):
+        lines.append(f"- intent: `{plan.get('intent')}`")
+    elif plan.get("task_type"):
+        lines.append(f"- task_type: `{plan.get('task_type')}`")
+    groups = plan.get("tool_groups")
+    if groups:
+        lines.append(f"- tool_groups: `{_inline_json(groups)}`")
     scope = plan.get("activity_scope")
     if scope:
         lines.append(f"- activity_scope: `{_inline_json(scope)}`")
@@ -194,6 +184,8 @@ def _workflow_plan_section(title: str, plan: dict[str, Any]) -> list[str]:
 def _workflow_execution_section(execution: dict[str, Any], *, final_response: str = "") -> list[str]:
     lines = ["## Execution", ""]
     step_results = execution.get("step_results") if isinstance(execution.get("step_results"), list) else []
+    if not step_results and isinstance(execution.get("steps"), list):
+        step_results = execution.get("steps") or []
     if not step_results:
         return lines + ["No executed steps.", ""]
     for result in step_results:
@@ -202,10 +194,13 @@ def _workflow_execution_section(execution: dict[str, Any], *, final_response: st
         if _is_redundant_final_response_step(result, final_response):
             continue
         index = int(result.get("index") or 0) + 1
-        name = result.get("step_name")
+        name = result.get("step_name") or result.get("tool")
         status = result.get("status")
         lines.append(f"### {index}. {name}")
-        lines.append(f"- status: `{status}`")
+        if status:
+            lines.append(f"- status: `{status}`")
+        if result.get("input"):
+            lines.append(f"- input: `{_inline_json(result.get('input'))}`")
         if result.get("message"):
             lines.append(f"- message: {result.get('message')}")
         if result.get("error"):

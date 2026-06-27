@@ -1,6 +1,6 @@
 """业务操作工具:下载 / 分析 / 上传.
 
-这些是 executor / CLI 直接调用的 Python 函数,不是 LLM 工具。
+这些是 CLI / tool runtime 直接调用的 Python 函数,不是 LLM 工具定义。
 FIT 数据查询工具的 ToolDef 定义和路由在 fit_query.py。
 """
 

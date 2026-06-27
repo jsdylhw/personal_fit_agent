@@ -3,8 +3,7 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentContext
-from agent.workflow.plan_schema import WorkflowPlanStep
-from agent.activity.training_load import summarize_recent_training_load
+from agent.activity.training_load import summarize_recent_training_load_tool
 
 
 def _write_summary(path, *, key: str, tss: float, intensity_factor: float, distance_km: float, duration_min: float):
@@ -45,10 +44,7 @@ def test_summarize_recent_training_load_outputs_structured_metrics_only(tmp_path
         selected_activity_range={"type": "recent_activities", "limit": 2},
     )
 
-    result = summarize_recent_training_load(
-        WorkflowPlanStep(name="summarize_recent_training_load", reason="整理近期训练负荷"),
-        context,
-    )
+    result = summarize_recent_training_load_tool(context)
 
     assert result["status"] == "completed"
     assert "answer" not in result
@@ -71,10 +67,7 @@ def test_summarize_recent_training_load_reports_missing_summaries():
         selected_activities=[{"activity_key": "a1"}],
     )
 
-    result = summarize_recent_training_load(
-        WorkflowPlanStep(name="summarize_recent_training_load", reason="整理近期训练负荷"),
-        context,
-    )
+    result = summarize_recent_training_load_tool(context)
 
     assert result["error"] == "missing_activity_summary"
     assert result["missing"][0]["activity_key"] == "a1"

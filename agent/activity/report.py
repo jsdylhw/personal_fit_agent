@@ -7,15 +7,17 @@ from typing import Any
 
 from agent.activity.comparison import read_activity_summary
 from agent.context import AgentContext
-from agent.workflow.plan_schema import WorkflowPlanStep
 from agent.workflow.handlers.ops import analyze_fit_file_tool
 
 
-def show_selected_activity_report(
-    step: WorkflowPlanStep,
+def show_selected_activity_report_tool(
     context: AgentContext,
+    *,
+    args: dict[str, Any] | None = None,
+    name: str = "analyze_single_activity",
 ) -> dict[str, Any]:
     """展示单活动报告;无 summary 但有 FIT 时触发文件分析工具链路."""
+    args = args or {}
     activity = _selected_activity(context)
     if not activity:
         return {
@@ -25,7 +27,7 @@ def show_selected_activity_report(
 
     summary_path, summary, error = read_activity_summary(activity)
     if error or summary is None:
-        generated = _analyze_missing_summary(step, context, activity)
+        generated = _analyze_missing_summary(name, args, context, activity)
         if generated.get("error"):
             return generated
         return generated
@@ -43,7 +45,7 @@ def show_selected_activity_report(
         }
 
     return {
-        "step": step.name,
+        "step": name,
         "status": "completed",
         "answer": report,
         "result": {
@@ -59,7 +61,8 @@ def show_selected_activity_report(
 
 
 def _analyze_missing_summary(
-    step: WorkflowPlanStep,
+    name: str,
+    args: dict[str, Any],
     context: AgentContext,
     activity: dict[str, Any],
 ) -> dict[str, Any]:
@@ -71,7 +74,7 @@ def _analyze_missing_summary(
             "activity": activity,
         }
 
-    analysis = analyze_fit_file_tool(str(fit_path), force=bool(step.arguments.get("force")))
+    analysis = analyze_fit_file_tool(str(fit_path), force=bool(args.get("force")))
     report = str(analysis.get("markdown_report") or "").strip()
     if not report:
         return {
@@ -88,7 +91,7 @@ def _analyze_missing_summary(
         context.current_summary_path = Path(str(summary_path)).expanduser()
 
     return {
-        "step": step.name,
+        "step": name,
         "status": "completed",
         "answer": report,
         "result": {

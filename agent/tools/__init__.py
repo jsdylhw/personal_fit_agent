@@ -4,11 +4,12 @@
 - spec.py          — ToolDef + ToolRegistry + renderers + 类别常量
 - fit_query.py     — FIT 数据查询工具 (6 ToolDef + handler 工厂 + 路由)
 - index_query.py   — 活动索引工具 (3 ToolDef)
-- planner_tools.py — Planner 步骤工具
+- agent_tools.py   — Agent tool-use 工具
 
 业务 handler 已移至 agent/workflow/handlers/，通过 tools/__init__ 保持兼容 re-export。
 """
 
+from agent.tools.agent_tools import AGENT_TOOLS
 from agent.tools.fit_query import (
     FIT_DATA_TOOLS,
     build_tool_handlers,
@@ -17,7 +18,6 @@ from agent.tools.fit_query import (
     fit_data_tool_catalog,
 )
 from agent.tools.index_query import INDEX_TOOLS, index_tool_catalog
-from agent.tools.planner_tools import PLANNER_TOOLS
 from agent.tools.spec import (
     CATEGORY_ACTIVITY_INDEX,
     CATEGORY_ACTIVITY_RESOLUTION,
@@ -65,8 +65,8 @@ __all__ = [
     # index_query
     "INDEX_TOOLS",
     "index_tool_catalog",
-    # planner_tools
-    "PLANNER_TOOLS",
+    # agent_tools
+    "AGENT_TOOLS",
     # handlers (兼容 re-export)
     "MAX_SYNC_COUNT",
     "analyze_fit_file_tool",

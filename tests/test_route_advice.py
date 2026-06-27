@@ -6,9 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from agent.context import AgentContext
-from agent.route.advice import _list_arg, _num_arg, generate_route_advice
-from agent.workflow.executor import execute_workflow_plan
-from agent.workflow.plan_schema import WorkflowPlan, WorkflowPlanStep
+from agent.route.advice import _list_arg, _num_arg, generate_route_advice_tool
 
 
 def _mock_advice_json(answer: str, *, strategy: dict | None = None, constraints: list | None = None, needs_clarification: bool = False) -> str:
@@ -61,11 +59,6 @@ def test_list_arg(value, expected):
 # -- unit: generate_route_advice --
 
 def test_generate_route_advice_basic():
-    step = WorkflowPlanStep(
-        name="generate_route_advice",
-        reason="用户想在青浦区骑2小时有氧",
-        arguments={"location": "上海青浦区", "duration": 120, "goal": "有氧耐力"},
-    )
     context = AgentContext(session_id="test_route_advice")
 
     with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
@@ -73,7 +66,10 @@ def test_generate_route_advice_basic():
         mock_client.create_message.return_value = {
             "content": [{"type": "text", "text": _mock_advice_json("## 今天适合骑吗\n适合。\n\n## 建议骑行类型\n有氧耐力，Z2为主。\n\n## 路线方向建议\n平路绕圈。\n\n## 注意事项\n补水、防晒。")}],
         }
-        result = generate_route_advice(step, context)
+        result = generate_route_advice_tool(
+            context,
+            args={"location": "上海青浦区", "duration": 120, "goal": "有氧耐力"},
+        )
 
     assert result["status"] == "completed"
     assert "有氧耐力" in result["answer"]
@@ -86,18 +82,7 @@ def test_generate_route_advice_basic():
 
 
 def test_generate_route_advice_with_preferences():
-    """planner 传入 terrain/scenery/preferences 参数,应保留在 route_request 中."""
-    step = WorkflowPlanStep(
-        name="generate_route_advice",
-        reason="用户想在意大利湖区骑30km平路看风景",
-        arguments={
-            "location": "意大利湖区",
-            "distance": "30km",
-            "terrain": "平路",
-            "scenery": "风景好",
-            "preferences": ["低车流", "沿湖"],
-        },
-    )
+    """tool_use 传入 terrain/scenery/preferences 参数,应保留在 route_request 中."""
     context = AgentContext(session_id="test_prefs")
 
     with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
@@ -105,7 +90,16 @@ def test_generate_route_advice_with_preferences():
         mock_client.create_message.return_value = {
             "content": [{"type": "text", "text": _mock_advice_json("## 今天适合骑吗\n适合。")}],
         }
-        result = generate_route_advice(step, context)
+        result = generate_route_advice_tool(
+            context,
+            args={
+                "location": "意大利湖区",
+                "distance": "30km",
+                "terrain": "平路",
+                "scenery": "风景好",
+                "preferences": ["低车流", "沿湖"],
+            },
+        )
 
     req = result["result"]["route_request"]
     assert req["terrain"] == "平路"
@@ -115,7 +109,6 @@ def test_generate_route_advice_with_preferences():
 
 def test_generate_route_advice_missing_answer_fallback():
     """LLM 返回 JSON 但缺 answer 时,应兜底而不返回空字符串."""
-    step = WorkflowPlanStep(name="generate_route_advice", reason="路线建议", arguments={"location": "上海"})
     context = AgentContext(session_id="test_fallback")
 
     with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
@@ -123,18 +116,13 @@ def test_generate_route_advice_missing_answer_fallback():
         mock_client.create_message.return_value = {
             "content": [{"type": "text", "text": json.dumps({"strategy": {}, "constraints": [], "needs_clarification": False}, ensure_ascii=False)}],
         }
-        result = generate_route_advice(step, context)
+        result = generate_route_advice_tool(context, args={"location": "上海"})
 
     assert len(result["answer"]) > 0
     assert "已生成路线建议" in result["answer"]
 
 
 def test_generate_route_advice_with_training_load():
-    step = WorkflowPlanStep(
-        name="generate_route_advice",
-        reason="结合训练状态给路线建议",
-        arguments={"location": "北京昌平", "distance": "50km", "goal": "爬坡"},
-    )
     context = AgentContext(
         session_id="test_route_advice_load",
         last_tool_result={
@@ -158,7 +146,10 @@ def test_generate_route_advice_with_training_load():
                 constraints=["不要爬坡", "昨天负荷偏高"],
             )}],
         }
-        result = generate_route_advice(step, context)
+        result = generate_route_advice_tool(
+            context,
+            args={"location": "北京昌平", "distance": "50km", "goal": "爬坡"},
+        )
 
     assert result["status"] == "completed"
     assert result["result"]["route_request"]["has_training_load"] is True
@@ -167,20 +158,18 @@ def test_generate_route_advice_with_training_load():
 
 
 def test_generate_route_advice_empty_llm_response():
-    step = WorkflowPlanStep(name="generate_route_advice", reason="路线建议", arguments={"location": "上海"})
     context = AgentContext(session_id="test_empty")
 
     with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.create_message.return_value = {"content": [{"type": "text", "text": ""}]}
-        result = generate_route_advice(step, context)
+        result = generate_route_advice_tool(context, args={"location": "上海"})
 
     assert result["status"] == "completed"
     assert "暂时无法生成" in result["answer"]
 
 
 def test_generate_route_advice_needs_clarification():
-    step = WorkflowPlanStep(name="generate_route_advice", reason="路线建议", arguments={})
     context = AgentContext(session_id="test_clarify")
 
     with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
@@ -191,38 +180,6 @@ def test_generate_route_advice_needs_clarification():
                 needs_clarification=True,
             )}],
         }
-        result = generate_route_advice(step, context)
+        result = generate_route_advice_tool(context, args={})
 
     assert result["result"]["needs_clarification"] is True
-
-
-# -- integration: execute_workflow_plan --
-
-def test_executor_dispatches_generate_route_advice():
-    plan = WorkflowPlan(
-        task_type="route_advice",
-        steps=[
-            WorkflowPlanStep(
-                name="generate_route_advice",
-                reason="用户在徐汇区想骑1小时恢复",
-                arguments={"location": "上海徐汇区", "duration": "1小时", "goal": "恢复骑"},
-            ),
-        ],
-    )
-    context = AgentContext(session_id="test_exec_integration")
-
-    with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
-        mock_client = MockClient.return_value
-        mock_client.create_message.return_value = {
-            "content": [{"type": "text", "text": _mock_advice_json(
-                "## 今天适合骑吗\n适合恢复骑。",
-                strategy={"suitable": "适合", "ride_type": "恢复骑", "intensity": "Z1", "terrain_preference": "平路", "estimated_range": "20-30km"},
-                constraints=["低强度", "注意补水"],
-            )}],
-        }
-        execution = execute_workflow_plan(plan, context)
-
-    assert execution.status == "completed"
-    step_result = execution.step_results[0]
-    assert step_result.step_name == "generate_route_advice"
-    assert step_result.status == "completed"

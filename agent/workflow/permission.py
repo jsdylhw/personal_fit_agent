@@ -31,7 +31,7 @@ class PermissionDecision:
 
 DENY_LIST: list[tuple[str, str]] = [
     # (工具名, 拒绝原因) — 无条件拦截
-    # 当前无需硬拒绝的 planner 工具;保留接口用于后续扩展
+    # 当前无需硬拒绝的工具;保留接口用于后续扩展
     # 例如: ("delete_activity", "不可逆操作,已禁用"),
 ]
 

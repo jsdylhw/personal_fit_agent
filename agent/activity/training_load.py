@@ -12,12 +12,12 @@ from typing import Any
 
 from agent.activity.comparison import read_activity_summary
 from agent.context import AgentContext
-from agent.workflow.plan_schema import WorkflowPlanStep
 
 
-def summarize_recent_training_load(
-    step: WorkflowPlanStep,
+def summarize_recent_training_load_tool(
     context: AgentContext,
+    *,
+    name: str = "summarize_recent_training_load",
 ) -> dict[str, Any]:
     """汇总 context.selected_activities 的近期训练负荷."""
     activities = [
@@ -53,7 +53,7 @@ def summarize_recent_training_load(
 
     summary = _build_training_load_summary(reports, missing=missing, scope=context.selected_activity_range or {})
     return {
-        "step": step.name,
+        "step": name,
         "status": "completed",
         "result": summary,
     }

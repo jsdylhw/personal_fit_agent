@@ -5,10 +5,10 @@
 当前主链路是:
 
 ```text
-Garmin 中国 / 本地 FIT -> 活动索引 -> Planner 生成粗粒度计划 -> 固定 Executor 执行 -> Markdown 报告 / summary JSON / Strava 上传
+Garmin 中国 / 本地 FIT -> 活动索引 -> 原生 tool-use loop -> 本地工具函数 -> Markdown 报告 / summary JSON / Strava 上传
 ```
 
-Planner 只负责选择粗粒度 workflow step,不会直接调用底层 FIT 工具。真正执行由程序侧的 validator、selector 和 executor 控制。
+当前主路径是 `python -m app.cli chat` / `python -m app.cli workflow`:大模型直接通过 tool_use 选择工具,运行时按工具名调用本地 handler,权限和前置条件由 hook/guard 处理。
 
 ## 功能
 
@@ -16,7 +16,7 @@ Planner 只负责选择粗粒度 workflow step,不会直接调用底层 FIT 工�
 - 分析单个 FIT,生成 Markdown 活动报告和 `data/summaries/*.summary.json`。
 - 通过 `workflow` 用自然语言定位活动、分析单次活动、汇总活动范围、比较活动、总结训练负荷和上传 Strava。
 - 单活动分析内部仍是隐藏 LLM tool loop:模型只能按需读取概览、结构化摘要、区间数据、冲刺/爬坡扫描和历史记录。
-- workflow 日志以可读 Markdown 为主,记录 planner、归一化计划、执行步骤、选中活动和关键结果。
+- workflow 日志以可读 Markdown 为主,记录 intent、工具调用步骤、选中活动和关键结果。
 - Strava 上传使用本地 summary 中的 `fit_path` 和 `strava_summary`;workflow 上传步骤会直接执行上传,再把工具返回结果交给大模型组织说明。
 
 ## 安装
@@ -141,7 +141,7 @@ python -m app.cli workflow "看一下 100-200 秒是不是有短冲刺" --fit la
 输出完整 JSON 方便调试:
 
 ```bash
-python -m app.cli workflow "分析所有历史活动的整体情况" --json --include-details
+python -m app.cli workflow "分析所有历史活动的整体情况" --json
 ```
 
 从 summary 上传到 Strava:
@@ -158,7 +158,7 @@ python -m app.cli update-strava-description STRAVA_ACTIVITY_ID "data/summaries/a
 
 ## Workflow 设计
 
-外层 workflow 的步骤定义在 `agent/workflow/plan_schema.py`。大模型只允许选择这些业务步骤,例如:
+外层 workflow 使用 Anthropic/兼容 Messages API 的原生 tool_use。工具定义在 `agent/tools/agent_tools.py`,执行入口在 `agent/workflow/tool_runtime.py`,业务 handler 在 `agent/workflow/tool_handlers.py` 和各 activity/route 模块中。常用工具包括:
 
 - `resolve_recent_activities`
 - `resolve_activity_by_date`
@@ -171,7 +171,7 @@ python -m app.cli update-strava-description STRAVA_ACTIVITY_ID "data/summaries/a
 - `ensure_activity_summaries`
 - `upload_strava_activity`
 
-执行映射在 `agent/workflow/step_selector.py`,具体执行在 `agent/workflow/executor.py`。如果 step 没有 handler,执行层会明确报 `handler_not_implemented`,不会让大模型假装已经完成。
+运行时逻辑很薄:循环读取 tool_use,检查权限与 guard,找到同名 handler 执行,把 tool_result 返回给大模型。已删除旧的 planner / validator / selector / executor 流程。
 
 ## 输出文件
 
@@ -207,15 +207,11 @@ log/                          # workflow 和单活动分析日志,以 Markdown �
 | `get_distance_intervals` | 固定距离窗口聚合 |
 | `get_history` | 读取历史训练记录 |
 
-外层 planner 不直接调用这些工具;它只选择 `analyze_single_activity` 或 `summarize_activity_range` 等粗粒度步骤。
+外层 tool-use loop 不直接暴露这些 FIT 数据工具;它只调用 `analyze_single_activity` 或 `summarize_activity_range` 等业务工具,单活动分析内部再按需读取 FIT 数据。
 
 ## 调试入口
 
-`app.debug_cli` 保留给开发调试,例如查看 planner 输出:
-
-```bash
-python -m app.debug_cli plan-workflow "比较昨天的两次活动"
-```
+`app.debug_cli` 保留给开发调试,例如查看 FIT 工具返回或活动索引。
 
 列出本地索引活动:
 

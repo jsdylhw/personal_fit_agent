@@ -1,7 +1,7 @@
 """基于已有 summary.json 的多活动对比.
 
 这里不重新解析 FIT,也不调用 LLM.它只读取已经生成的活动报告,把关键字段
-整理成 executor 可消费的结构化对比结果.
+整理成 tool-use runtime 可消费的结构化对比结果.
 """
 
 from __future__ import annotations
@@ -11,12 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from agent.context import AgentContext
-from agent.workflow.plan_schema import WorkflowPlanStep
 
 
-def compare_selected_activities(
-    step: WorkflowPlanStep,
+def compare_selected_activities_tool(
     context: AgentContext,
+    *,
+    name: str = "compare_activities",
 ) -> dict[str, Any]:
     """读取 context.selected_activities 的已有 summary 并生成对比结果."""
     activities = [
@@ -61,7 +61,7 @@ def compare_selected_activities(
     loaded = sorted(loaded, key=lambda item: str(item.get("start_time_local") or ""))
     comparison = _build_comparison(loaded)
     return {
-        "step": step.name,
+        "step": name,
         "status": "completed",
         "result": comparison,
         "answer": _format_comparison_answer(comparison),
