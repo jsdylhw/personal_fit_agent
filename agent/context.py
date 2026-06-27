@@ -25,13 +25,14 @@ class AgentContext:
       current_fit_file / current_activity_key / current_summary_path
 
     内部缓存:
-      pending_action / parsed / history_before
+      pending_action / last_failed_action / current_todos / parsed / history_before
     """
 
     session_id: str
     messages: list[dict[str, Any]] = field(default_factory=list)
     history_enabled: bool = True
     last_tool_result: dict[str, Any] | None = None
+    last_failed_action: dict[str, Any] | None = None
 
     # 活动定位 — 新旧接口并存
     selected_handles: list[ActivityHandle] = field(default_factory=list)
@@ -45,6 +46,8 @@ class AgentContext:
 
     # 内部缓存
     pending_action: dict[str, Any] | None = None
+    current_todos: list[dict[str, Any]] = field(default_factory=list)
+    todo_rounds_since_update: int = 0
     parsed: dict[str, Any] | None = None
     history_before: dict[str, Any] | None = None
 

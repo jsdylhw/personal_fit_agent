@@ -7,6 +7,8 @@ import json
 
 import typer
 
+from agent.chat_logger import new_session_id
+from agent.context import AgentContext
 from agent.workflow.runner import run_planned_workflow
 from agent.workflow.tool_loop import run_tool_loop
 from core.fit_paths import resolve_fit_path
@@ -84,7 +86,10 @@ def chat_command(
 
     # 交互模式
     typer.echo("Personal FIT Agent (chat mode) — 输入 q/quit 退出")
-    context = None
+    context = AgentContext(
+        session_id=new_session_id("tool_loop"),
+        current_fit_file=resolve_fit_path(fit_path) if fit_path else None,
+    )
     while True:
         try:
             user_input = typer.prompt(">").strip()
@@ -97,8 +102,7 @@ def chat_command(
         if user_input.lower() in ("q", "quit", "exit"):
             break
 
-        result = run_tool_loop(user_input, fit_path=fit_path, max_tokens=max_tokens,
-                               verbose=True, context=context)
+        result = run_tool_loop(user_input, max_tokens=max_tokens, verbose=True, context=context)
         context = result.get("context")
         typer.echo("")
         typer.echo(result["answer"])

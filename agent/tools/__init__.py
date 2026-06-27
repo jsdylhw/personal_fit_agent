@@ -4,7 +4,7 @@
 - spec.py          — ToolDef + ToolRegistry + renderers + 类别常量
 - fit_query.py     — FIT 数据查询工具 (6 ToolDef + handler 工厂 + 路由)
 - index_query.py   — 活动索引工具 (3 ToolDef)
-- planner_tools.py — Planner 步骤工具 (18 ToolDef)
+- planner_tools.py — Planner 步骤工具
 
 业务 handler 已移至 agent/workflow/handlers/，通过 tools/__init__ 保持兼容 re-export。
 """
@@ -26,6 +26,7 @@ from agent.tools.spec import (
     CATEGORY_CONVERSATION,
     CATEGORY_FIT_QUERY,
     CATEGORY_OPERATION,
+    CATEGORY_PLANNING,
     CATEGORY_STRAVA,
     ToolDef,
     ToolRegistry,
@@ -49,6 +50,7 @@ __all__ = [
     "CATEGORY_CONVERSATION",
     "CATEGORY_FIT_QUERY",
     "CATEGORY_OPERATION",
+    "CATEGORY_PLANNING",
     "CATEGORY_STRAVA",
     "ToolDef",
     "ToolRegistry",

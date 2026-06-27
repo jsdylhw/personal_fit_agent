@@ -1,4 +1,4 @@
-"""Planner step 工具定义 — 18 个粗粒度工作流步骤.
+"""Planner step 工具定义 — 粗粒度工作流步骤.
 
 统一使用 ToolDef 格式,与 fit_query / index_query 一致.
 """
@@ -11,11 +11,38 @@ from agent.tools.spec import (
     CATEGORY_COACHING,
     CATEGORY_CONVERSATION,
     CATEGORY_OPERATION,
+    CATEGORY_PLANNING,
     CATEGORY_STRAVA,
     ToolDef,
 )
 
 PLANNER_TOOLS: tuple[ToolDef, ...] = (
+    # -- planning ------------------------------------------------------
+    ToolDef(
+        name="todo_write",
+        description=(
+            "创建或更新当前会话的 TODO 计划。仅用于规划和跟踪状态,不执行任何业务操作。"
+            "多步骤任务应先调用它,并在步骤状态变化时更新。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string"},
+                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                        },
+                        "required": ["content", "status"],
+                    },
+                },
+            },
+            "required": ["todos"],
+        },
+        category=CATEGORY_PLANNING,
+    ),
     # -- conversation --------------------------------------------------
     ToolDef(
         name="casual_chat",

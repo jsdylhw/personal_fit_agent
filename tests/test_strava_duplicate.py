@@ -10,6 +10,7 @@ from core.strava_workflow import (
     _parse_duplicate_activity_id,
     upload_summary_to_strava,
 )
+from core.activity_index import load_activity_index
 
 
 class TestParseDuplicateActivityId:
@@ -78,6 +79,10 @@ class TestUploadSummaryDuplicateWithoutForce:
         assert result["strava_activity_id"] == "18619000064"
         assert "18619000064" in result["message"]
         assert "raw" not in json.dumps(result)
+        saved_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        assert saved_summary["strava_activity_id"] == "18619000064"
+        index_rows = load_activity_index()["activities"]
+        assert index_rows[0]["strava_activity_id"] == "18619000064"
 
 
 class TestUploadSummaryDuplicateWithForce:
@@ -124,6 +129,49 @@ class TestUploadSummaryDuplicateWithForce:
 
         assert result["status"] == "description_updated"
         assert result["strava_activity_id"] == "18619000064"
+        mock_sink.update_description.assert_called_once_with("18619000064", strava_summary)
+        saved_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        assert saved_summary["strava_activity_id"] == "18619000064"
+
+    def test_force_with_cached_activity_id_updates_without_upload(
+        self, tmp_path, monkeypatch,
+    ):
+        """summary 已缓存 Strava 活动 ID 时,--force 直接更新描述,不再走 uploads."""
+        monkeypatch.chdir(tmp_path)
+
+        summaries_dir = tmp_path / "data" / "summaries"
+        summaries_dir.mkdir(parents=True)
+        fit_dir = tmp_path / "garmin_cn_fit_files"
+        fit_dir.mkdir()
+        fit_file = fit_dir / "test_ride.fit"
+        fit_file.write_bytes(b"dummy")
+
+        strava_summary = "测试 Strava 总结"
+        summary = {
+            "activity_key": "abc123",
+            "fit_path": "garmin_cn_fit_files/test_ride.fit",
+            "fit_summary": {
+                "sport_type": "cycling",
+                "start_time_local": "2026-05-14T08:00:00",
+            },
+            "strava_summary": strava_summary,
+            "strava_activity_id": "18619000064",
+        }
+        summary_path = summaries_dir / "test_ride.summary.json"
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False))
+
+        update_response = {"id": 18619000064, "description": strava_summary}
+
+        with patch("core.strava_workflow.StravaSink") as MockSink:
+            mock_sink = MockSink.return_value
+            mock_sink.update_description.return_value = update_response
+
+            result = upload_summary_to_strava(str(summary_path), wait=True, force=True)
+
+        assert result["status"] == "description_updated"
+        assert result["strava_activity_id"] == "18619000064"
+        mock_sink.upload_fit.assert_not_called()
+        mock_sink.wait_for_upload.assert_not_called()
         mock_sink.update_description.assert_called_once_with("18619000064", strava_summary)
 
 

@@ -1,120 +1,184 @@
-"""Agent loop hook 系统 — 实例化注册表, 支持并发安全.
-
-使用:
-  reg = HookRegistry()
-  reg.register("pre_tool_use", my_hook)
-  blocked = reg.trigger("pre_tool_use", block=block)
-"""
+"""Hard-coded hooks used by the agent tool loop."""
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import copy
+from typing import Any
+
+from agent.workflow.tool_result import is_failed_tool_output
 
 
-class HookRegistry:
-    """每个 agent_loop 调用持有一个实例,避免全局状态."""
+class ToolLoopHooks:
+    """Fixed hook order for the tool loop."""
 
-    def __init__(self):
-        self._hooks: dict[str, list[Callable]] = {
-            "pre_tool_use": [],
-            "post_tool_use": [],
-            "on_loop_end": [],
-            "on_error": [],
+    def __init__(self, context, allowed_cats, has_resolved_ref, steps_taken, *, verbose=False):
+        self.context = context
+        self.allowed_cats = allowed_cats
+        self.has_resolved_ref = has_resolved_ref
+        self.steps_taken = steps_taken
+        self.verbose = verbose
+
+    def before_llm_call(self) -> dict[str, str] | None:
+        if not self.context.current_todos:
+            return None
+        if self.context.todo_rounds_since_update < 3:
+            return None
+        self.context.todo_rounds_since_update = 0
+        return {
+            "role": "user",
+            "content": "<reminder>请调用 todo_write 更新当前 TODO 状态。</reminder>",
         }
 
-    def register(self, hook_point: str, callback: Callable) -> None:
-        if hook_point not in self._hooks:
-            raise ValueError(f"Unknown hook point: {hook_point}")
-        self._hooks[hook_point].append(callback)
+    def on_tool_round(self) -> None:
+        self.context.todo_rounds_since_update += 1
 
-    def trigger(self, hook_point: str, **kwargs: Any) -> Any | None:
-        for callback in self._hooks.get(hook_point, []):
-            result = callback(**kwargs)
-            if hook_point in ("pre_tool_use", "on_error") and result is not None:
-                return result
+    def on_error(self, block: dict[str, Any], error: Exception) -> dict[str, Any] | None:
         return None
 
-
-# -- 内置 hook 工厂 -----------------------------------------------------
-
-def make_permission_hook(context):
-    """pre_tool_use: 权限检查."""
-    from agent.workflow.permission import check_permission
-    def _hook(block, **kw):
-        perm = check_permission(block.get("name", ""), block.get("input", {}))
-        if not perm.allowed:
-            context.pending_action = {
-                "tool": block["name"],
-                "input": block.get("input", {}),
-                "message": perm.reason,
-            }
-            return {"status": "needs_confirmation", "message": perm.block_message}
+    def on_loop_end(self, *, messages: list[dict[str, Any]], response: dict[str, Any], steps: int) -> None:
         return None
-    return _hook
 
+    def remember_permission_pause(
+        self,
+        block: dict[str, Any],
+        *,
+        messages: list[dict[str, Any]],
+        results_before_pause: list[dict[str, Any]],
+        remaining_blocks: list[dict[str, Any]],
+        system: str,
+        max_tokens: int,
+        max_steps: int,
+        step_count: int,
+    ) -> None:
+        if not self.context.pending_action:
+            return
+        self.context.pending_action["resume"] = {
+            "messages": copy.deepcopy(messages),
+            "block": copy.deepcopy(block),
+            "results_before_pause": copy.deepcopy(results_before_pause),
+            "remaining_blocks": copy.deepcopy(remaining_blocks),
+            "allowed_categories": list(self.allowed_cats),
+            "has_resolved": self.has_resolved_ref["value"],
+            "system": system,
+            "max_tokens": max_tokens,
+            "max_steps": max_steps,
+            "step_count": step_count,
+        }
 
-def make_guard_hook(context, allowed_cats, has_resolved_ref):
-    """pre_tool_use: 依赖/合法性校验(在 permission 之前)."""
-    from agent.workflow.tool_guard import guard_tool_call
-    def _hook(block, **kw):
+    def pre_tool_use(self, block: dict[str, Any], *, step_count: int) -> dict[str, Any] | None:
+        if self.verbose:
+            self._log_pre_tool(block, step_count=step_count)
+
+        guard = self._guard_tool_call(block)
+        if guard is not None:
+            return guard
+
+        return self._check_permission(block)
+
+    def post_tool_use(self, block: dict[str, Any], output: Any, *, step_count: int) -> None:
+        name = block.get("name", "")
+        self.context.last_tool_result = {"step_name": name, "result": output}
+        self.steps_taken.append({"tool": name, "input": block.get("input", {})})
+        if is_failed_tool_output(output):
+            self.context.last_failed_action = {"tool": name, "input": block.get("input", {}) or {}}
+        elif name == (self.context.last_failed_action or {}).get("tool"):
+            self.context.last_failed_action = None
+        if name.startswith("resolve_"):
+            self.has_resolved_ref["value"] = True
+        if self.verbose:
+            self._log_post_tool(block, output, step_count=step_count)
+
+    def _guard_tool_call(self, block: dict[str, Any]) -> dict[str, Any] | None:
+        from agent.workflow.tool_guard import guard_tool_call
+
         guard = guard_tool_call(
-            block.get("name", ""), block.get("input", {}),
-            context=context, allowed_categories=allowed_cats,
-            user_confirmed=False, has_resolved=has_resolved_ref["value"],
+            block.get("name", ""),
+            block.get("input", {}),
+            context=self.context,
+            allowed_categories=self.allowed_cats,
+            user_confirmed=False,
+            has_resolved=self.has_resolved_ref["value"],
         )
         if not guard.allowed:
             return {"error": "guarded", "reason": guard.reason}
         return None
-    return _hook
 
+    def _check_permission(self, block: dict[str, Any]) -> dict[str, Any] | None:
+        from agent.workflow.permission import PermissionDecision, check_permission
 
-def make_state_update_hook(context, steps_taken, has_resolved_ref):
-    """post_tool_use: 更新 context、track steps、更新 has_resolved."""
-    def _hook(block, output, **kw):
-        name = block.get("name", "")
-        context.last_tool_result = {"step_name": name, "result": output}
-        steps_taken.append({"tool": name, "input": block.get("input", {})})
-        if name.startswith("resolve_"):
-            has_resolved_ref["value"] = True
-    return _hook
+        tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+        perm = check_permission(block.get("name", ""), tool_input)
+        if perm.allowed:
+            return None
+        if perm.decision == PermissionDecision.DENY:
+            return {"error": "permission_denied", "reason": perm.reason}
 
+        self.context.pending_action = {
+            "tool": block["name"],
+            "input": tool_input,
+            "message": perm.reason,
+        }
+        return {"status": "needs_confirmation", "message": perm.block_message}
 
-def make_verbose_pre_hook(step_counter_ref):
-    """pre_tool_use: verbose 日志."""
-    def _hook(block, **kw):
-        import json
-        args = block.get("input") or {}
-        fmt = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items()) or "no args"
-        _log(f"  [{step_counter_ref['value']}] \033[33m→\033[0m \033[1m{block.get('name')}\033[0m({fmt})")
-        return None
-    return _hook
+    @staticmethod
+    def _log_pre_tool(block: dict[str, Any], *, step_count: int) -> None:
+        fmt = _format_tool_args(block)
+        _log(f"  [{step_count}] \033[33m→\033[0m \033[1m{block.get('name')}\033[0m({fmt})")
 
-
-def make_verbose_post_hook(step_counter_ref):
-    """post_tool_use: verbose 日志."""
-    def _hook(block, output, **kw):
-        import json
-        text = json.dumps(output, ensure_ascii=False, default=str)[:120]
-        _log(f"  [{step_counter_ref['value']}] \033[32m←\033[0m \033[1m{block.get('name')}\033[0m {text}")
-    return _hook
-
-
-def install_all_hooks(reg: HookRegistry, context, allowed_cats, has_resolved_ref, steps_taken, *, verbose=False) -> None:
-    """安装 run_tool_loop 所需的全部 hooks.
-
-    顺序: pre → guard(合法性),然后 permission(审批); post → state_update.
-    """
-    step_ref = {"value": 0}
-    # pre: guard 先(合法性), permission 后(审批)
-    reg.register("pre_tool_use", make_guard_hook(context, allowed_cats, has_resolved_ref))
-    reg.register("pre_tool_use", make_permission_hook(context))
-    # post: state_update
-    reg.register("post_tool_use", make_state_update_hook(context, steps_taken, has_resolved_ref))
-    if verbose:
-        reg.register("pre_tool_use", make_verbose_pre_hook(step_ref))
-        reg.register("post_tool_use", make_verbose_post_hook(step_ref))
+    @staticmethod
+    def _log_post_tool(block: dict[str, Any], output: Any, *, step_count: int) -> None:
+        if block.get("name") == "todo_write":
+            _log_todos(output)
+            return
+        _log(f"  [{step_count}] \033[32m←\033[0m \033[1m{block.get('name')}\033[0m {_summarize_output(output)}")
 
 
 def _log(msg: str) -> None:
     import sys
     print(f"\033[2m[agent]\033[0m {msg}", file=sys.stderr, flush=True)
+
+
+def _log_raw(msg: str) -> None:
+    import sys
+    print(msg, file=sys.stderr, flush=True)
+
+
+def _format_tool_args(block: dict[str, Any]) -> str:
+    import json
+
+    args = block.get("input") if isinstance(block.get("input"), dict) else {}
+    if block.get("name") == "todo_write":
+        todos = args.get("todos")
+        if isinstance(todos, list):
+            return f"{len(todos)} tasks"
+        return "todos"
+    return ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items()) or "no args"
+
+
+def _summarize_output(output: Any) -> str:
+    import json
+
+    if isinstance(output, dict):
+        parts = []
+        for key in ("status", "count", "total", "downloaded", "skipped", "strava_activity_id"):
+            if key in output:
+                parts.append(f"{key}={json.dumps(output[key], ensure_ascii=False, default=str)}")
+        if parts:
+            return " ".join(parts)
+    return json.dumps(output, ensure_ascii=False, default=str)[:120]
+
+
+def _log_todos(output: Any) -> None:
+    if not isinstance(output, dict):
+        _log(f"  \033[32m←\033[0m \033[1mtodo_write\033[0m {_summarize_output(output)}")
+        return
+
+    todos = output.get("todos")
+    if not isinstance(todos, list):
+        _log(f"  \033[32m←\033[0m \033[1mtodo_write\033[0m {_summarize_output(output)}")
+        return
+
+    from agent.workflow.todos import format_todos_for_terminal
+
+    _log_raw(format_todos_for_terminal(todos))
+    _log(f"  \033[32m←\033[0m \033[1mtodo_write\033[0m Updated {len(todos)} tasks")

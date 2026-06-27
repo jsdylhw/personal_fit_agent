@@ -1,6 +1,6 @@
 """Agent tool-use loop.
 
-agent_loop() — 纯 tool-use 循环, 接收 HookRegistry 实例.
+agent_loop() — 纯 tool-use 循环, 接收 ToolLoopHooks 实例.
 run_tool_loop() — 便捷入口: intent/context/handlers 组装.
 """
 
@@ -13,13 +13,15 @@ from typing import Any
 from agent.chat_logger import new_session_id, write_workflow_markdown_log
 from agent.context import AgentContext
 from core.fit_paths import resolve_fit_path as _resolve_fit_path
-from agent.llm import AnthropicMessagesClient, extract_text, build_tool_result_block
+from agent.llm import AnthropicMessagesClient, build_tool_result_block
 from agent.tools import PLANNER_TOOLS, render_anthropic_tools
+from agent.tools.spec import CATEGORY_PLANNING
 from agent.workflow.intent import route_intent, intent_tool_categories
-from agent.workflow.hooks import HookRegistry, install_all_hooks, make_permission_hook, make_guard_hook, make_state_update_hook
+from agent.workflow.hooks import ToolLoopHooks
+from agent.workflow.tool_runtime import build_planner_handlers
+from agent.workflow.turn_control import handle_control_turn, is_confirm
 
 MAX_TOOL_STEPS = 10
-CONFIRM_WORDS = {"确认", "yes", "y", "是", "继续", "ok", "confirm", "确定", "好", "可以"}
 
 
 # -- 核心: agent_loop -------------------------------------------------
@@ -29,7 +31,7 @@ def agent_loop(
     *,
     tools: list[dict[str, Any]],
     handlers: dict[str, Any],
-    hooks: HookRegistry,
+    hooks: ToolLoopHooks,
     system: str = "",
     max_tokens: int = 4096,
     max_steps: int = MAX_TOOL_STEPS,
@@ -43,6 +45,10 @@ def agent_loop(
         if step_count > max_steps:
             break
 
+        reminder = hooks.before_llm_call()
+        if isinstance(reminder, dict):
+            messages.append(reminder)
+
         response = client.create_messages(
             system=system, messages=messages,
             max_tokens=max_tokens, tools=tools,
@@ -50,16 +56,35 @@ def agent_loop(
         messages.append({"role": "assistant", "content": response.get("content") or []})
 
         if response.get("stop_reason") != "tool_use":
-            hooks.trigger("on_loop_end", messages=messages, response=response, steps=step_count - 1)
+            hooks.on_loop_end(messages=messages, response=response, steps=step_count - 1)
             return step_count
 
+        hooks.on_tool_round()
+
         results: list[dict[str, Any]] = []
-        for block in response.get("content") or []:
+        content_blocks = response.get("content") or []
+        for idx, block in enumerate(content_blocks):
             if not isinstance(block, dict) or block.get("type") != "tool_use":
                 continue
 
-            blocked = hooks.trigger("pre_tool_use", block=block, step_count=step_count)
+            blocked = hooks.pre_tool_use(block, step_count=step_count)
             if blocked:
+                if blocked.get("status") == "needs_confirmation":
+                    remaining_blocks = [
+                        b for b in content_blocks[idx + 1:]
+                        if isinstance(b, dict) and b.get("type") == "tool_use"
+                    ]
+                    hooks.remember_permission_pause(
+                        block,
+                        messages=messages,
+                        results_before_pause=results,
+                        remaining_blocks=remaining_blocks,
+                        system=system,
+                        max_tokens=max_tokens,
+                        max_steps=max_steps,
+                        step_count=step_count,
+                    )
+                    return step_count
                 results.append(build_tool_result_block(block["id"], json.dumps(blocked, ensure_ascii=False)))
                 continue
 
@@ -67,10 +92,10 @@ def agent_loop(
             try:
                 output = handler(**block.get("input", {})) if handler else {"error": "unknown_tool", "name": block["name"]}
             except Exception as exc:
-                err = hooks.trigger("on_error", block=block, error=exc)
+                err = hooks.on_error(block, exc)
                 output = err or {"error": type(exc).__name__, "message": str(exc)}
 
-            hooks.trigger("post_tool_use", block=block, output=output, step_count=step_count)
+            hooks.post_tool_use(block, output, step_count=step_count)
 
             results.append(build_tool_result_block(block["id"], json.dumps(output, ensure_ascii=False, default=str)))
 
@@ -91,90 +116,212 @@ def run_tool_loop(
     context: AgentContext | None = None,
 ) -> dict[str, Any]:
     """组装 intent/context/handlers → agent_loop()."""
-    if context is None:
-        current_fit = _resolve_fit_path(fit_path) if fit_path else None
-        session_id = new_session_id("tool_loop")
-        context = AgentContext(
-            session_id=session_id, current_fit_file=current_fit,
-            history_enabled=use_history,
-            messages=[{"role": "user", "content": message}],
-        )
-    else:
-        session_id = context.session_id
-        context.messages.append({"role": "user", "content": message})
+    context = _prepare_context(message, fit_path=fit_path, use_history=use_history, context=context)
 
-    # pending 确认 → 执行工具,记录到 context.messages, 返回后可继续下轮
-    if context.pending_action and _is_confirm(message):
+    if context.pending_action and is_confirm(message) and context.pending_action.get("resume"):
         pending = context.pending_action
         context.pending_action = None
-        handlers = _build_planner_handlers(context)
-        handler = handlers.get(pending["tool"])
-        if handler:
-            try:
-                output = handler(**pending.get("input", {}))
-            except Exception as exc:
-                output = {"error": type(exc).__name__, "message": str(exc)}
-            context.last_tool_result = {"step_name": pending["tool"], "result": output}
-            # 写入 context.messages 保持追踪
-            result_json = json.dumps(output, ensure_ascii=False, default=str)
-            context.messages.append({"role": "user", "content": f"[确认执行] {pending['tool']}"})
-            context.messages.append({"role": "assistant", "content": [{"type": "text", "text": f"已执行 {pending['tool']}:\n{result_json[:300]}"}]})
-            if verbose:
-                _log_confirm(pending["tool"], output)
-            return {
-                "answer": f"已执行 {pending['tool']}。\n{result_json[:200]}",
-                "status": "completed", "context": context, "intent": "confirmed",
-                "steps": [{"tool": pending["tool"], "input": pending.get("input", {})}],
-            }
-        return {"answer": f"未知工具: {pending['tool']}", "status": "failed", "context": context}
+        return _resume_confirmed_turn(pending, context, verbose=verbose, default_max_tokens=max_tokens)
+
+    control_result = handle_control_turn(message, context, verbose=verbose)
+    if control_result is not None:
+        return control_result
 
     intent = route_intent(message)
     allowed_cats = intent_tool_categories(intent)
 
-    step_count, steps_taken = _do_loop(message, intent, allowed_cats, context, session_id, verbose, max_tokens)
-    return _build_result(intent, context, verbose, session_id, message, fit_path, use_history, max_tokens,
-                         step_count, steps_taken)
+    step_count, steps_taken = _run_agent_turn(
+        message,
+        intent,
+        allowed_cats,
+        context,
+        verbose,
+        max_tokens,
+        fit_path=fit_path,
+        use_history=use_history,
+    )
+    return _build_result(intent, context, message, fit_path, use_history, step_count, steps_taken)
 
 
-def _do_loop(message, intent, allowed_cats, context, session_id, verbose, max_tokens):
+def _prepare_context(
+    message: str,
+    *,
+    fit_path: str | Path | None,
+    use_history: bool,
+    context: AgentContext | None,
+) -> AgentContext:
+    if context is not None:
+        context.messages.append({"role": "user", "content": message})
+        return context
+
+    current_fit = _resolve_fit_path(fit_path) if fit_path else None
+    return AgentContext(
+        session_id=new_session_id("tool_loop"),
+        current_fit_file=current_fit,
+        history_enabled=use_history,
+        messages=[{"role": "user", "content": message}],
+    )
+
+
+def _run_agent_turn(message, intent, allowed_cats, context, verbose, max_tokens, *, fit_path=None, use_history=True):
     """执行 agent_loop 并同步 messages 回 context. 返回 step_count."""
-    tools = [render_anthropic_tools([t])[0] for t in PLANNER_TOOLS if t.category in allowed_cats]
-    handlers = _build_planner_handlers(context)
+    tool_categories = set(allowed_cats)
+    tool_categories.add(CATEGORY_PLANNING)
+    tools = [render_anthropic_tools([t])[0] for t in PLANNER_TOOLS if t.category in tool_categories]
+    handlers = build_planner_handlers(context)
     system = _build_system_prompt(intent)
     has_resolved = {"value": bool(context.current_fit_file)}
     steps_taken: list[dict] = []
 
-    if len(context.messages) > 1:
-        preamble = _build_state_preamble(context)
-        messages = [{"role": "user", "content": preamble}] + list(context.messages)
-    else:
-        messages = [{"role": "user", "content": _build_initial_message(message, intent, context)}]
+    messages = list(context.messages)
+    preamble = _build_state_preamble(context)
+    if preamble:
+        messages = [{"role": "user", "content": preamble}] + messages
 
-    hooks = HookRegistry()
-    install_all_hooks(hooks, context, allowed_cats, has_resolved, steps_taken, verbose=verbose)
+    hooks = ToolLoopHooks(context, tool_categories, has_resolved, steps_taken, verbose=verbose)
     if verbose:
         _log_hdr(message, intent, len(tools), bool(context.current_fit_file))
 
     step_count = agent_loop(messages, tools=tools, handlers=handlers, hooks=hooks,
                             system=system, max_tokens=max_tokens)
 
+    if context.pending_action and isinstance(context.pending_action.get("resume"), dict):
+        context.pending_action["resume"]["intent"] = intent
+        context.pending_action["resume"]["message"] = message
+        context.pending_action["resume"]["fit_path"] = fit_path
+        context.pending_action["resume"]["use_history"] = use_history
+
     _sync_messages_to_context(context, messages)
     return step_count, steps_taken
 
 
+def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_tokens: int):
+    """Execute the confirmed tool and continue the paused tool loop."""
+    from agent.workflow.permission import check_permission
+
+    resume = pending.get("resume") if isinstance(pending.get("resume"), dict) else {}
+    block = resume.get("block") or {
+        "type": "tool_use",
+        "id": "confirmed-tool",
+        "name": pending.get("tool"),
+        "input": pending.get("input") or {},
+    }
+    tool_name = str(pending.get("tool") or block.get("name") or "")
+    tool_input = pending.get("input") if isinstance(pending.get("input"), dict) else {}
+
+    permission = check_permission(tool_name, tool_input, has_confirmed=True)
+    if not permission.allowed:
+        answer = permission.block_message or f"权限拒绝: {permission.reason}"
+        context.messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+        return {"answer": answer, "status": "permission_denied", "context": context, "intent": "confirmed", "steps": []}
+
+    handlers = build_planner_handlers(context)
+    handler = handlers.get(tool_name)
+    if not handler:
+        answer = f"未知工具: {tool_name}"
+        context.messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+        return {"answer": answer, "status": "failed", "context": context, "intent": "confirmed", "steps": []}
+
+    allowed_cats = set(resume.get("allowed_categories") or [])
+    allowed_cats.add(CATEGORY_PLANNING)
+    tools = [render_anthropic_tools([t])[0] for t in PLANNER_TOOLS if t.category in allowed_cats]
+    messages = list(resume.get("messages") or context.messages)
+    results = list(resume.get("results_before_pause") or [])
+    steps_taken: list[dict] = []
+    has_resolved = {"value": bool(resume.get("has_resolved"))}
+    hooks = ToolLoopHooks(context, allowed_cats, has_resolved, steps_taken, verbose=verbose)
+
+    try:
+        output = handler(**tool_input)
+    except Exception as exc:
+        err = hooks.on_error(block, exc)
+        output = err or {"error": type(exc).__name__, "message": str(exc)}
+
+    hooks.post_tool_use(block, output, step_count=int(resume.get("step_count") or 0))
+    results.append(build_tool_result_block(block["id"], json.dumps(output, ensure_ascii=False, default=str)))
+    for skipped in resume.get("remaining_blocks") or []:
+        results.append(build_tool_result_block(
+            skipped["id"],
+            json.dumps({"status": "skipped", "reason": "paused_for_permission_confirmation"}, ensure_ascii=False),
+        ))
+    messages.append({"role": "user", "content": results})
+
+    if verbose:
+        from agent.workflow.hooks import _log
+        _log(f"  [确认执行] \033[1m{tool_name}\033[0m {json.dumps(output, ensure_ascii=False, default=str)[:120]}")
+
+    max_steps = int(resume.get("max_steps") or MAX_TOOL_STEPS)
+    used_steps = int(resume.get("step_count") or 0)
+    remaining_steps = max(1, max_steps - used_steps)
+    step_count = agent_loop(
+        messages,
+        tools=tools,
+        handlers=handlers,
+        hooks=hooks,
+        system=str(resume.get("system") or ""),
+        max_tokens=int(resume.get("max_tokens") or default_max_tokens),
+        max_steps=remaining_steps,
+    )
+
+    intent = resume.get("intent") or "confirmed"
+    if context.pending_action and isinstance(context.pending_action.get("resume"), dict):
+        context.pending_action["resume"]["intent"] = intent
+        context.pending_action["resume"]["message"] = resume.get("message") or f"确认执行 {tool_name}"
+        context.pending_action["resume"]["fit_path"] = resume.get("fit_path")
+        context.pending_action["resume"]["use_history"] = bool(resume.get("use_history", context.history_enabled))
+
+    _sync_messages_to_context(context, messages)
+    return _build_result(
+        intent,
+        context,
+        resume.get("message") or f"确认执行 {tool_name}",
+        resume.get("fit_path"),
+        bool(resume.get("use_history", context.history_enabled)),
+        step_count,
+        steps_taken,
+    )
+
+
 def _sync_messages_to_context(context, messages):
-    """将 agent_loop 产生的消息同步回 context,去掉状态 preamble."""
+    """同步长期对话历史,裁剪 tool_use/tool_result 中间态."""
     clean = []
     for m in messages:
         content = m.get("content", "")
         if isinstance(content, str) and content.startswith("[本轮状态]"):
-            continue  # 跳过 preamble
+            continue
+        if _is_tool_result_message(m):
+            continue
+        if _has_tool_use_block(m):
+            text_blocks = [
+                b for b in (content or [])
+                if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+            ]
+            if text_blocks:
+                clean.append({"role": "assistant", "content": text_blocks})
+            continue
         clean.append(m)
     context.messages = clean
 
 
-def _build_result(intent, context, verbose, session_id, message, fit_path, use_history, max_tokens,
-                  step_count=0, steps=None):
+def _is_tool_result_message(message: dict[str, Any]) -> bool:
+    content = message.get("content")
+    return (
+        message.get("role") == "user"
+        and isinstance(content, list)
+        and any(isinstance(block, dict) and block.get("type") == "tool_result" for block in content)
+    )
+
+
+def _has_tool_use_block(message: dict[str, Any]) -> bool:
+    content = message.get("content")
+    return (
+        message.get("role") == "assistant"
+        and isinstance(content, list)
+        and any(isinstance(block, dict) and block.get("type") == "tool_use" for block in content)
+    )
+
+
+def _build_result(intent, context, message, fit_path, use_history, step_count=0, steps=None):
     if steps is None:
         steps = []
     if context.pending_action:
@@ -195,8 +342,8 @@ def _build_result(intent, context, verbose, session_id, message, fit_path, use_h
         return _fallback_planned(message, context, fit_path=fit_path, use_history=use_history)
 
     log_path = write_workflow_markdown_log(
-        session_id, user_message=message,
-        planner_plan={"intent": intent.kind.value, "tool_groups": list(intent.tool_groups)},
+        context.session_id, user_message=message,
+        planner_plan={"intent": _intent_kind(intent), "tool_groups": _intent_groups(intent)},
         normalized_plan={},
         execution={"status": "completed", "steps": steps},
         selected_activities=context.selected_activities,
@@ -208,13 +355,10 @@ def _build_result(intent, context, verbose, session_id, message, fit_path, use_h
 
 # -- helpers -------------------------------------------------------------
 
-def _is_confirm(message: str) -> bool:
-    return message.lower().strip() in CONFIRM_WORDS
-
 
 def _result(status, intent, context, steps, answer, log_path=""):
     r = {"answer": answer, "status": status, "context": context,
-         "intent": intent.kind.value if hasattr(intent, 'kind') else str(intent),
+         "intent": _intent_kind(intent),
          "steps": steps,
          "selected_activities": context.selected_activities,
          "current_fit_file": str(context.current_fit_file) if context.current_fit_file else None}
@@ -222,48 +366,12 @@ def _result(status, intent, context, steps, answer, log_path=""):
     return r
 
 
-def _build_planner_handlers(context):
-    def _casual_chat(answer=None, message=None, **kw):
-        return {"answer": answer or message or "你好，我在。"}
-    def _ask_user_clarification(question=None, **kw):
-        return {"answer": question or "请再描述一下你的需求。"}
-    def _sync_garmin_activities(count=5, **kw):
-        from agent.workflow.handlers.ops import sync_garmin_activities_tool
-        result = sync_garmin_activities_tool(count=int(count))
-        context.last_tool_result = {"step_name": "sync_garmin_activities", "result": result}
-        return result
-    def _step(name, **kw): return _run_planner_step(name, kw, context)
-    return {
-        "casual_chat": _casual_chat, "ask_user_clarification": _ask_user_clarification,
-        "resolve_current_activity": lambda **kw: _step("resolve_current_activity", **kw),
-        "resolve_activity_by_date": lambda **kw: _step("resolve_activity_by_date", **kw),
-        "resolve_activity_range": lambda **kw: _step("resolve_activity_range", **kw),
-        "resolve_recent_activities": lambda **kw: _step("resolve_recent_activities", **kw),
-        "analyze_single_activity": lambda force=False, **kw: _step("analyze_single_activity", force=force, **kw),
-        "summarize_activity_range": lambda **kw: _step("summarize_activity_range", **kw),
-        "compare_activities": lambda **kw: _step("compare_activities", **kw),
-        "compare_with_history": lambda **kw: _step("summarize_activity_range", **kw),
-        "generate_training_advice": lambda **kw: _step("summarize_activity_range", **kw),
-        "summarize_recent_training_load": lambda **kw: _step("summarize_recent_training_load", **kw),
-        "generate_route_advice": lambda **kw: _step("generate_route_advice", **kw),
-        "sync_garmin_activities": _sync_garmin_activities,
-        "analyze_new_fit_files": lambda **kw: _step("analyze_new_fit_files", **kw),
-        "generate_summary_file": lambda force=False, **kw: _step("generate_summary_file", force=force, **kw),
-        "ensure_activity_summaries": lambda force=False, **kw: _step("ensure_activity_summaries", force=force, **kw),
-        "upload_strava_activity": lambda force=False, **kw: _step("upload_strava_activity", force=force, **kw),
-    }
+def _intent_kind(intent) -> str:
+    return intent.kind.value if hasattr(intent, "kind") else str(intent)
 
 
-def _run_planner_step(name, args, context):
-    from agent.workflow.plan_schema import WorkflowPlan, WorkflowPlanStep
-    from agent.workflow.executor import execute_workflow_plan
-    step = WorkflowPlanStep(name=name, reason="tool_use", arguments=args)
-    plan = WorkflowPlan(task_type="tool_loop", steps=[step], allow_side_effects=True)
-    exec_result = execute_workflow_plan(plan, context)
-    if exec_result.step_results:
-        sr = exec_result.step_results[0]
-        return sr.result or {"answer": sr.message or "", "status": sr.status}
-    return {"status": exec_result.status}
+def _intent_groups(intent) -> list[str]:
+    return list(getattr(intent, "tool_groups", []))
 
 
 def _build_system_prompt(intent) -> str:
@@ -272,35 +380,30 @@ def _build_system_prompt(intent) -> str:
 {side}
 规则:
 - 先定位活动(resolve),再分析(analyze)
-- 副作用工具(上传/下载)先询问用户确认
+- 多步骤任务先调用 todo_write 列出计划;执行过程中保持最多一个 in_progress,完成后及时更新 TODO 状态
+- 用户要求上传/下载/刷新时,直接调用对应工具;不要自己用自然语言询问确认,权限系统会拦截并生成确认提示
 - 完成后给出简短中文总结
 - 不要编造数据
 """
 
 
 def _build_state_preamble(context):
-    parts = ["[本轮状态]"]
+    parts = []
     if context.current_fit_file: parts.append(f"当前 FIT: {context.current_fit_file}")
     if context.selected_activities: parts.append(f"已选活动: {len(context.selected_activities)} 条")
     if context.selected_activity_range: parts.append(f"活动范围: {json.dumps(context.selected_activity_range, ensure_ascii=False)}")
     if context.pending_action: parts.append(f"⚠ 待确认: {context.pending_action.get('tool')} ({context.pending_action.get('message')})")
-    return "\n".join(parts)
-
-
-def _build_initial_message(message, intent, context):
-    parts = [f"用户请求: {message}"]
-    if context.current_fit_file: parts.append(f"当前 FIT: {context.current_fit_file}")
-    return "\n".join(parts)
+    if context.current_todos:
+        from agent.workflow.todos import format_todos_for_prompt
+        parts.append(format_todos_for_prompt(context.current_todos))
+    if not parts:
+        return ""
+    return "\n".join(["[本轮状态]", *parts])
 
 
 def _fallback_planned(message, context, **kw):
     from agent.workflow.runner import run_planned_workflow
     return run_planned_workflow(message, fit_path=kw.get('fit_path'), use_history=kw.get('use_history', True))
-
-
-def _log_confirm(tool, output):
-    from agent.workflow.hooks import _log
-    _log(f"  [confirm] \033[1m{tool}\033[0m {json.dumps(output, ensure_ascii=False, default=str)[:120]}")
 
 
 def _log_hdr(message, intent, tool_count, has_fit):

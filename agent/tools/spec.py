@@ -18,6 +18,7 @@ CATEGORY_ACTIVITY_RESOLUTION = "activity_resolution"  # 活动定位
 CATEGORY_ANALYSIS = "analysis"             # 分析/汇总/对比
 CATEGORY_COACHING = "coaching"             # 训练建议/路线建议
 CATEGORY_STRAVA = "strava"                 # Strava 上传
+CATEGORY_PLANNING = "planning"             # 内部计划/TODO 状态
 
 
 @dataclass(frozen=True)

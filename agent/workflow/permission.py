@@ -3,19 +3,29 @@
 插在工具执行之前:
   Gate 1: 硬拒绝 — 命中即拦截
   Gate 2: 规则检查 — 命中需要用户审批
-  Gate 3: 用户审批 — 交互式确认
+  Gate 3: 用户审批 — 外层对话确认
 
 使用:
     result = check_permission(tool_name, tool_input, has_confirmed=False)
-    if not result.allowed:
-        return result.block_message
+    if result.decision == PermissionDecision.DENY:
+        return "Permission denied"
+    if result.decision == PermissionDecision.ASK:
+        pause_and_wait_for_user_confirmation()
     # 执行工具
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
+
+
+class PermissionDecision:
+    """权限检查的三种结果."""
+
+    ALLOW = "allow"
+    ASK = "ask"
+    DENY = "deny"
 
 # -- Gate 1: 硬拒绝表 ----------------------------------------------------
 
@@ -73,11 +83,43 @@ def check_rules(tool_name: str, args: dict[str, Any]) -> str | None:
 
 # -- Gate 3: 权限检查入口 --------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class PermissionResult:
-    allowed: bool
+    decision: str
     reason: str = ""
     block_message: str = ""
+
+    @property
+    def allowed(self) -> bool:
+        return self.decision == PermissionDecision.ALLOW
+
+    @property
+    def denied(self) -> bool:
+        return self.decision == PermissionDecision.DENY
+
+    @property
+    def needs_confirmation(self) -> bool:
+        return self.decision == PermissionDecision.ASK
+
+    @classmethod
+    def allow(cls) -> "PermissionResult":
+        return cls(PermissionDecision.ALLOW)
+
+    @classmethod
+    def deny(cls, reason: str) -> "PermissionResult":
+        return cls(
+            PermissionDecision.DENY,
+            reason=reason,
+            block_message=f"⛔ {reason}",
+        )
+
+    @classmethod
+    def ask(cls, reason: str) -> "PermissionResult":
+        return cls(
+            PermissionDecision.ASK,
+            reason=reason,
+            block_message=f"⚠ {reason}\n请回复 '确认' 或 'yes' 来执行。",
+        )
 
 
 def check_permission(
@@ -94,20 +136,21 @@ def check_permission(
         has_confirmed: 用户是否已审批本轮.
 
     Returns:
-        PermissionResult — allowed=True 放行, allowed=False 拦截.
+        PermissionResult:
+          - decision=allow 放行
+          - decision=ask   暂停并等待外层对话确认
+          - decision=deny  硬拒绝,不可通过确认绕过
     """
     # Gate 1: 硬拒绝
     deny_reason = check_deny_list(tool_name, args)
     if deny_reason:
-        return PermissionResult(allowed=False, reason=deny_reason,
-                                block_message=f"⛔ {deny_reason}")
+        return PermissionResult.deny(deny_reason)
 
     # Gate 2 + 3: 规则检查 → 如果用户已确认则放行,否则需要审批
     rule_reason = check_rules(tool_name, args)
     if rule_reason:
         if has_confirmed:
-            return PermissionResult(allowed=True)
-        return PermissionResult(allowed=False, reason=rule_reason,
-                                block_message=f"⚠ {rule_reason}\n请回复 '确认' 来执行。")
+            return PermissionResult.allow()
+        return PermissionResult.ask(rule_reason)
 
-    return PermissionResult(allowed=True)
+    return PermissionResult.allow()

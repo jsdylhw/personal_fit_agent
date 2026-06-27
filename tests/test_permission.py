@@ -7,6 +7,7 @@ import pytest
 from agent.workflow.permission import (
     DENY_LIST,
     PERMISSION_RULES,
+    PermissionDecision,
     PermissionResult,
     check_deny_list,
     check_permission,
@@ -65,6 +66,9 @@ class TestCheckPermission:
         try:
             result = check_permission("blocked_tool", {})
             assert result.allowed is False
+            assert result.decision == PermissionDecision.DENY
+            assert result.denied is True
+            assert result.needs_confirmation is False
             assert "已禁用" in result.block_message
         finally:
             DENY_LIST.pop()
@@ -72,11 +76,14 @@ class TestCheckPermission:
     def test_needs_confirmation_first_time(self):
         result = check_permission("upload_strava_activity", {}, has_confirmed=False)
         assert result.allowed is False
+        assert result.decision == PermissionDecision.ASK
+        assert result.needs_confirmation is True
         assert "Strava" in result.reason
 
     def test_allowed_when_confirmed(self):
         result = check_permission("upload_strava_activity", {}, has_confirmed=True)
         assert result.allowed is True
+        assert result.decision == PermissionDecision.ALLOW
 
     def test_safe_tool_allowed(self):
         result = check_permission("analyze_single_activity", {})

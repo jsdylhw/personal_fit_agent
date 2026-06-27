@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core.activity_index import upsert_activity_from_summary
 from sinks.strava import StravaSink
 
 
@@ -42,6 +43,20 @@ def upload_summary_to_strava(
     fit_summary = summary.get("fit_summary") or {}
     upload_title = title or _default_title(fit_summary, Path(fit_path))
     sink = StravaSink()
+
+    known_activity_id = _known_strava_activity_id(summary)
+    if force and known_activity_id:
+        updated = sink.update_description(known_activity_id, strava_summary)
+        _remember_strava_activity_id(path, summary, known_activity_id)
+        return {
+            "summary_path": str(path),
+            "fit_path": fit_path,
+            "status": "description_updated",
+            "strava_activity_id": known_activity_id,
+            "update_result": updated,
+            "message": f"已更新 Strava 活动 {known_activity_id} 的描述。",
+        }
+
     upload = sink.upload_fit(
         fit_path, title=upload_title, description=strava_summary,
         external_id=summary.get("activity_key"),
@@ -61,6 +76,7 @@ def upload_summary_to_strava(
     # 处理 duplicate 错误:提取已有活动 ID,根据 force 决定报错还是更新描述
     duplicate_id = _parse_duplicate_activity_id(result.get("upload_status") or {})
     if duplicate_id:
+        _remember_strava_activity_id(path, summary, duplicate_id)
         if force:
             updated = sink.update_description(duplicate_id, strava_summary)
             result["status"] = "description_updated"
@@ -75,6 +91,10 @@ def upload_summary_to_strava(
                 "strava_activity_id": duplicate_id,
                 "message": f"该活动已上传到 Strava (activity_id={duplicate_id})。使用 --force 更新描述,或手动调用 update-strava-description。",
             }
+
+    uploaded_activity_id = (result.get("upload_status") or {}).get("activity_id")
+    if uploaded_activity_id:
+        _remember_strava_activity_id(path, summary, str(uploaded_activity_id))
     return result
 
 
@@ -97,7 +117,34 @@ def update_strava_description_from_summary(
     strava_summary = summary.get("strava_summary")
     if not strava_summary:
         raise RuntimeError(f"summary does not contain strava_summary: {path}")
-    return StravaSink().update_description(activity_id, strava_summary)
+    result = StravaSink().update_description(activity_id, strava_summary)
+    _remember_strava_activity_id(path, summary, str(activity_id))
+    return result
+
+
+def _known_strava_activity_id(summary: dict[str, Any]) -> str | None:
+    value = summary.get("strava_activity_id")
+    if value:
+        return str(value)
+    upload_status = summary.get("strava_upload_status")
+    if isinstance(upload_status, dict) and upload_status.get("activity_id"):
+        return str(upload_status["activity_id"])
+    return None
+
+
+def _remember_strava_activity_id(summary_path: Path, summary: dict[str, Any], activity_id: str) -> None:
+    """把 Strava 活动 ID 写回 summary,并刷新 activity_index 中的同一行."""
+    if not activity_id:
+        return
+    updated = dict(summary)
+    updated["strava_activity_id"] = str(activity_id)
+    if summary.get("strava_activity_id") != str(activity_id):
+        summary_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    try:
+        upsert_activity_from_summary(summary_path)
+    except Exception:
+        # summary 是主缓存;index 刷新失败不应影响上传/更新描述主流程.
+        pass
 
 
 def _parse_duplicate_activity_id(status: dict[str, Any]) -> str | None:
