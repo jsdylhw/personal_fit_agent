@@ -44,6 +44,7 @@ class AnthropicMessagesClient:
     def create_message(
         self, *, system: str | None = None, user: str | list[dict[str, Any]],
         max_tokens: int | None = None, temperature: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """单条 user 消息调用(guided/direct 模式使用)."""
         payload = {
@@ -54,11 +55,14 @@ class AnthropicMessagesClient:
         }
         if system:
             payload["system"] = system
+        if tools:
+            payload["tools"] = tools
         return self._post_messages(payload)
 
     def create_messages(
         self, *, system: str | None = None, messages: list[dict[str, Any]],
         max_tokens: int | None = None, temperature: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """多轮 messages 调用(tool loop 模式使用)."""
         payload = {
@@ -69,6 +73,8 @@ class AnthropicMessagesClient:
         }
         if system:
             payload["system"] = system
+        if tools:
+            payload["tools"] = tools
         return self._post_messages(payload)
 
     def _post_messages(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -130,3 +136,43 @@ def extract_text(message: dict[str, Any]) -> str:
         if isinstance(part, dict) and part.get("type") == "text" and part.get("text") is not None
     ]
     return "\n".join(texts).strip()
+
+
+def extract_tool_use_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """从 API 响应中提取所有 tool_use content block.
+
+    每个 block 包含 id, name, input 字段.
+
+    Args:
+        message: Anthropic Messages API 的响应 dict.
+
+    Returns:
+        list[dict]: tool_use block 列表.
+    """
+    parts = message.get("content") or []
+    return [
+        {
+            "id": part.get("id"),
+            "name": part.get("name"),
+            "input": part.get("input") or {},
+        }
+        for part in parts
+        if isinstance(part, dict) and part.get("type") == "tool_use"
+    ]
+
+
+def build_tool_result_block(tool_use_id: str, content: str) -> dict[str, Any]:
+    """构建 tool_result content block,用于追加到 messages.
+
+    Args:
+        tool_use_id: tool_use block 的 id.
+        content: 工具执行结果的 JSON 字符串.
+
+    Returns:
+        dict: {"type": "tool_result", "tool_use_id": ..., "content": ...}
+    """
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": content,
+    }
