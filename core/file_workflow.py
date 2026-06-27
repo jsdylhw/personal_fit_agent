@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from agent.chat_logger import append_chat_log, new_session_id, readable_chat_log_path
-from agent.llm import AnthropicMessagesClient, extract_text
+from agent.llm import AnthropicMessagesClient, extract_text, build_tool_result_block
 from agent.prompts import LLM_FIT_ANALYSIS_SYSTEM_PROMPT
-from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
+from agent.tools import FIT_DATA_TOOLS, build_tool_handlers
+from agent.tools.spec import ToolRegistry
 from fit.parser import parse_fit
 
 from .config import ensure_data_dirs
@@ -150,11 +151,9 @@ def analyze_with_llm(
 ) -> dict[str, Any]:
     """隐藏 tool loop:LLM 最多 MAX_TOOL_LOOP_STEPS 轮调用工具,最终输出报告.
 
-    每轮:
-    1. 发送 message history + system prompt 给 LLM
-    2. LLM 返回 tool 请求或 final 结果
-    3. 如果是 tool,本地执行并将结果追加到 message history
-    4. 如果是 final,提取 markdown_report 和 strava_summary
+    使用 Anthropic 原生 tools 参数替代手搓 JSON 协议:
+    - 工具通过 tools 参数传给 API,LLM 返回 tool_use content block.
+    - 不再需要手工解析 {"action": "tool", "tool": ...} 文本.
 
     Args:
         path: FIT 文件路径.
@@ -171,6 +170,11 @@ def analyze_with_llm(
     client = AnthropicMessagesClient()
     session_id = new_session_id("fit_analysis")
     strava_summary_tone = choose_strava_summary_tone()
+
+    # 构建原生 tools 参数(直接从 ToolDef tuple)
+    registry = ToolRegistry(FIT_DATA_TOOLS)
+    handlers = build_tool_handlers(parsed, history_before)
+
     messages: list[dict[str, Any]] = [
         {
             "role": "user",
@@ -184,43 +188,65 @@ def analyze_with_llm(
     data: dict[str, Any] | None = None
     last_response: dict[str, Any] | None = None
 
-    for step in range(1, MAX_TOOL_LOOP_STEPS + 1):
+    for loop_step in range(1, MAX_TOOL_LOOP_STEPS + 1):
         response = client.create_messages(
-            system=LLM_FIT_ANALYSIS_SYSTEM_PROMPT, messages=messages, max_tokens=4000,
+            system=LLM_FIT_ANALYSIS_SYSTEM_PROMPT,
+            messages=messages,
+            max_tokens=4000,
+            tools=registry.to_anthropic(),
         )
         last_response = response
         response_text = extract_text(response)
-        action = _extract_json_object(response_text)
         turns.append({
-            "step": step, "type": "llm_response",
-            "raw_text": response_text, "parsed": action, "response": response,
+            "step": loop_step, "type": "llm_response",
+            "raw_text": response_text, "response": response,
         })
-        messages.append({"role": "assistant", "content": response_text})
 
-        if action.get("action") == "final" or "markdown_report" in action:
-            data = action.get("result") if isinstance(action.get("result"), dict) else action
-            break
+        # 保存 assistant response 到 message history
+        messages.append({"role": "assistant", "content": response.get("content") or []})
 
-        if action.get("action") != "tool":
-            tool_result = {
-                "error": "invalid_action",
-                "message": "Return action=tool to request data or action=final to finish.",
-            }
-        else:
-            tool_result = call_fit_analysis_tool(
-                str(action.get("tool") or ""),
-                action.get("arguments") if isinstance(action.get("arguments"), dict) else {},
-                parsed=parsed,
-                history_before=history_before,
-            )
+        # 遍历 response content,通过 handler 字典分发 tool_use block
+        tool_result_blocks: list[dict[str, Any]] = []
+        for block in response.get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                handler = handlers.get(block["name"])
+                tool_input = block.get("input") or {}
+                if handler is None:
+                    output = json.dumps({"error": "unknown_tool", "name": block["name"]})
+                else:
+                    try:
+                        result = handler(**tool_input)
+                        output = json.dumps(result, ensure_ascii=False, default=str)
+                    except Exception as exc:
+                        output = json.dumps({"error": type(exc).__name__, "message": str(exc)})
+                tool_result_blocks.append(build_tool_result_block(block["id"], output))
+                turns.append({"step": loop_step, "type": "tool_result", "tool": block["name"]})
 
-        turns.append({"step": step, "type": "tool_result", **tool_result})
+        if tool_result_blocks:
+            messages.append({"role": "user", "content": tool_result_blocks})
+            continue
+
+        # 没有 tool_use,尝试从文本中解析 final 输出
+        if response_text:
+            try:
+                action = _extract_json_object(response_text)
+            except (json.JSONDecodeError, RuntimeError):
+                messages.append({
+                    "role": "user",
+                    "content": "Please continue. Call a tool if you need data, or return the final JSON object with markdown_report and strava_summary.",
+                })
+                continue
+
+            if action.get("action") == "final" or "markdown_report" in action:
+                data = action.get("result") if isinstance(action.get("result"), dict) else action
+                break
+
+        # 没有 tool_use 也没有有效 final 文本 — 提示继续
         messages.append({
             "role": "user",
-            "content": json.dumps(
-                {"tool_result": tool_result, "instruction": "Continue. Request another tool if needed, otherwise return action=final."},
-                ensure_ascii=False, indent=2, default=str,
-            ),
+            "content": "Please call a tool to get data, or return your final analysis as a JSON object with markdown_report and strava_summary.",
         })
 
     if data is None:
@@ -257,16 +283,15 @@ def build_initial_loop_payload(
 ) -> dict[str, Any]:
     """构建 tool loop 首轮 user message 的 payload.
 
-    包含 FIT 摘要,工具列表(从 catalog 取,不和 prompt 重复维护),
-    Strava 风格要求,输出契约.
+    工具通过原生 tools 参数传给 API,不再放在 payload 里.
     """
     return {
         "instruction": (
             "You are in a hidden FIT analysis tool loop. The user asked to analyze this activity. "
-            "Start from this brief FIT summary. Request extra data only when you need it."
+            "Start from this brief FIT summary. Use the available tools to request extra data when needed. "
+            "When done, output the final JSON object with markdown_report and strava_summary."
         ),
         "output_contract": {
-            "tool_request": {"action": "tool", "tool": "tool_name", "arguments": {}},
             "final": {
                 "action": "final",
                 "markdown_report": "Chinese markdown report.",
@@ -278,8 +303,6 @@ def build_initial_loop_payload(
         "fit_file": {"path": str(path), "name": path.name, "activity_key": _activity_key(path)},
         "fit_summary": llm_safe_fit_summary(parsed.get("summary", {})),
         "history_available": history_before is not None,
-        # 工具列表从 catalog 取,不在 system prompt 中重复维护
-        "available_tools": fit_data_tool_catalog(),
     }
 
 
