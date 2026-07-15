@@ -1,4 +1,4 @@
-"""Strava 上传工作流:从 summary JSON 读取分析结果,上传 FIT 并写描述.
+"""Strava 上传/描述更新:从 summary JSON 读取分析结果并发布到 Strava.
 
 依赖 sinks/strava.py 的 StravaSink 做实际的 API 调用.
 """

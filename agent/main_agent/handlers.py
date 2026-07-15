@@ -7,11 +7,17 @@ from pathlib import Path
 from typing import Any
 
 from agent.context import AgentContext
+from agent.activity.permission import request_analysis_write_confirmation
 from agent.llm import AnthropicMessagesClient, extract_text
-from agent.workflow.handlers.ops import analyze_fit_file_tool, upload_to_strava_tool
+from agent.operations import analyze_fit_file_tool, upload_to_strava_tool
 
 
-def execute_analyze_new_fit_files(context: AgentContext) -> dict[str, Any]:
+def execute_analyze_new_fit_files(context: AgentContext, args: dict[str, Any] | None = None) -> dict[str, Any]:
+    args = args or {}
+    permission = request_analysis_write_confirmation(context, tool_name="analyze_new_activities", args=args)
+    if permission is not None:
+        return permission
+
     previous = (context.last_tool_result or {}).get("result") or {}
     sync_result = previous.get("result") if isinstance(previous.get("result"), dict) else previous
     items = sync_result.get("downloaded_items") or []
@@ -35,6 +41,10 @@ def execute_generate_summary_file(
     context: AgentContext,
 ) -> dict[str, Any]:
     fit_path = _current_fit_path(context)
+    permission = request_analysis_write_confirmation(context, tool_name=name, args=args)
+    if permission is not None:
+        return permission
+
     result = analyze_fit_file_tool(str(fit_path), force=bool(args.get("force")))
     if result.get("fit_path"):
         context.current_fit_file = Path(str(result["fit_path"])).expanduser()
@@ -47,6 +57,19 @@ def execute_ensure_activity_summaries(
     context: AgentContext,
 ) -> dict[str, Any]:
     force = bool(args.get("force"))
+    will_write = force or any(
+        not (
+            isinstance(activity, dict)
+            and activity.get("summary_path")
+            and Path(str(activity.get("summary_path"))).expanduser().exists()
+        )
+        for activity in context.selected_activities
+    )
+    if will_write:
+        permission = request_analysis_write_confirmation(context, tool_name=name, args=args)
+        if permission is not None:
+            return permission
+
     analyses = []
     for activity in context.selected_activities:
         fit_path = activity.get("fit_path") if isinstance(activity, dict) else None
@@ -126,7 +149,13 @@ def execute_summarize_activity_range(
             },
         }
 
-    summary_generation = _ensure_summaries_for_activities(activities, force=bool(args.get("force")))
+    force = bool(args.get("force"))
+    if _activities_need_summary_generation(activities, force=force):
+        permission = request_analysis_write_confirmation(context, tool_name=name, args=args)
+        if permission is not None:
+            return permission
+
+    summary_generation = _ensure_summaries_for_activities(activities, force=force)
 
     activities = _reload_activities_from_index(activities)
     context.selected_activities = activities
@@ -236,6 +265,18 @@ def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force:
         "generated": generated,
         "skipped": skipped,
     }
+
+
+def _activities_need_summary_generation(activities: list[dict[str, Any]], *, force: bool = False) -> bool:
+    if force:
+        return True
+    return any(
+        not (
+            activity.get("summary_path")
+            and Path(str(activity.get("summary_path"))).expanduser().exists()
+        )
+        for activity in activities
+    )
 
 
 def _summary_generation_item(activity: dict[str, Any], *, status: str) -> dict[str, Any]:

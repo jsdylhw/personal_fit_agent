@@ -8,21 +8,23 @@ from agent.prompts import (
     FIT_ANALYSIS_TOOL_GUIDANCE,
     build_fit_analysis_system_prompt,
 )
+from agent.activity.analysis_agent import (
+    _extract_json_object,
+    analyze_with_llm,
+    analyze_fit_file,
+    build_initial_loop_payload,
+    choose_strava_summary_tone,
+    normalize_history_entry,
+)
 from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
-from core.data_tools import (
+from agent.tools.fit_analysis import (
     DEFAULT_SECTIONS,
     SUMMARY_SECTIONS,
     _normalize_summary_sections,
     get_activity_overview_tool,
     get_activity_summary_tool,
 )
-from core.file_workflow import (
-    _extract_json_object,
-    analyze_fit_file,
-    build_initial_loop_payload,
-    choose_strava_summary_tone,
-    normalize_history_entry,
-)
+from agent.tools.fit_analysis.catalog import SUBMIT_ANALYSIS_TOOL
 from core.stats import (
     _normalize_bucket_distance_m,
     _normalize_bucket_seconds,
@@ -90,6 +92,28 @@ class TestExtractJsonObject:
     def test_array_raises(self):
         with pytest.raises(RuntimeError, match="JSON object"):
             _extract_json_object("[1, 2, 3]")
+
+    def test_final_jsonish_with_raw_quotes_in_markdown(self):
+        text = '''好的，最终输出如下:
+
+```json
+{
+  "action": "final",
+  "markdown_report": "# 报告\\n\\n这是主课前的"唤醒"，随后进入阈值段。",
+  "strava_summary": "短距离阈值训练，主区间质量不错。",
+  "history_entry": {
+    "schema_version": "llm_activity_history_entry.v1",
+    "summary_label": "短距阈值训练"
+  }
+}
+```'''
+
+        result = _extract_json_object(text)
+
+        assert result["action"] == "final"
+        assert '主课前的"唤醒"' in result["markdown_report"]
+        assert result["strava_summary"].startswith("短距离")
+        assert result["history_entry"]["summary_label"] == "短距阈值训练"
 
 
 class TestNormalizeBucketSeconds:
@@ -461,7 +485,60 @@ class TestBuildInitialLoopPayload:
         assert "timezone_note" not in fit_summary
         # 工具已迁移到原生 tools 参数,不再出现在 payload 中
         assert "available_tools" not in payload
-        assert "tool_request" not in payload.get("output_contract", {})
+        assert payload["completion_contract"]["tool"] == "submit_analysis"
+
+    def test_includes_targeted_user_request(self, sample_parsed_fit, tmp_path):
+        fit_path = tmp_path / "test_activity.fit"
+        fit_path.write_bytes(b"mock fit content")
+
+        payload = build_initial_loop_payload(
+            fit_path,
+            sample_parsed_fit,
+            history_before=None,
+            strava_summary_tone={"name": "minimal_brief", "description": "test"},
+            user_request="检查 100-200 秒是否有短冲刺",
+        )
+
+        assert payload["user_request"] == "检查 100-200 秒是否有短冲刺"
+        assert "answer that question explicitly" in payload["instruction"]
+
+
+def test_submit_analysis_ends_child_loop(sample_parsed_fit, tmp_path, monkeypatch):
+    fit_path = tmp_path / "test_activity.fit"
+    fit_path.write_bytes(b"mock fit content")
+    captured = {}
+
+    class FakeClient:
+        def create_messages(self, **kwargs):
+            captured["tools"] = kwargs["tools"]
+            return {
+                "id": "submit-response",
+                "model": "test-model",
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "submit-1",
+                        "name": "submit_analysis",
+                        "input": {
+                            "markdown_report": "# 完成报告",
+                            "strava_summary": "一次简短骑行总结。",
+                            "history_entry": {"summary_label": "恢复骑"},
+                        },
+                    }
+                ],
+            }
+
+    monkeypatch.setattr("agent.activity.analysis_agent.AnthropicMessagesClient", FakeClient)
+    monkeypatch.setattr("agent.activity.analysis_agent.new_session_id", lambda prefix: "submit-test")
+    monkeypatch.setattr("agent.activity.analysis_agent.append_chat_log", lambda *args, **kwargs: tmp_path / "submit.jsonl")
+
+    result = analyze_with_llm(fit_path, sample_parsed_fit, history_before=None)
+
+    assert result["markdown_report"] == "# 完成报告"
+    assert result["history_entry"] == {"summary_label": "恢复骑"}
+    assert [tool["name"] for tool in captured["tools"]][-1] == "submit_analysis"
+    assert SUBMIT_ANALYSIS_TOOL.input_schema["required"] == ["markdown_report", "strava_summary", "history_entry"]
 
 
 class TestAnalyzeFitFileResultTimes:
@@ -471,9 +548,9 @@ class TestAnalyzeFitFileResultTimes:
         fit_path = tmp_path / "test_activity.fit"
         fit_path.write_bytes(b"mock fit content")
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("core.file_workflow.parse_fit", lambda path: sample_parsed_fit)
+        monkeypatch.setattr("agent.activity.analysis_agent.parse_fit", lambda path: sample_parsed_fit)
         monkeypatch.setattr(
-            "core.file_workflow.query_activity_history",
+            "agent.activity.analysis_agent.query_activity_history",
             lambda **kwargs: {
                 "schema_version": "file_training_history.v1",
                 "count": 1,
@@ -486,8 +563,8 @@ class TestAnalyzeFitFileResultTimes:
             },
         )
         monkeypatch.setattr(
-            "core.file_workflow.analyze_with_llm",
-            lambda path, parsed, history_before: {
+            "agent.activity.analysis_agent.analyze_with_llm",
+            lambda path, parsed, history_before, user_request: {
                 "model": "test-model",
                 "markdown_report": "# Report",
                 "strava_summary": "summary",
@@ -508,42 +585,42 @@ class TestAnalyzeFitFileResultTimes:
 
 class TestStrictBool:
     def test_true_is_true(self):
-        from agent.workflow.handlers.ops import _parse_strict_bool
+        from agent.operations import _parse_strict_bool
         assert _parse_strict_bool(True) is True
 
     def test_false_is_false(self):
-        from agent.workflow.handlers.ops import _parse_strict_bool
+        from agent.operations import _parse_strict_bool
         assert _parse_strict_bool(False) is False
 
     def test_string_false_is_false(self):
         """字符串 'false' 不会被 bool() 误判为 True."""
-        from agent.workflow.handlers.ops import _parse_strict_bool
+        from agent.operations import _parse_strict_bool
         assert _parse_strict_bool("false") is False
 
     def test_string_true_is_false(self):
-        from agent.workflow.handlers.ops import _parse_strict_bool
+        from agent.operations import _parse_strict_bool
         assert _parse_strict_bool("true") is False
 
     def test_none_is_default(self):
-        from agent.workflow.handlers.ops import _parse_strict_bool
+        from agent.operations import _parse_strict_bool
         assert _parse_strict_bool(None) is False
 
     def test_number_one_is_false(self):
         """数字 1 也不是 True."""
-        from agent.workflow.handlers.ops import _parse_strict_bool
+        from agent.operations import _parse_strict_bool
         assert _parse_strict_bool(1) is False
 
 
 class TestSyncCountLimit:
     def test_max_sync_count_is_declared(self):
         # 只测同步上限常量,不实际调用 Garmin(会因无凭证报错)
-        from agent.workflow.handlers.ops import MAX_SYNC_COUNT
+        from agent.operations import MAX_SYNC_COUNT
         assert MAX_SYNC_COUNT == 20
 
     def test_count_above_limit_is_rejected(self):
         import pytest
 
-        from agent.workflow.handlers.ops import sync_garmin_activities_tool
+        from agent.operations import sync_garmin_activities_tool
 
         with pytest.raises(ValueError, match="between 1 and 20"):
             sync_garmin_activities_tool(count=50)
@@ -551,7 +628,7 @@ class TestSyncCountLimit:
 
 class TestUploadErrorStates:
     def test_no_summary(self):
-        from agent.workflow.handlers.ops import upload_to_strava_tool
+        from agent.operations import upload_to_strava_tool
         result = upload_to_strava_tool("/tmp/nonexistent_activity.fit")
         assert result["error"] == "no_summary"
 
@@ -562,7 +639,7 @@ class TestUploadErrorStates:
         """
         import json
         from unittest.mock import MagicMock
-        from agent.workflow.handlers.ops import upload_to_strava_tool
+        from agent.operations import upload_to_strava_tool
 
         # 创建临时 summary
         fit_file = tmp_path / "test.fit"
@@ -596,7 +673,7 @@ class TestUploadErrorStates:
         """Python True 正常触发上传."""
         import json
         from unittest.mock import MagicMock
-        from agent.workflow.handlers.ops import upload_to_strava_tool
+        from agent.operations import upload_to_strava_tool
 
         fit_file = tmp_path / "test.fit"
         fit_file.write_bytes(b"mock")
@@ -618,7 +695,7 @@ class TestUploadErrorStates:
         mock_sink.upload_fit.return_value = {"id": 99999}
         mock_sink.wait_for_upload.return_value = {"activity_id": 88888}
         mock_sink_cls = MagicMock(return_value=mock_sink)
-        monkeypatch.setattr("core.strava_workflow.StravaSink", mock_sink_cls)
+        monkeypatch.setattr("core.strava_upload.StravaSink", mock_sink_cls)
 
         result = upload_to_strava_tool(str(fit_file), confirmed=True)
         assert result["status"] == "uploaded"
@@ -627,7 +704,7 @@ class TestUploadErrorStates:
 
     def test_duplicate_returns_existing_and_pending_activity(self, tmp_path, monkeypatch):
         import json
-        from agent.workflow.handlers.ops import upload_to_strava_tool
+        from agent.operations import upload_to_strava_tool
 
         fit_file = tmp_path / "test.fit"
         fit_file.write_bytes(b"mock")
@@ -652,7 +729,7 @@ class TestUploadErrorStates:
                 "message": "该活动已上传到 Strava。",
             }
 
-        monkeypatch.setattr("core.strava_workflow.upload_summary_to_strava", fake_upload_summary_to_strava)
+        monkeypatch.setattr("core.strava_upload.upload_summary_to_strava", fake_upload_summary_to_strava)
 
         result = upload_to_strava_tool(str(fit_file), confirmed=True)
 
@@ -664,7 +741,7 @@ class TestUploadErrorStates:
 
     def test_force_duplicate_updates_existing_description(self, tmp_path, monkeypatch):
         import json
-        from agent.workflow.handlers.ops import upload_to_strava_tool
+        from agent.operations import upload_to_strava_tool
 
         fit_file = tmp_path / "test.fit"
         fit_file.write_bytes(b"mock")
@@ -685,7 +762,7 @@ class TestUploadErrorStates:
             assert force is True
             return {"status": "description_updated", "strava_activity_id": "18619000064"}
 
-        monkeypatch.setattr("core.strava_workflow.upload_summary_to_strava", fake_upload_summary_to_strava)
+        monkeypatch.setattr("core.strava_upload.upload_summary_to_strava", fake_upload_summary_to_strava)
 
         result = upload_to_strava_tool(str(fit_file), confirmed=True, force=True)
 
@@ -696,7 +773,7 @@ class TestUploadErrorStates:
     def test_network_error_is_structured(self, tmp_path, monkeypatch):
         import json
         import requests
-        from agent.workflow.handlers.ops import upload_to_strava_tool
+        from agent.operations import upload_to_strava_tool
 
         fit_file = tmp_path / "test.fit"
         fit_file.write_bytes(b"mock")
@@ -716,7 +793,7 @@ class TestUploadErrorStates:
         def fake_upload_summary_to_strava(summary_path: str, *, wait: bool = True, force: bool = False):
             raise requests.exceptions.ConnectTimeout("timeout")
 
-        monkeypatch.setattr("core.strava_workflow.upload_summary_to_strava", fake_upload_summary_to_strava)
+        monkeypatch.setattr("core.strava_upload.upload_summary_to_strava", fake_upload_summary_to_strava)
 
         result = upload_to_strava_tool(str(fit_file), confirmed=True)
 

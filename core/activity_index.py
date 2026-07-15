@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from core.config import ensure_data_dirs
-from core.data_tools import local_time_without_timezone
 from core.stats import _meters_to_km, _round_float, _seconds_to_minutes, prune_empty_values
+from core.time_utils import local_time_without_timezone
 from fit.parser import parse_fit
 
 DEFAULT_ACTIVITY_INDEX_PATH = Path("data") / "activity_index.json"

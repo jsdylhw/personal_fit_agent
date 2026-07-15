@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from core.activity_scan import scan_activity_segments
+from agent.tools.fit_analysis.scan import scan_activity_segments
 
 
 def _parsed_for_scan() -> dict:

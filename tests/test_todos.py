@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from agent.context import AgentContext
-from agent.workflow.hooks import ToolLoopHooks
-from agent.workflow.todos import format_todos_for_terminal, normalize_todos, write_todos
+from agent.main_agent.hooks import ToolLoopHooks
+from agent.main_agent.todos import format_todos_for_terminal, normalize_todos, write_todos
 
 
 def test_write_todos_updates_context_and_resets_round_counter():

@@ -1,18 +1,16 @@
 """FIT 只读数据查询工具:activity_overview / summary / time_intervals / distance_intervals.
 
 每个函数接收 parse_fit() 输出的 parsed dict,返回 LLM 可直接消费的结构化数据.
-被 agent/tools.py 路由调用.
+被 ActivityAnalysisAgent 的只读 tool loop 调用.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from fit.parser import records_dataframe
 
-from .activity_scan import scan_activity_segments
-from .stats import (
+from core.stats import (
     _distance_delta,
     _duration_from_group,
     _filter_numeric_window,
@@ -31,6 +29,9 @@ from .stats import (
     _stats_value,
     prune_empty_values,
 )
+from core.time_utils import local_time_without_timezone
+
+from .scan import scan_activity_segments
 
 # get_activity_summary 支持的全部 section
 SUMMARY_SECTIONS = [
@@ -364,33 +365,6 @@ def llm_safe_history(history: dict[str, Any] | None) -> dict[str, Any] | None:
         activities.append(activity)
     safe["activities"] = activities
     return safe
-
-
-def local_time_without_timezone(value: Any) -> str | None:
-    """Normalize an ISO-ish time to local wall-clock format without +08:00/Z."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        dt = value
-        if dt.tzinfo is not None:
-            dt = dt.astimezone(datetime.now().astimezone().tzinfo)
-        return dt.replace(tzinfo=None).isoformat(timespec="seconds")
-    text = str(value)
-    try:
-        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return _strip_timezone_suffix(text)
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(datetime.now().astimezone().tzinfo)
-    return dt.replace(tzinfo=None).isoformat(timespec="seconds")
-
-
-def _strip_timezone_suffix(value: str) -> str:
-    if value.endswith("Z"):
-        return value[:-1]
-    if len(value) >= 6 and value[-6] in {"+", "-"} and value[-3] == ":":
-        return value[:-6]
-    return value
 
 
 def _build_duration_distance(summary: dict[str, Any], session: dict[str, Any]) -> dict[str, Any]:

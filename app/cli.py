@@ -1,4 +1,4 @@
-"""CLI 入口:覆盖分析/上传/工作流/Strava 认证等操作.
+"""CLI 入口:覆盖对话、分析、同步、上传和 Strava 认证等操作.
 
 通过 typer 注册,入口点为 python -m app.cli <command>.
 """
@@ -9,10 +9,10 @@ import typer
 
 from agent.chat_logger import new_session_id
 from agent.context import AgentContext
-from agent.workflow.tool_loop import run_tool_loop
+from agent.main_agent.loop import run_tool_loop
 from core.fit_paths import resolve_fit_path
-from agent.workflow.handlers.ops import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
-from core.strava_workflow import (
+from agent.operations import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
+from core.strava_upload import (
     update_strava_description_from_summary,
     upload_summary_to_strava,
 )
@@ -22,50 +22,13 @@ from sinks.strava import StravaSink
 app = typer.Typer(help="Personal FIT Agent CLI")
 
 
-@app.command("workflow")
-def workflow_command(
-    message: str,
-    fit_path: str | None = typer.Option(
-        None,
-        "--fit",
-        help="可选:当前 FIT 文件路径或 latest.",
-    ),
-    history: bool = True,
-    max_tokens: int = typer.Option(4096, "--max-tokens", help="LLM 最大输出 token 数."),
-    json_output: bool = typer.Option(False, "--json", help="输出完整执行 JSON."),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="打印 tool 调用过程日志."),
-) -> None:
-    """运行 workflow: 原生 tool use loop."""
-    result = run_tool_loop(
-        message,
-        fit_path=fit_path,
-        use_history=history,
-        max_tokens=max_tokens,
-        verbose=verbose,
-    )
-
-    if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        return
-
-    typer.echo(result["answer"])
-    typer.echo("")
-    typer.echo(f"workflow_status: {result['status']}")
-    if result.get("log_path"):
-        typer.echo(f"workflow_log_md: {result['log_path']}")
-    if result.get("current_fit_file"):
-        typer.echo(f"current_fit_file: {result['current_fit_file']}")
-    if result.get("intent"):
-        typer.echo(f"intent: {result['intent']}")
-
-
 @app.command("chat")
 def chat_command(
     message: str | None = typer.Argument(None, help="单次对话内容。不传则进入交互模式。"),
     fit_path: str | None = typer.Option(None, "--fit", help="可选:当前 FIT 文件路径或 latest."),
     max_tokens: int = typer.Option(4096, "--max-tokens", help="LLM 最大输出 token 数."),
 ) -> None:
-    """对话模式 — 原生 tool use + tool 调用日志。不传 message 进入交互模式，q/quit 退出。"""
+    """对话模式 — Main Agent 原生 tool use。不传 message 进入交互模式，q/quit 退出。"""
     if message:
         result = run_tool_loop(message, fit_path=fit_path, max_tokens=max_tokens, verbose=True)
         typer.echo("")

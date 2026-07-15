@@ -10,16 +10,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent.chat_logger import new_session_id, write_workflow_markdown_log
+from agent.chat_logger import new_session_id, write_main_agent_markdown_log
 from agent.context import AgentContext
 from core.fit_paths import resolve_fit_path as _resolve_fit_path
 from agent.llm import AnthropicMessagesClient, build_tool_result_block
-from agent.tools import AGENT_TOOLS, render_anthropic_tools
+from agent.tools import MAIN_AGENT_TOOLS, render_anthropic_tools
 from agent.tools.spec import CATEGORY_PLANNING
-from agent.workflow.intent import route_intent, intent_tool_categories
-from agent.workflow.hooks import ToolLoopHooks
-from agent.workflow.tool_runtime import build_tool_handlers
-from agent.workflow.turn_control import handle_control_turn, is_confirm
+from agent.main_agent.intent import route_intent, intent_tool_categories
+from agent.main_agent.hooks import ToolLoopHooks
+from agent.main_agent.tools import TOOL_HANDLERS
+from agent.main_agent.turn_control import handle_control_turn, is_confirm
 
 MAX_TOOL_STEPS = 10
 
@@ -89,13 +89,35 @@ def agent_loop(
                 continue
 
             handler = handlers.get(block["name"])
+            tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
             try:
-                output = handler(**block.get("input", {})) if handler else {"error": "unknown_tool", "name": block["name"]}
+                output = handler(tool_input, hooks.context) if handler else {"error": "unknown_tool", "name": block["name"]}
             except Exception as exc:
                 err = hooks.on_error(block, exc)
                 output = err or {"error": type(exc).__name__, "message": str(exc)}
 
             hooks.post_tool_use(block, output, step_count=step_count)
+
+            if (
+                isinstance(output, dict)
+                and output.get("status") == "needs_confirmation"
+                and hooks.context.pending_action
+            ):
+                remaining_blocks = [
+                    b for b in content_blocks[idx + 1:]
+                    if isinstance(b, dict) and b.get("type") == "tool_use"
+                ]
+                hooks.remember_permission_pause(
+                    block,
+                    messages=messages,
+                    results_before_pause=results,
+                    remaining_blocks=remaining_blocks,
+                    system=system,
+                    max_tokens=max_tokens,
+                    max_steps=max_steps,
+                    step_count=step_count,
+                )
+                return step_count
 
             results.append(build_tool_result_block(block["id"], json.dumps(output, ensure_ascii=False, default=str)))
 
@@ -167,8 +189,8 @@ def _run_agent_turn(message, intent, allowed_cats, context, verbose, max_tokens,
     """执行 agent_loop 并同步 messages 回 context. 返回 step_count."""
     tool_categories = set(allowed_cats)
     tool_categories.add(CATEGORY_PLANNING)
-    tools = [render_anthropic_tools([t])[0] for t in AGENT_TOOLS if t.category in tool_categories]
-    handlers = build_tool_handlers(context)
+    tools = [render_anthropic_tools([t])[0] for t in MAIN_AGENT_TOOLS if t.category in tool_categories]
+    handlers = TOOL_HANDLERS
     system = _build_system_prompt(intent)
     has_resolved = {"value": bool(context.current_fit_file)}
     steps_taken: list[dict] = []
@@ -197,7 +219,7 @@ def _run_agent_turn(message, intent, allowed_cats, context, verbose, max_tokens,
 
 def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_tokens: int):
     """Execute the confirmed tool and continue the paused tool loop."""
-    from agent.workflow.permission import check_permission
+    from agent.main_agent.permission import check_permission
 
     resume = pending.get("resume") if isinstance(pending.get("resume"), dict) else {}
     block = resume.get("block") or {
@@ -215,7 +237,7 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
         context.messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
         return {"answer": answer, "status": "permission_denied", "context": context, "intent": "confirmed", "steps": []}
 
-    handlers = build_tool_handlers(context)
+    handlers = TOOL_HANDLERS
     handler = handlers.get(tool_name)
     if not handler:
         answer = f"未知工具: {tool_name}"
@@ -224,7 +246,7 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
 
     allowed_cats = set(resume.get("allowed_categories") or [])
     allowed_cats.add(CATEGORY_PLANNING)
-    tools = [render_anthropic_tools([t])[0] for t in AGENT_TOOLS if t.category in allowed_cats]
+    tools = [render_anthropic_tools([t])[0] for t in MAIN_AGENT_TOOLS if t.category in allowed_cats]
     messages = list(resume.get("messages") or context.messages)
     results = list(resume.get("results_before_pause") or [])
     steps_taken: list[dict] = []
@@ -232,7 +254,7 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
     hooks = ToolLoopHooks(context, allowed_cats, has_resolved, steps_taken, verbose=verbose)
 
     try:
-        output = handler(**tool_input)
+        output = handler(tool_input, context)
     except Exception as exc:
         err = hooks.on_error(block, exc)
         output = err or {"error": type(exc).__name__, "message": str(exc)}
@@ -247,7 +269,7 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
     messages.append({"role": "user", "content": results})
 
     if verbose:
-        from agent.workflow.hooks import _log
+        from agent.main_agent.hooks import _log
         _log(f"  [确认执行] \033[1m{tool_name}\033[0m {json.dumps(output, ensure_ascii=False, default=str)[:120]}")
 
     max_steps = int(resume.get("max_steps") or MAX_TOOL_STEPS)
@@ -328,6 +350,8 @@ def _build_result(intent, context, message, fit_path, use_history, step_count=0,
         return _result("needs_confirmation", intent, context, steps,
                        f"⚠ {context.pending_action.get('message', '确认执行？')}\n\n请回复 '确认' 或 'yes' 来执行。")
 
+    context.permission_grants.clear()
+
     if step_count > MAX_TOOL_STEPS:
         return _result("max_steps_exceeded", intent, context, steps,
                        f"达到最大步数 ({MAX_TOOL_STEPS}), 已执行 {len(steps)} 步, 但未完成。")
@@ -338,7 +362,7 @@ def _build_result(intent, context, message, fit_path, use_history, step_count=0,
             for b in (m.get("content") or []):
                 if isinstance(b, dict) and b.get("type") == "text":
                     final_answer = b.get("text", "")
-    log_path = write_workflow_markdown_log(
+    log_path = write_main_agent_markdown_log(
         context.session_id, user_message=message,
         tool_plan={"intent": _intent_kind(intent), "tool_groups": _intent_groups(intent)},
         execution={"status": "completed", "steps": steps},
@@ -375,7 +399,7 @@ def _build_system_prompt(intent) -> str:
     return f"""你是 Personal FIT Agent。根据用户请求选择合适的工具完成任务。
 {side}
 规则:
-- 先定位活动(resolve),再分析(analyze)
+- 先用 find_activity 定位活动,再用 analyze_activity / summarize_activities / compare_activities 处理
 - 多步骤任务先调用 todo_write 列出计划;执行过程中保持最多一个 in_progress,完成后及时更新 TODO 状态
 - 用户要求上传/下载/刷新时,直接调用对应工具;不要自己用自然语言询问确认,权限系统会拦截并生成确认提示
 - 完成后给出简短中文总结
@@ -390,14 +414,14 @@ def _build_state_preamble(context):
     if context.selected_activity_range: parts.append(f"活动范围: {json.dumps(context.selected_activity_range, ensure_ascii=False)}")
     if context.pending_action: parts.append(f"⚠ 待确认: {context.pending_action.get('tool')} ({context.pending_action.get('message')})")
     if context.current_todos:
-        from agent.workflow.todos import format_todos_for_prompt
+        from agent.main_agent.todos import format_todos_for_prompt
         parts.append(format_todos_for_prompt(context.current_todos))
     if not parts:
         return ""
     return "\n".join(["[本轮状态]", *parts])
 
 def _log_hdr(message, intent, tool_count, has_fit):
-    from agent.workflow.hooks import _log
+    from agent.main_agent.hooks import _log
     _log("─" * 50)
     _log(f"intent: \033[1m{intent.kind.value}\033[0m | groups: {intent.tool_groups} | side_effects: {intent.allow_side_effects}")
     _log(f"context: fit={'✓' if has_fit else '✗'} | tools: {tool_count}")

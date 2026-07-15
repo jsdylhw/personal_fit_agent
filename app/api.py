@@ -19,14 +19,14 @@ from pydantic import BaseModel
 
 from core.config import cfg_get, load_config
 from core.activity_index import upsert_activity_from_fit
-from core.file_workflow import analyze_fit_file
+from agent.activity.analysis_agent import analyze_fit_file
 from core.garmin_cn import (
     DEFAULT_OUTPUT_DIR,
     build_downloader,
     existing_fit_paths,
     save_original_as_fit,
 )
-from core.strava_workflow import upload_summary_to_strava
+from core.strava_upload import upload_summary_to_strava
 from fit.parser import parse_fit
 
 

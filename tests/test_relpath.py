@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from core.activity_index import _entry_from_fit_summary
-from core.file_workflow import normalize_history_entry
+from agent.activity.analysis_agent import normalize_history_entry
 
 
 class TestRelativeFitPathInActivityIndex:

@@ -56,19 +56,14 @@ class PermissionRule:
 
 PERMISSION_RULES: list[PermissionRule] = [
     PermissionRule(
-        tools=["upload_strava_activity"],
+        tools=["upload_activity"],
         check=lambda args: True,
         message="上传活动到 Strava (外部服务,有副作用)",
     ),
     PermissionRule(
-        tools=["sync_garmin_activities"],
+        tools=["download_activities"],
         check=lambda args: True,
         message="从 Garmin 中国下载活动 (外部服务,有副作用)",
-    ),
-    PermissionRule(
-        tools=["generate_summary_file", "ensure_activity_summaries", "analyze_new_fit_files"],
-        check=lambda args: True,
-        message="生成/刷新 summary 文件 (会写入本地磁盘)",
     ),
 ]
 

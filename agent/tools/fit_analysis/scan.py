@@ -10,7 +10,7 @@ from typing import Any
 
 from fit.parser import records_dataframe
 
-from .stats import _round_float, prune_empty_values
+from core.stats import _round_float, prune_empty_values
 
 
 def scan_activity_segments(

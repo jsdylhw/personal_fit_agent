@@ -1,7 +1,7 @@
 """业务操作工具:下载 / 分析 / 上传.
 
-这些是 CLI / tool runtime 直接调用的 Python 函数,不是 LLM 工具定义。
-FIT 数据查询工具的 ToolDef 定义和路由在 fit_query.py。
+这些是 CLI / main_agent handler 直接调用的 Python 函数,不是 LLM 工具定义。
+FIT 数据查询工具的 ToolDef 定义和路由在 agent.tools.fit_analysis。
 """
 
 from __future__ import annotations
@@ -123,9 +123,9 @@ def analyze_fit_file_tool(fit_path: str, *, force: bool = False) -> dict[str, An
         force: 强制重新分析(即使已有缓存)。
 
     Returns:
-        dict: 精简活动元数据 + summary_path/markdown_report,供 workflow 直接展示报告.
+        dict: 精简活动元数据 + summary_path/markdown_report,供 main_agent 直接展示报告.
     """
-    from core.file_workflow import analyze_fit_file
+    from agent.activity.analysis_agent import analyze_fit_file
 
     result = analyze_fit_file(fit_path, use_history=True, force=force)
     fit_summary = result.get("fit_summary") or {}
@@ -180,7 +180,7 @@ def upload_to_strava_tool(fit_path: str, *, confirmed: bool = False, force: bool
             "message": "Are you sure you want to upload to Strava? Call again with confirmed=true to execute.",
         }
 
-    from core.strava_workflow import upload_summary_to_strava
+    from core.strava_upload import upload_summary_to_strava
 
     try:
         result = upload_summary_to_strava(str(summary_path), wait=True, force=force)

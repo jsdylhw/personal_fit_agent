@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from agent.workflow.tool_result import is_failed_tool_output
+from agent.main_agent.tool_result import is_failed_tool_output
 
 
 class ToolLoopHooks:
@@ -83,13 +83,13 @@ class ToolLoopHooks:
             self.context.last_failed_action = {"tool": name, "input": block.get("input", {}) or {}}
         elif name == (self.context.last_failed_action or {}).get("tool"):
             self.context.last_failed_action = None
-        if name.startswith("resolve_"):
+        if name == "find_activity" or name.startswith("resolve_"):
             self.has_resolved_ref["value"] = True
         if self.verbose:
             self._log_post_tool(block, output, step_count=step_count)
 
     def _guard_tool_call(self, block: dict[str, Any]) -> dict[str, Any] | None:
-        from agent.workflow.tool_guard import guard_tool_call
+        from agent.main_agent.guard import guard_tool_call
 
         guard = guard_tool_call(
             block.get("name", ""),
@@ -104,7 +104,7 @@ class ToolLoopHooks:
         return None
 
     def _check_permission(self, block: dict[str, Any]) -> dict[str, Any] | None:
-        from agent.workflow.permission import PermissionDecision, check_permission
+        from agent.main_agent.permission import PermissionDecision, check_permission
 
         tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
         perm = check_permission(block.get("name", ""), tool_input)
@@ -163,6 +163,13 @@ def _summarize_output(output: Any) -> str:
         for key in ("status", "count", "total", "downloaded", "skipped", "strava_activity_id"):
             if key in output:
                 parts.append(f"{key}={json.dumps(output[key], ensure_ascii=False, default=str)}")
+        nested = output.get("result") if isinstance(output.get("result"), dict) else {}
+        for key in ("source", "agent"):
+            if key in nested:
+                parts.append(f"{key}={json.dumps(nested[key], ensure_ascii=False, default=str)}")
+        analysis_error = nested.get("analysis_error") if isinstance(nested.get("analysis_error"), dict) else None
+        if analysis_error:
+            parts.append(f"analysis_error={json.dumps(analysis_error.get('type'), ensure_ascii=False, default=str)}")
         if parts:
             return " ".join(parts)
     return json.dumps(output, ensure_ascii=False, default=str)[:120]
@@ -178,7 +185,7 @@ def _log_todos(output: Any) -> None:
         _log(f"  \033[32m←\033[0m \033[1mtodo_write\033[0m {_summarize_output(output)}")
         return
 
-    from agent.workflow.todos import format_todos_for_terminal
+    from agent.main_agent.todos import format_todos_for_terminal
 
     _log_raw(format_todos_for_terminal(todos))
     _log(f"  \033[32m←\033[0m \033[1mtodo_write\033[0m Updated {len(todos)} tasks")

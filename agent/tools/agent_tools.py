@@ -16,7 +16,7 @@ from agent.tools.spec import (
     ToolDef,
 )
 
-AGENT_TOOLS: tuple[ToolDef, ...] = (
+MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
     # -- planning ------------------------------------------------------
     ToolDef(
         name="todo_write",
@@ -62,69 +62,57 @@ AGENT_TOOLS: tuple[ToolDef, ...] = (
         },
         category=CATEGORY_CONVERSATION,
     ),
-    # -- activity_resolution -------------------------------------------
+    # -- activity ------------------------------------------------------
     ToolDef(
-        name="resolve_current_activity",
-        description="以当前 FIT 或已选活动作为分析对象。",
-        input_schema={"type": "object", "properties": {}},
-        category=CATEGORY_ACTIVITY_RESOLUTION,
-    ),
-    ToolDef(
-        name="resolve_activity_by_date",
-        description="按日期/名称/key/index 定位一条活动。activity_index 是时间正序编号，1 表示最早。",
+        name="find_activity",
+        description=(
+            "定位活动并写入当前会话上下文。"
+            "scope=current 使用当前活动; scope=recent 定位最近/最早 N 条;"
+            "scope=activity 按 activity_key/activity_index/date/name 定位单条;"
+            "scope=range 按日期范围定位多条。activity_index 是时间正序编号,1 表示最早。"
+        ),
         input_schema={
             "type": "object",
             "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["current", "recent", "activity", "range"],
+                    "default": "recent",
+                },
                 "activity_key": {"type": "string"},
                 "activity_index": {"type": "integer"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 1},
+                "order": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
                 "date_local": {"type": "string", "description": "ISO date, e.g. 2026-05-18"},
+                "date": {"type": "string", "description": "相对或 ISO 日期,如 today/yesterday/2026-05-18"},
                 "name": {"type": "string"},
                 "sport_type": {"type": "string"},
                 "match": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
-            },
-        },
-        category=CATEGORY_ACTIVITY_RESOLUTION,
-    ),
-    ToolDef(
-        name="resolve_activity_range",
-        description="按周/月/日期范围定位多条本地活动。",
-        input_schema={
-            "type": "object",
-            "properties": {
                 "start_date": {"type": "string", "description": "ISO date"},
                 "end_date": {"type": "string", "description": "ISO date"},
                 "range_type": {"type": "string", "enum": ["week", "month", "days"]},
                 "relative_range": {"type": "string", "enum": ["this_week", "this_month", "last_week", "last_month"]},
-                "sport_type": {"type": "string"},
+                "range": {"type": "string", "description": "可传 all 表示全部历史活动"},
             },
         },
         category=CATEGORY_ACTIVITY_RESOLUTION,
     ),
     ToolDef(
-        name="resolve_recent_activities",
-        description="定位最近 N 条活动，可按最新或最早排序。",
+        name="analyze_activity",
+        description="分析已定位的单条活动,生成或读取活动报告。通常先调用 find_activity。",
         input_schema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 5},
-                "sport_type": {"type": "string"},
-                "order": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
+                "force": {"type": "boolean", "default": False, "description": "强制重新分析"},
+                "activity_key": {"type": "string"},
+                "activity_index": {"type": "integer"},
+                "user_request": {"type": "string"},
             },
-        },
-        category=CATEGORY_ACTIVITY_RESOLUTION,
-    ),
-    # -- analysis ------------------------------------------------------
-    ToolDef(
-        name="analyze_single_activity",
-        description="基于 FIT 数据分析单条活动，生成报告。需要先 resolve 活动。",
-        input_schema={
-            "type": "object",
-            "properties": {"force": {"type": "boolean", "default": False, "description": "强制重新分析"}},
         },
         category=CATEGORY_ANALYSIS,
     ),
     ToolDef(
-        name="summarize_activity_range",
+        name="summarize_activities",
         description="汇总多条活动生成整体总结报告。",
         input_schema={
             "type": "object",
@@ -134,12 +122,6 @@ AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "force": {"type": "boolean", "default": False},
             },
         },
-        category=CATEGORY_ANALYSIS,
-    ),
-    ToolDef(
-        name="compare_with_history",
-        description="将已选活动与近期训练历史对比。",
-        input_schema={"type": "object", "properties": {}},
         category=CATEGORY_ANALYSIS,
     ),
     ToolDef(
@@ -180,7 +162,7 @@ AGENT_TOOLS: tuple[ToolDef, ...] = (
     ),
     # -- operation -----------------------------------------------------
     ToolDef(
-        name="sync_garmin_activities",
+        name="download_activities",
         description="下载最近的 Garmin 活动。有副作用，需要确认。",
         input_schema={
             "type": "object",
@@ -189,32 +171,14 @@ AGENT_TOOLS: tuple[ToolDef, ...] = (
         category=CATEGORY_OPERATION,
     ),
     ToolDef(
-        name="analyze_new_fit_files",
-        description="对同步得到的新 FIT 运行保存型分析。需要 sync_garmin_activities 先执行。",
+        name="analyze_new_activities",
+        description="对刚下载得到的新 FIT 运行保存型分析。需要 download_activities 先执行。",
         input_schema={"type": "object", "properties": {}},
-        category=CATEGORY_OPERATION,
-    ),
-    ToolDef(
-        name="generate_summary_file",
-        description="为指定 FIT 生成或刷新 summary JSON。",
-        input_schema={
-            "type": "object",
-            "properties": {"force": {"type": "boolean", "default": False}},
-        },
-        category=CATEGORY_OPERATION,
-    ),
-    ToolDef(
-        name="ensure_activity_summaries",
-        description="检查已选活动 summary 缺失时生成；重新分析时 force=true。",
-        input_schema={
-            "type": "object",
-            "properties": {"force": {"type": "boolean", "default": False}},
-        },
         category=CATEGORY_OPERATION,
     ),
     # -- strava --------------------------------------------------------
     ToolDef(
-        name="upload_strava_activity",
+        name="upload_activity",
         description="直接上传 Strava，不额外分析或刷新报告。有副作用，需要确认。",
         input_schema={
             "type": "object",
@@ -223,3 +187,6 @@ AGENT_TOOLS: tuple[ToolDef, ...] = (
         category=CATEGORY_STRAVA,
     ),
 )
+
+# Backward-compatible export name for existing imports.
+AGENT_TOOLS = MAIN_AGENT_TOOLS

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.strava_workflow import (
+from core.strava_upload import (
     _parse_duplicate_activity_id,
     upload_summary_to_strava,
 )
@@ -68,7 +68,7 @@ class TestUploadSummaryDuplicateWithoutForce:
             '<a href="/activities/18619000064" target="_blank">Test Ride</a>',
         }
 
-        with patch("core.strava_workflow.StravaSink") as MockSink:
+        with patch("core.strava_upload.StravaSink") as MockSink:
             mock_sink = MockSink.return_value
             mock_sink.upload_fit.return_value = upload_response
             mock_sink.wait_for_upload.return_value = duplicate_status
@@ -119,7 +119,7 @@ class TestUploadSummaryDuplicateWithForce:
         }
         update_response = {"id": 18619000064, "description": strava_summary}
 
-        with patch("core.strava_workflow.StravaSink") as MockSink:
+        with patch("core.strava_upload.StravaSink") as MockSink:
             mock_sink = MockSink.return_value
             mock_sink.upload_fit.return_value = upload_response
             mock_sink.wait_for_upload.return_value = duplicate_status
@@ -162,7 +162,7 @@ class TestUploadSummaryDuplicateWithForce:
 
         update_response = {"id": 18619000064, "description": strava_summary}
 
-        with patch("core.strava_workflow.StravaSink") as MockSink:
+        with patch("core.strava_upload.StravaSink") as MockSink:
             mock_sink = MockSink.return_value
             mock_sink.update_description.return_value = update_response
 
@@ -204,7 +204,7 @@ class TestUploadSummarySuccess:
         upload_response = {"id": 12345}
         success_status = {"activity_id": 98765, "status": "ready"}
 
-        with patch("core.strava_workflow.StravaSink") as MockSink:
+        with patch("core.strava_upload.StravaSink") as MockSink:
             mock_sink = MockSink.return_value
             mock_sink.upload_fit.return_value = upload_response
             mock_sink.wait_for_upload.return_value = success_status

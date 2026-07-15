@@ -1,6 +1,6 @@
 """纯数值计算和统计辅助函数,无项目内部依赖.
 
-data_tools.py 中的工具实现通过这些函数完成单位转换,统计量提取,DataFrame 聚合等操作.
+agent.tools.fit_analysis.data 中的工具实现通过这些函数完成单位转换,统计量提取,DataFrame 聚合等操作.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
-"""workflow agent 的运行期状态.
+"""Main Agent 的运行期状态.
 
-AgentContext 是一次 workflow 执行内共享的状态容器.
+AgentContext 是一次 Main Agent 执行内共享的状态容器.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from agent.activity.models import ActivityHandle
 
 @dataclass
 class AgentContext:
-    """一次 workflow-agent 运行内共享的可变状态.
+    """一次 Main Agent 运行内共享的可变状态.
 
     活动定位:
       selected_handles       — 新接口: list[ActivityHandle]
@@ -48,6 +48,7 @@ class AgentContext:
     pending_action: dict[str, Any] | None = None
     current_todos: list[dict[str, Any]] = field(default_factory=list)
     todo_rounds_since_update: int = 0
+    permission_grants: set[str] = field(default_factory=set)
     parsed: dict[str, Any] | None = None
     history_before: dict[str, Any] | None = None
 

@@ -53,7 +53,7 @@ def readable_chat_log_path(path: str | Path) -> Path:
     return source.with_suffix(".md")
 
 
-def write_workflow_markdown_log(
+def write_main_agent_markdown_log(
     session_id: str,
     *,
     user_message: str,
@@ -64,11 +64,11 @@ def write_workflow_markdown_log(
     current_fit_file: str | None,
     log_dir: str | Path = DEFAULT_CHAT_LOG_DIR,
 ) -> Path:
-    """写入 workflow 总览日志,只生成可读 Markdown,不再额外生成 JSONL。"""
+    """写入 Main Agent 总览日志,只生成可读 Markdown,不再额外生成 JSONL。"""
     target_dir = Path(log_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{session_id}.md"
-    lines = _format_workflow_log(
+    lines = _format_main_agent_log(
         session_id=session_id,
         user_message=user_message,
         tool_plan=tool_plan,
@@ -114,7 +114,7 @@ def _format_record(record: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _format_workflow_log(
+def _format_main_agent_log(
     *,
     session_id: str,
     user_message: str,
@@ -127,10 +127,10 @@ def _format_workflow_log(
     status = execution.get("status")
     final_response = str(execution.get("final_response") or "").strip()
     lines = [
-        f"# Workflow Log: {session_id}",
+        f"# Main Agent Log: {session_id}",
         "",
         f"- logged_at: `{datetime.now(timezone.utc).isoformat()}`",
-        f"- workflow_status: `{status}`",
+        f"- main_agent_status: `{status}`",
     ]
     if current_fit_file:
         lines.append(f"- current_fit_file: `{current_fit_file}`")
@@ -139,14 +139,14 @@ def _format_workflow_log(
     if final_response:
         lines.extend(["## Final Answer", "", final_response, ""])
 
-    lines.extend(_workflow_plan_section("Tool Plan", tool_plan))
+    lines.extend(_main_agent_plan_section("Tool Plan", tool_plan))
 
-    lines.extend(_workflow_execution_section(execution, final_response=final_response))
-    lines.extend(_workflow_activity_section(selected_activities, selected_activity_range))
+    lines.extend(_main_agent_execution_section(execution, final_response=final_response))
+    lines.extend(_main_agent_activity_section(selected_activities, selected_activity_range))
     return lines
 
 
-def _workflow_plan_section(title: str, plan: dict[str, Any]) -> list[str]:
+def _main_agent_plan_section(title: str, plan: dict[str, Any]) -> list[str]:
     lines = [f"## {title}", ""]
     if plan.get("intent"):
         lines.append(f"- intent: `{plan.get('intent')}`")
@@ -181,7 +181,7 @@ def _workflow_plan_section(title: str, plan: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _workflow_execution_section(execution: dict[str, Any], *, final_response: str = "") -> list[str]:
+def _main_agent_execution_section(execution: dict[str, Any], *, final_response: str = "") -> list[str]:
     lines = ["## Execution", ""]
     step_results = execution.get("step_results") if isinstance(execution.get("step_results"), list) else []
     if not step_results and isinstance(execution.get("steps"), list):
@@ -205,7 +205,7 @@ def _workflow_execution_section(execution: dict[str, Any], *, final_response: st
             lines.append(f"- message: {result.get('message')}")
         if result.get("error"):
             lines.append(f"- error: `{result.get('error')}`")
-        lines.extend(_workflow_result_summary(result.get("result"), final_response=final_response))
+        lines.extend(_main_agent_result_summary(result.get("result"), final_response=final_response))
         lines.append("")
     return lines
 
@@ -218,7 +218,7 @@ def _is_redundant_final_response_step(result: dict[str, Any], final_response: st
     return bool(answer and final_response and answer == final_response)
 
 
-def _workflow_result_summary(result: Any, *, final_response: str = "") -> list[str]:
+def _main_agent_result_summary(result: Any, *, final_response: str = "") -> list[str]:
     if not isinstance(result, dict):
         return []
     payload = result.get("result") if isinstance(result.get("result"), dict) else result
@@ -292,7 +292,7 @@ def _summary_generation_line(item: dict[str, Any]) -> str:
     return ", ".join(part for part in parts if part)
 
 
-def _workflow_activity_section(
+def _main_agent_activity_section(
     selected_activities: list[dict[str, Any]],
     selected_activity_range: dict[str, Any] | None,
 ) -> list[str]:
