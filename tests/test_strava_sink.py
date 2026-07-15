@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -64,6 +66,85 @@ class TestStravaSinkInit:
         config = {"strava": {}}
         with pytest.raises(RuntimeError, match="access_token"):
             StravaSink(config)
+
+    @patch("sinks.strava.requests.post")
+    def test_persists_rotated_refresh_token(self, mock_post, tmp_path):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "access_token": "refreshed_token",
+            "refresh_token": "refresh_new",
+            "expires_at": int(time.time()) + 3600,
+        }
+        mock_response.ok = True
+        mock_post.return_value = mock_response
+        token_store = tmp_path / "strava_tokens.json"
+        config = {
+            "strava": {
+                "client_id": "123",
+                "client_secret": "abc",
+                "refresh_token": "refresh_old",
+                "token_store": str(token_store),
+            }
+        }
+
+        sink = StravaSink(config)
+
+        assert sink.access_token == "refreshed_token"
+        assert json.loads(token_store.read_text(encoding="utf-8")) == {
+            "access_token": "refreshed_token",
+            "refresh_token": "refresh_new",
+            "expires_at": mock_response.json.return_value["expires_at"],
+        }
+        assert token_store.stat().st_mode & 0o777 == 0o600
+
+    @patch("sinks.strava.requests.post")
+    def test_reuses_unexpired_persisted_access_token(self, mock_post, tmp_path):
+        token_store = tmp_path / "strava_tokens.json"
+        token_store.write_text(
+            json.dumps({
+                "access_token": "cached_token",
+                "refresh_token": "refresh_current",
+                "expires_at": int(time.time()) + 3600,
+            }),
+            encoding="utf-8",
+        )
+        config = {
+            "strava": {
+                "client_id": "123",
+                "client_secret": "abc",
+                "refresh_token": "refresh_old",
+                "token_store": str(token_store),
+            }
+        }
+
+        sink = StravaSink(config)
+
+        assert sink.access_token == "cached_token"
+        mock_post.assert_not_called()
+
+    @patch("sinks.strava.requests.post")
+    def test_uses_still_valid_cached_token_when_refresh_network_fails(self, mock_post, tmp_path):
+        token_store = tmp_path / "strava_tokens.json"
+        token_store.write_text(
+            json.dumps({
+                "access_token": "cached_token",
+                "refresh_token": "refresh_current",
+                "expires_at": int(time.time()) + 30,
+            }),
+            encoding="utf-8",
+        )
+        mock_post.side_effect = __import__("requests").RequestException("TLS failed")
+        config = {
+            "strava": {
+                "client_id": "123",
+                "client_secret": "abc",
+                "token_store": str(token_store),
+            }
+        }
+
+        sink = StravaSink(config)
+
+        assert sink.access_token == "cached_token"
 
 
 class TestStravaSinkBuildAuthorizeUrl:

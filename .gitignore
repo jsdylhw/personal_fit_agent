@@ -8,6 +8,7 @@ __pycache__/
 
 # Local secrets and tokens
 config.yaml
+.strava_tokens.json
 data/athlete.json
 .garmin_cn_tokens/
 
