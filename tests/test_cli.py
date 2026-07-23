@@ -73,3 +73,28 @@ def test_chat_one_shot_calls_main_agent(monkeypatch):
 
     assert result.exit_code == 0
     assert "整体总结" in result.output
+
+
+def test_strava_oauth_commands_do_not_require_an_existing_access_token(monkeypatch):
+    captured = []
+
+    class FakeSink:
+        def __init__(self, *, require_access_token: bool = True):
+            captured.append(require_access_token)
+
+        def build_authorize_url(self, **kwargs):
+            return "https://example.test/authorize"
+
+        def exchange_authorization_code(self, code):
+            return {"access_token": "new-token", "code": code}
+
+    monkeypatch.setattr("app.cli.StravaSink", FakeSink)
+
+    auth_url = CliRunner().invoke(app, ["strava-auth-url"])
+    exchange = CliRunner().invoke(app, ["strava-exchange-code", "callback-code"])
+
+    assert auth_url.exit_code == 0
+    assert "authorize" in auth_url.output
+    assert exchange.exit_code == 0
+    assert "new-token" in exchange.output
+    assert captured == [False, False]

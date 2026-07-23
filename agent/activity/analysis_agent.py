@@ -15,12 +15,13 @@ from typing import Any
 
 from agent.chat_logger import append_chat_log, new_session_id, readable_chat_log_path
 from agent.llm import AnthropicMessagesClient, build_tool_result_block, extract_text
-from agent.prompts import LLM_FIT_ANALYSIS_SYSTEM_PROMPT
+from agent.prompts import build_fit_analysis_system_prompt
 from agent.tools import build_tool_handlers
 from agent.tools.fit_analysis import FIT_ANALYSIS_TOOLS
 from agent.tools.spec import ToolRegistry
 from core.config import ensure_data_dirs
 from core.history import query_activity_history, upsert_activity_history
+from core.path_utils import project_relative_or_absolute
 from core.time_utils import local_time_without_timezone
 from agent.tools.fit_analysis import llm_safe_fit_summary, llm_safe_history
 from fit.parser import parse_fit
@@ -140,7 +141,7 @@ def analyze_fit_file(
         "schema_version": "llm_fit_file_analysis.v1",
         "status": "analyzed" if persist else "analyzed_query",
         "activity_key": _activity_key(path),
-        "fit_path": str(path.resolve().relative_to(Path.cwd())),
+        "fit_path": project_relative_or_absolute(path),
         "fit_summary": llm_safe_fit_summary(parsed["summary"]),
         "model": model_result.get("model"),
         "session_id": model_result.get("session_id"),
@@ -181,6 +182,7 @@ def analyze_with_llm(
     client = AnthropicMessagesClient()
     session_id = new_session_id("fit_analysis")
     strava_summary_tone = choose_strava_summary_tone()
+    system_prompt = build_fit_analysis_system_prompt((parsed.get("summary") or {}).get("sport_type"))
     registry = ToolRegistry(FIT_ANALYSIS_TOOLS)
     handlers = build_tool_handlers(parsed, history_before)
 
@@ -207,7 +209,7 @@ def analyze_with_llm(
 
     for loop_step in range(1, MAX_TOOL_LOOP_STEPS + 1):
         response = client.create_messages(
-            system=LLM_FIT_ANALYSIS_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=messages,
             max_tokens=4000,
             tools=registry.to_anthropic(),
@@ -283,6 +285,7 @@ def analyze_with_llm(
             path=path,
             history_before=history_before,
             strava_summary_tone=strava_summary_tone,
+            system_prompt=system_prompt,
             messages=messages,
             turns=turns,
             parsed_response=None,
@@ -303,6 +306,7 @@ def analyze_with_llm(
         path=path,
         history_before=history_before,
         strava_summary_tone=strava_summary_tone,
+        system_prompt=system_prompt,
         messages=messages,
         turns=turns,
         parsed_response=data,
@@ -361,7 +365,7 @@ def normalize_history_entry(entry: dict[str, Any], *, path: Path, parsed: dict[s
     normalized = dict(entry)
     normalized.setdefault("schema_version", "llm_activity_history_entry.v1")
     normalized["activity_key"] = _activity_key(path)
-    normalized["file_path"] = str(path.resolve().relative_to(Path.cwd()))
+    normalized["file_path"] = project_relative_or_absolute(path)
     local_start = local_time_without_timezone(
         summary.get("start_time_local")
         or normalized.get("start_time_local")
@@ -595,6 +599,7 @@ def _write_analysis_log(
     path: Path,
     history_before: dict[str, Any] | None,
     strava_summary_tone: dict[str, str],
+    system_prompt: str,
     messages: list[dict[str, Any]],
     turns: list[dict[str, Any]],
     parsed_response: dict[str, Any] | None,
@@ -608,7 +613,7 @@ def _write_analysis_log(
         "activity_key": _activity_key(path),
         "history_included": history_before is not None,
         "strava_summary_tone": strava_summary_tone,
-        "system": LLM_FIT_ANALYSIS_SYSTEM_PROMPT,
+        "system": system_prompt,
         "messages": messages,
         "turns": turns,
         "parsed_response": parsed_response,

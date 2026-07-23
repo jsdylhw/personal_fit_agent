@@ -113,12 +113,13 @@ def strava_auth_url_command(
     redirect_uri: str = "http://localhost",
     scope: str = "activity:read_all,activity:write",
 ) -> None:
-    typer.echo(StravaSink().build_authorize_url(redirect_uri=redirect_uri, scope=scope))
+    sink = StravaSink(require_access_token=False)
+    typer.echo(sink.build_authorize_url(redirect_uri=redirect_uri, scope=scope))
 
 
 @app.command("strava-exchange-code")
 def strava_exchange_code_command(code: str) -> None:
-    result = StravaSink().exchange_authorization_code(code)
+    result = StravaSink(require_access_token=False).exchange_authorization_code(code)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 

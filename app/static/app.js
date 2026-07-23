@@ -221,11 +221,14 @@ async function uploadStrava() {
     log("上传失败", { error: "还没有 summary，请先分析。" });
     return;
   }
+  if (!window.confirm("确认上传到 Strava？此操作会创建或更新外部活动。")) {
+    return;
+  }
   setStatus("上传 Strava");
   try {
     const result = await fetchJson("/api/strava/upload", {
       method: "POST",
-      body: JSON.stringify({ summary_path: file.summary_path, wait: false }),
+      body: JSON.stringify({ summary_path: file.summary_path, wait: false, confirmed: true }),
     });
     log("Strava 上传完成", result);
     setStatus("上传完成");

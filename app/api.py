@@ -6,13 +6,14 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -49,6 +50,8 @@ class UploadStravaRequest(BaseModel):
     summary_path: str
     title: str | None = None
     wait: bool = True
+    confirmed: bool = False
+    force: bool = False
 
 
 @app.get("/")
@@ -62,7 +65,8 @@ def health() -> dict[str, str]:
 
 
 @app.get("/api/dashboard/status")
-def dashboard_status_endpoint() -> dict[str, Any]:
+def dashboard_status_endpoint(request: Request) -> dict[str, Any]:
+    _require_api_access(request)
     config = load_config()
     output_dir = _fit_output_dir(config)
     return {
@@ -81,7 +85,8 @@ def dashboard_status_endpoint() -> dict[str, Any]:
 
 
 @app.post("/api/garmin/connect")
-def garmin_connect_endpoint() -> dict[str, Any]:
+def garmin_connect_endpoint(request: Request) -> dict[str, Any]:
+    _require_api_access(request)
     downloader = build_downloader(load_config())
     downloader.login()
     activities = downloader.list_activities(1)
@@ -89,7 +94,8 @@ def garmin_connect_endpoint() -> dict[str, Any]:
 
 
 @app.post("/api/garmin/download")
-def garmin_download_endpoint(request: DownloadGarminRequest) -> dict[str, Any]:
+def garmin_download_endpoint(request: DownloadGarminRequest, http_request: Request) -> dict[str, Any]:
+    _require_api_access(http_request)
     config = load_config()
     output_dir = _fit_output_dir(config)
     count = request.count or int(cfg_get(config, "download_count", 5))
@@ -165,7 +171,8 @@ def _index_downloaded_fit_paths(paths: list[Path], activity_id: Any) -> list[dic
 
 
 @app.get("/api/fit-files")
-def fit_files_endpoint() -> dict[str, Any]:
+def fit_files_endpoint(request: Request) -> dict[str, Any]:
+    _require_api_access(request)
     config = load_config()
     output_dir = _fit_output_dir(config)
     files = [_fit_file_info(path) for path in _fit_files(output_dir)]
@@ -174,39 +181,99 @@ def fit_files_endpoint() -> dict[str, Any]:
 
 
 @app.post("/api/fit-files/analyze")
-def analyze_fit_endpoint(request: AnalyzeFitRequest) -> dict[str, Any]:
-    return analyze_fit_file(request.path, use_history=request.history, force=request.force)
+def analyze_fit_endpoint(request: AnalyzeFitRequest, http_request: Request) -> dict[str, Any]:
+    _require_api_access(http_request)
+    config = load_config()
+    fit_path = _require_managed_path(
+        request.path,
+        allowed_root=_fit_output_dir(config),
+        suffix=".fit",
+        label="FIT file",
+    )
+    return analyze_fit_file(fit_path, use_history=request.history, force=request.force)
 
 
 @app.get("/api/summary")
-def summary_endpoint(path: str):
+def summary_endpoint(path: str, request: Request):
     """读取 summary JSON,返回 markdown_report 用于前端展示.
 
     只允许 data/summaries/ 下的 .summary.json 文件.
     """
-    import json
-    from fastapi.responses import JSONResponse
-    allowed = Path("data/summaries").resolve()
-    requested = Path(path).resolve()
-    try:
-        requested.relative_to(allowed)
-    except ValueError:
-        return JSONResponse({"markdown_report": ""}, status_code=403)
-    if not requested.name.endswith(".summary.json"):
-        return JSONResponse({"markdown_report": ""}, status_code=403)
-    if not requested.exists():
-        raise FileNotFoundError(requested)
+    _require_api_access(request)
+    requested = _require_managed_path(
+        path,
+        allowed_root=Path("data/summaries"),
+        suffix=".summary.json",
+        label="summary file",
+    )
     data = json.loads(requested.read_text(encoding="utf-8"))
-    return JSONResponse({"markdown_report": data.get("markdown_report", "")})
+    return {"markdown_report": data.get("markdown_report", "")}
 
 
 @app.post("/api/strava/upload")
-def strava_upload_endpoint(request: UploadStravaRequest) -> dict[str, Any]:
-    return upload_summary_to_strava(request.summary_path, title=request.title, wait=request.wait)
+def strava_upload_endpoint(request: UploadStravaRequest, http_request: Request) -> dict[str, Any]:
+    _require_api_access(http_request)
+    summary_path = _require_managed_path(
+        request.summary_path,
+        allowed_root=Path("data/summaries"),
+        suffix=".summary.json",
+        label="summary file",
+    )
+    if not request.confirmed:
+        raise HTTPException(status_code=409, detail="Set confirmed=true to upload to Strava.")
+    return upload_summary_to_strava(
+        summary_path,
+        title=request.title,
+        wait=request.wait,
+        force=request.force,
+    )
 
 
 def _fit_output_dir(config: dict[str, Any]) -> Path:
     return Path(cfg_get(config, "output_dir", DEFAULT_OUTPUT_DIR)).expanduser().resolve()
+
+
+def _require_api_access(request: Request) -> None:
+    """Keep the local control plane local unless a configured token is supplied.
+
+    A configured token is required even from localhost. Without it, only a
+    loopback client may call `/api/*`; this prevents an accidental `--host
+    0.0.0.0` deployment from exposing Garmin, LLM, and Strava capabilities.
+    """
+    configured_token = str(cfg_get(load_config(), "web_api_token", "") or "")
+    supplied_token = request.headers.get("X-API-Token", "")
+    if configured_token:
+        if hmac.compare_digest(supplied_token, configured_token):
+            return
+        raise HTTPException(status_code=401, detail="Valid X-API-Token is required.")
+
+    client_host = request.client.host if request.client else ""
+    if client_host in {"127.0.0.1", "::1", "localhost", "testclient"}:
+        return
+    raise HTTPException(
+        status_code=401,
+        detail="Web API is local-only. Configure web_api_token for remote access.",
+    )
+
+
+def _require_managed_path(
+    value: str,
+    *,
+    allowed_root: Path,
+    suffix: str,
+    label: str,
+) -> Path:
+    root = allowed_root.expanduser().resolve()
+    candidate = Path(value).expanduser().resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=f"{label} must be inside {root}.") from exc
+    if not candidate.name.lower().endswith(suffix):
+        raise HTTPException(status_code=422, detail=f"{label} must end with {suffix}.")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail=f"{label} does not exist.")
+    return candidate
 
 
 def _fit_files(output_dir: Path) -> list[Path]:

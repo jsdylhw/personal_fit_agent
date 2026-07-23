@@ -542,6 +542,31 @@ def test_submit_analysis_ends_child_loop(sample_parsed_fit, tmp_path, monkeypatc
 
 
 class TestAnalyzeFitFileResultTimes:
+    def test_project_external_fit_is_saved_as_absolute_path(
+        self, sample_parsed_fit, tmp_path, monkeypatch
+    ):
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        external_fit = tmp_path / "imports" / "run.fit"
+        external_fit.parent.mkdir()
+        external_fit.write_bytes(b"mock fit content")
+        monkeypatch.chdir(project_root)
+        monkeypatch.setattr("agent.activity.analysis_agent.parse_fit", lambda path: sample_parsed_fit)
+        monkeypatch.setattr(
+            "agent.activity.analysis_agent.analyze_with_llm",
+            lambda path, parsed, history_before, user_request: {
+                "model": "test-model",
+                "markdown_report": "# Report",
+                "strava_summary": "summary",
+                "history_entry": {},
+            },
+        )
+
+        result = analyze_fit_file(external_fit, update_history=False, persist=False, force=True)
+
+        assert result["fit_path"] == str(external_fit.resolve())
+        assert result["history_entry"]["file_path"] == str(external_fit.resolve())
+
     def test_result_fit_summary_uses_only_local_time(
         self, sample_parsed_fit, tmp_path, monkeypatch
     ):

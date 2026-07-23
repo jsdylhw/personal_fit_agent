@@ -274,7 +274,19 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
 
     max_steps = int(resume.get("max_steps") or MAX_TOOL_STEPS)
     used_steps = int(resume.get("step_count") or 0)
-    remaining_steps = max(1, max_steps - used_steps)
+    remaining_steps = max_steps - used_steps
+    if remaining_steps <= 0:
+        _sync_messages_to_context(context, messages)
+        return _build_result(
+            resume.get("intent") or "confirmed",
+            context,
+            resume.get("message") or f"确认执行 {tool_name}",
+            resume.get("fit_path"),
+            bool(resume.get("use_history", context.history_enabled)),
+            max_steps + 1,
+            steps_taken,
+        )
+
     step_count = agent_loop(
         messages,
         tools=tools,
@@ -299,7 +311,7 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
         resume.get("message") or f"确认执行 {tool_name}",
         resume.get("fit_path"),
         bool(resume.get("use_history", context.history_enabled)),
-        step_count,
+        used_steps + step_count,
         steps_taken,
     )
 

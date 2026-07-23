@@ -148,6 +148,15 @@ class TestStravaSinkInit:
 
 
 class TestStravaSinkBuildAuthorizeUrl:
+    def test_first_oauth_does_not_require_existing_token(self):
+        sink = StravaSink(
+            {"strava": {"client_id": "12345", "client_secret": "secret"}},
+            require_access_token=False,
+        )
+
+        assert sink.access_token is None
+        assert "client_id=12345" in sink.build_authorize_url()
+
     def test_builds_url(self):
         sink = _make_sink({"client_id": "12345"})
         url = sink.build_authorize_url()

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from core.config import ensure_data_dirs
+from core.path_utils import project_relative_or_absolute
 from core.stats import _meters_to_km, _round_float, _seconds_to_minutes, prune_empty_values
 from core.time_utils import local_time_without_timezone
 from fit.parser import parse_fit
@@ -96,7 +97,7 @@ def upsert_activity_from_summary(summary_path: str | Path, *, path: str | Path |
         activity_key=data.get("activity_key"),
     )
     entry.update({
-        "summary_path": str(summary_file.resolve().relative_to(Path.cwd())),
+        "summary_path": project_relative_or_absolute(summary_file),
         "has_summary": True,
         "has_strava_summary": bool(data.get("strava_summary")),
         "strava_activity_id": data.get("strava_activity_id"),
@@ -258,7 +259,7 @@ def _entry_from_fit_summary(
     summary_path = Path("data") / "summaries" / f"{fit_path.stem}.summary.json"
     return prune_empty_values({
         "activity_key": key,
-        "fit_path": str(fit_path.resolve().relative_to(Path.cwd())),
+        "fit_path": project_relative_or_absolute(fit_path),
         "summary_path": str(summary_path) if summary_path.exists() else None,
         "file_name": fit_path.name,
         "sport_type": summary.get("sport_type"),

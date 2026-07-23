@@ -172,6 +172,58 @@ def test_max_steps_exceeded_returns_not_completed():
     assert len(result["steps"]) > 0
 
 
+def test_confirmation_at_step_limit_does_not_start_an_extra_llm_turn(monkeypatch):
+    """确认发生在最后预算轮次时，只执行已确认工具，不再发起第 11 轮 LLM 请求。"""
+    context = AgentContext(session_id="test-confirm-at-step-limit")
+    calls: list[str] = []
+
+    def fake_find(args, ctx):
+        calls.append("find_activity")
+        return {"status": "completed"}
+
+    def fake_download(args, ctx):
+        calls.append("download_activities")
+        return {"status": "completed"}
+
+    import agent.main_agent.tools as tools_module
+
+    monkeypatch.setitem(tools_module.TOOL_HANDLERS, "find_activity", fake_find)
+    monkeypatch.setitem(tools_module.TOOL_HANDLERS, "download_activities", fake_download)
+
+    responses = [
+        {
+            "id": f"msg-{step}",
+            "content": [{"type": "tool_use", "name": "find_activity", "id": f"find-{step}", "input": {}}],
+            "stop_reason": "tool_use",
+        }
+        for step in range(1, MAX_TOOL_STEPS)
+    ]
+    responses.append({
+        "id": "msg-limit",
+        "content": [{
+            "type": "tool_use",
+            "name": "download_activities",
+            "id": "download-limit",
+            "input": {"count": 1},
+        }],
+        "stop_reason": "tool_use",
+    })
+
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as MockClient:
+        MockClient.return_value.create_messages.side_effect = responses
+        paused = run_tool_loop("同步活动", context=context)
+
+    assert paused["status"] == "needs_confirmation"
+    assert context.pending_action["resume"]["step_count"] == MAX_TOOL_STEPS
+
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as MockClient:
+        resumed = run_tool_loop("确认", context=context)
+
+    assert resumed["status"] == "max_steps_exceeded"
+    assert MockClient.return_value.create_messages.call_count == 0
+    assert calls == ["find_activity"] * (MAX_TOOL_STEPS - 1) + ["download_activities"]
+
+
 def test_side_effect_returns_needs_confirmation():
     """LLM 请求 download_activities 时返回 needs_confirmation."""
     context = AgentContext(session_id="test-sidefx")

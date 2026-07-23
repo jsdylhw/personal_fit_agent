@@ -1,9 +1,9 @@
 """Strava API 集成:OAuth 认证,FIT 上传,活动描述更新.
 
 Token 管理策略:
-- 优先用 client_id/secret/refresh_token 自动刷新短期 access_token.
-- 其次直接用 access_token(手动配置).
-- 每次实例化都会刷新 token,如果调用频繁建议复用实例.
+- 优先复用本地尚未过期的 access_token.
+- 需要时用 client_id/secret/refresh_token 自动刷新并持久化轮换 token.
+- 首次 OAuth 的授权 URL / code exchange 可在尚无 access_token 时执行.
 """
 
 from __future__ import annotations
@@ -35,12 +35,17 @@ class StravaSink:
 
     name = "strava"
 
-    def __init__(self, config: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        config: dict[str, Any] | None = None,
+        *,
+        require_access_token: bool = True,
+    ):
         root_config = config if config is not None else load_config()
         self.config = root_config.get("strava", root_config)
         self.token_store = Path(str(self.config.get("token_store") or DEFAULT_TOKEN_STORE)).expanduser()
         self._stored_tokens = self._load_token_store()
-        self.access_token = self._access_token()
+        self.access_token: str | None = self._access_token() if require_access_token else None
 
     def upload_fit(
         self, fit_path: str, *,
@@ -245,6 +250,8 @@ class StravaSink:
         return expires_at is not None and expires_at > time.time() + leeway
 
     def _headers(self) -> dict[str, str]:
+        if not self.access_token:
+            self.access_token = self._access_token()
         return {"Authorization": f"Bearer {self.access_token}"}
 
     @staticmethod
