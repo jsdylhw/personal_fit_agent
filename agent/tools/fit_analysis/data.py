@@ -36,14 +36,14 @@ from .scan import scan_activity_segments
 # get_activity_summary 支持的全部 section
 SUMMARY_SECTIONS = [
     "activity_identity", "duration_distance",
-    "power", "heart_rate", "cadence", "speed", "elevation",
+    "power", "heart_rate", "cadence", "speed", "pace", "running_dynamics", "elevation",
     "energy_load", "training_zones", "laps", "device_profile",
 ]
 
 # 默认只返回核心 section,避免一次工具调用消耗过多 token
 DEFAULT_SECTIONS = [
     "activity_identity", "duration_distance",
-    "power", "heart_rate", "cadence", "speed", "elevation",
+    "power", "heart_rate", "cadence", "speed", "pace", "elevation",
     "energy_load",
 ]
 
@@ -153,8 +153,10 @@ def get_activity_summary_tool(parsed: dict[str, Any], *, sections: Any = None) -
         "duration_distance": lambda: _build_duration_distance(summary, session),
         "power": lambda: _build_power(session, stats, metadata),
         "heart_rate": lambda: _build_heart_rate(session, stats, metadata),
-        "cadence": lambda: _build_cadence(session, stats),
+        "cadence": lambda: _build_cadence(session, stats, summary.get("sport_type")),
         "speed": lambda: _build_speed(session, stats),
+        "pace": lambda: _build_pace(session, stats),
+        "running_dynamics": lambda: _build_running_dynamics(stats),
         "elevation": lambda: _build_elevation(session, stats),
         "energy_load": lambda: _build_energy_load(session),
         "training_zones": lambda: _build_training_zones(metadata, parsed),
@@ -295,6 +297,8 @@ def _build_interval_rows(working: Any, mode: str, bucket_size: int) -> list[dict
         row.update(_series_stats(group, "cadence", "cadence_rpm", include_zero_stats=True))
         row.update(_series_stats(group, "enhanced_speed", "speed_mps", include_zero_stats=True))
         row.update(_series_stats(group, "enhanced_altitude", "altitude_m"))
+        avg_speed = _first_number(row.get("avg_speed_mps"), row.get("avg_nonzero_speed_mps"))
+        row["avg_pace_s_per_km"] = _pace_seconds_per_km(avg_speed)
         rows.append(prune_empty_values(row))
 
     return rows
@@ -426,15 +430,21 @@ def _build_heart_rate(session: dict[str, Any], stats: dict[str, dict[str, Any]],
     }
 
 
-def _build_cadence(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _build_cadence(
+    session: dict[str, Any], stats: dict[str, dict[str, Any]], sport_type: Any,
+) -> dict[str, Any]:
     cadence_stats = _select_stats(stats, "cadence")
+    is_running = "run" in str(sport_type or "").lower()
+    avg = _round_float(_first_number(session.get("avg_cadence"), _stats_value(stats, "cadence", "avg")), 1)
+    maximum = _round_float(_first_number(session.get("max_cadence"), _stats_value(stats, "cadence", "max")), 1)
     return {
         "available": "cadence" in stats,
         "record_count_with_data": cadence_stats.get("count"),
         "stats": cadence_stats,
         "summary": {
-            "avg_cadence_rpm": _round_float(_first_number(session.get("avg_cadence"), _stats_value(stats, "cadence", "avg")), 1),
-            "max_cadence_rpm": _round_float(_first_number(session.get("max_cadence"), _stats_value(stats, "cadence", "max")), 1),
+            "unit": "spm" if is_running else "rpm",
+            "avg_cadence_spm" if is_running else "avg_cadence_rpm": avg,
+            "max_cadence_spm" if is_running else "max_cadence_rpm": maximum,
         },
     }
 
@@ -452,6 +462,45 @@ def _build_speed(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> d
             "max_speed_kmh": _mps_to_kmh(_first_number(session.get("enhanced_max_speed"), session.get("max_speed"), _stats_value(stats, "enhanced_speed", "max"))),
         },
     }
+
+
+def _build_pace(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    avg_speed = _first_number(
+        session.get("enhanced_avg_speed"), session.get("avg_speed"),
+        _stats_value(stats, "enhanced_speed", "avg"), _stats_value(stats, "speed", "avg"),
+    )
+    max_speed = _first_number(
+        session.get("enhanced_max_speed"), session.get("max_speed"),
+        _stats_value(stats, "enhanced_speed", "max"), _stats_value(stats, "speed", "max"),
+    )
+    return {
+        "available": avg_speed is not None or max_speed is not None,
+        "summary": {
+            "avg_pace_s_per_km": _pace_seconds_per_km(avg_speed),
+            "fastest_pace_s_per_km": _pace_seconds_per_km(max_speed),
+        },
+    }
+
+
+def _build_running_dynamics(stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Expose decoded FIT running-dynamics fields without inventing missing values."""
+    fields = (
+        "vertical_oscillation", "stance_time", "stance_time_percent",
+        "step_length", "stride_length", "vertical_ratio",
+    )
+    metrics = {field: _select_stats(stats, field) for field in fields if _select_stats(stats, field)}
+    return {
+        "available": bool(metrics),
+        "record_fields": metrics,
+        "note": "Values are decoded FIT record values; use only fields that are present for this device.",
+    }
+
+
+def _pace_seconds_per_km(speed_mps: Any) -> float | None:
+    speed = _first_number(speed_mps)
+    if speed is None or speed <= 0:
+        return None
+    return _round_float(1000 / speed, 1)
 
 
 def _build_elevation(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:

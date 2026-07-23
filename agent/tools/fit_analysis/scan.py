@@ -1,4 +1,4 @@
-"""活动时序扫描:发现连续高功率输出区间.
+"""活动时序扫描:发现连续骑行高功率或跑步快速配速区间.
 
 这个模块只做本地确定性扫描,不生成报告,不调用 LLM.它把 FIT records
 转换成简短结构化区间,供后续分析/报告/对话层消费.
@@ -20,7 +20,7 @@ def scan_activity_segments(
     step_seconds: int = 10,
     max_segments: int = 12,
 ) -> dict[str, Any]:
-    """全程扫描活动数据,返回 30 秒以上连续高功率区间."""
+    """全程扫描活动数据，按 sport_type 选择功率或配速基线。"""
     df = records_dataframe(parsed.get("records", []))
     if df.empty or "elapsed_s" not in df.columns:
         return {
@@ -40,7 +40,7 @@ def scan_activity_segments(
     window_seconds = _clamp_int(window_seconds, 10, 180, default=30)
     step_seconds = _clamp_int(step_seconds, 5, window_seconds, default=10)
     baselines = _build_baselines(parsed, df)
-    # 先用滑动窗口找到满足阈值的局部输出,再合并相邻窗口,避免把每 10 秒切成碎片。
+    # 先用滑动窗口找到满足运动专项阈值的局部输出，再合并相邻窗口。
     windows = _scan_windows(df, window_seconds=window_seconds, step_seconds=step_seconds, baselines=baselines)
     detected = _merge_windows(df, windows, baselines=baselines)
     efforts = _finalize_efforts(detected, max_items=max(1, int(max_segments)), baselines=baselines)
@@ -85,6 +85,9 @@ def _build_baselines(parsed: dict[str, Any], df: Any) -> dict[str, Any]:
     zones = metadata.get("zones_target") if isinstance(metadata.get("zones_target"), dict) else {}
     sessions = parsed.get("sessions") if isinstance(parsed.get("sessions"), list) else []
     session = sessions[-1] if sessions and isinstance(sessions[-1], dict) else {}
+    summary = parsed.get("summary") if isinstance(parsed.get("summary"), dict) else {}
+    sport_type = str(summary.get("sport_type") or session.get("sport") or "").lower()
+    is_running = "run" in sport_type
 
     ftp = _first_number(
         zones.get("functional_threshold_power"),
@@ -95,12 +98,19 @@ def _build_baselines(parsed: dict[str, Any], df: Any) -> dict[str, Any]:
     p50 = _quantile(nonzero_power, 0.50)
     p70 = _quantile(nonzero_power, 0.70)
     p90 = _quantile(nonzero_power, 0.90)
+    speed = _numeric_series(df, "enhanced_speed")
+    nonzero_speed = speed[speed > 0] if speed is not None else None
+    speed_p50 = _quantile(nonzero_speed, 0.50)
+    speed_p70 = _quantile(nonzero_speed, 0.70)
+    speed_p90 = _quantile(nonzero_speed, 0.90)
     # 高功率阈值取 FTP 的 95% 和本次非零功率 P70 中更高者;没有 FTP 时退化到本次分位数。
     high_power = max(_none_to_zero(_multiply(ftp, 0.95)), _none_to_zero(p70)) or None
     tempo_power = max(_none_to_zero(_multiply(ftp, 0.60)), _none_to_zero(p50)) or None
     threshold_hr, threshold_hr_source = _resolve_threshold_hr(parsed)
 
     return prune_empty_values({
+        "sport_type": sport_type,
+        "scan_basis": "pace" if is_running else "power",
         "ftp_w": _round_float(ftp, 1),
         "threshold_hr_bpm": _round_float(threshold_hr, 1),
         "threshold_hr_source": threshold_hr_source,
@@ -112,6 +122,10 @@ def _build_baselines(parsed: dict[str, Any], df: Any) -> dict[str, Any]:
         "tempo_power_w": _round_float(tempo_power, 1),
         "high_power_w": _round_float(high_power, 1),
         "effort_power_w": _round_float(high_power, 1),
+        "nonzero_speed_p50_mps": _round_float(speed_p50, 3),
+        "nonzero_speed_p70_mps": _round_float(speed_p70, 3),
+        "nonzero_speed_p90_mps": _round_float(speed_p90, 3),
+        "effort_speed_mps": _round_float(speed_p70, 3),
     })
 
 
@@ -169,7 +183,9 @@ def _features_for_group(group: Any, *, start_s: float, end_s: float) -> dict[str
         "max_hr_bpm": _round_float(_max(group, "heart_rate"), 1),
         "hr_rise_bpm": _round_float(_delta(hr_start, hr_end), 1),
         "avg_cadence_rpm": _round_float(_mean(group, "cadence"), 1),
+        "avg_speed_mps": _round_float(_mean(group, "enhanced_speed"), 3),
         "avg_speed_kmh": _round_float(_mean(group, "enhanced_speed") * 3.6 if _mean(group, "enhanced_speed") is not None else None, 1),
+        "avg_pace_s_per_km": _pace_seconds_per_km(_mean(group, "enhanced_speed")),
         "power_zero_fraction": _round_float(_zero_fraction(power), 3),
         "cadence_zero_fraction": _round_float(_zero_fraction(cadence), 3),
         "samples": int(len(group)),
@@ -177,6 +193,15 @@ def _features_for_group(group: Any, *, start_s: float, end_s: float) -> dict[str
 
 
 def _classify_window(features: dict[str, Any], baselines: dict[str, Any]) -> dict[str, Any] | None:
+    if baselines.get("scan_basis") == "pace":
+        avg_speed = _num(features.get("avg_speed_mps"))
+        effort_speed = _num(baselines.get("effort_speed_mps"))
+        if effort_speed is not None and avg_speed is not None and avg_speed >= effort_speed:
+            p90 = _num(baselines.get("nonzero_speed_p90_mps")) or effort_speed
+            score = min(avg_speed / p90 if p90 else 1.0, 1.0)
+            return _classification("fast_running_segment", ["fast_pace"], score, ["pace_above_activity_p70"])
+        return None
+
     avg_power = _num(features.get("avg_power_w"))
     effort_power = _num(baselines.get("effort_power_w"))
     if effort_power is not None and avg_power is not None and avg_power >= effort_power:
@@ -245,7 +270,7 @@ def _finalize_efforts(
             continue
         # 输出只保留给 LLM 判断区间意义所需的核心字段,避免把调试统计塞进上下文。
         effort = {
-            "type": "high_power_interval",
+            "type": item.get("type") or "high_power_interval",
             "start_s": item.get("start_s"),
             "end_s": item.get("end_s"),
             "duration_s": item.get("duration_s"),
@@ -257,8 +282,10 @@ def _finalize_efforts(
             "max_hr_bpm": item.get("max_hr_bpm"),
             "avg_cadence_rpm": item.get("avg_cadence_rpm"),
             "avg_speed_kmh": item.get("avg_speed_kmh"),
+            "avg_pace_s_per_km": item.get("avg_pace_s_per_km"),
             "elevation_gain_m": item.get("elevation_gain_m"),
             "avg_grade_percent": item.get("avg_grade_percent"),
+            "score": item.get("score"),
         }
         climb = _climb_context(item)
         if climb.get("detected"):
@@ -351,7 +378,7 @@ def _build_data_quality(parsed: dict[str, Any], df: Any, *, baselines: dict[str,
     sessions = parsed.get("sessions") if isinstance(parsed.get("sessions"), list) else []
     session = sessions[-1] if sessions and isinstance(sessions[-1], dict) else {}
 
-    if _num(baselines.get("ftp_w")) is None:
+    if baselines.get("scan_basis") == "power" and _num(baselines.get("ftp_w")) is None:
         notes.append({
             "code": "missing_ftp",
             "text": "未找到 FTP,高功率区间阈值会退化为本次活动内分位数。",
@@ -501,6 +528,13 @@ def _num(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _pace_seconds_per_km(speed_mps: Any) -> float | None:
+    speed = _num(speed_mps)
+    if speed is None or speed <= 0:
+        return None
+    return _round_float(1000 / speed, 1)
 
 
 def _multiply(value: Any, factor: float) -> float | None:

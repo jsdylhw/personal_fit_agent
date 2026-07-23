@@ -14,7 +14,7 @@ Do NOT use as the first step for a full single-activity training report — use 
     ),
     ToolDef(
         name="get_activity_summary",
-        description="""Primary objective data for full single-activity reports. Return structured summary by sections. Core sections (power/heart_rate/cadence/speed/elevation) have available/stats/summary fields.
+        description="""Primary objective data for full single-activity reports. Return structured summary by sections. Core sections include power/heart_rate/cadence/speed/pace/elevation; running_dynamics is returned only when the FIT device recorded it.
 Use for: full training reports needing grouped objective data.
 Use sections to pick specific ones, or 'all' for all 11.""",
         input_schema={
@@ -25,8 +25,8 @@ Use sections to pick specific ones, or 'all' for all 11.""",
     ),
     ToolDef(
         name="scan_activity_segments",
-        description="""Scan for continuous high-power intervals >= 30s. Each interval includes power/HR/cadence/speed/elevation context. Marks climb only when >= 30m gain. Returns data-quality warnings.
-Use for: hard intervals, high-power sections, climbs with power, surges. This is a locator, not a report generator — after finding segments, use get_time_intervals or get_distance_intervals to inspect in detail.""",
+        description="""Scan for sustained effort segments >= 30s. Cycling uses high power; running uses faster-than-baseline pace. Each interval includes available power/HR/cadence/speed/elevation context. Marks climb only when >= 30m gain. Returns data-quality warnings.
+Use for: hard intervals, fast running segments, climbs, surges. This is a locator, not a report generator — after finding segments, use get_time_intervals or get_distance_intervals to inspect in detail.""",
         input_schema={
             "type": "object",
             "properties": {
