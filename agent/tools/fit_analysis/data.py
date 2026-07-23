@@ -90,6 +90,22 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
         _estimate_tss(normalized_power, threshold_power, duration_s) if normalized_power and threshold_power and duration_s else None,
     )
 
+    basic_metrics = {
+        "avg_speed_kmh": _mps_to_kmh(avg_speed),
+        "avg_power_w": _round_float(avg_power, 1),
+        "max_power_w": _round_float(max_power, 1),
+        "normalized_power_w": _round_float(normalized_power, 1),
+        "avg_hr_bpm": _round_float(avg_hr, 1),
+        "max_hr_bpm": _round_float(max_hr, 1),
+        "tss": _round_float(tss, 1),
+        "intensity_factor": _round_float(intensity_factor, 3),
+    }
+    if _is_running(parsed):
+        basic_metrics["avg_cadence_spm"] = _round_float(avg_cadence * 2 if avg_cadence is not None else None, 1)
+        basic_metrics["avg_pace_s_per_km"] = _pace_seconds_per_km(avg_speed)
+    else:
+        basic_metrics["avg_cadence_rpm"] = _round_float(avg_cadence, 1)
+
     return {
         "schema_version": "activity_overview.v1",
         "activity_identity": {
@@ -105,17 +121,7 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
             "total_ascent_m": total_ascent,
             "calories": _round_float(calories, 0),
         },
-        "basic_metrics": {
-            "avg_speed_kmh": _mps_to_kmh(avg_speed),
-            "avg_power_w": _round_float(avg_power, 1),
-            "max_power_w": _round_float(max_power, 1),
-            "normalized_power_w": _round_float(normalized_power, 1),
-            "avg_hr_bpm": _round_float(avg_hr, 1),
-            "max_hr_bpm": _round_float(max_hr, 1),
-            "avg_cadence_rpm": _round_float(avg_cadence, 1),
-            "tss": _round_float(tss, 1),
-            "intensity_factor": _round_float(intensity_factor, 3),
-        },
+        "basic_metrics": basic_metrics,
         "data_availability": {
             "record_count": summary.get("record_count"),
             "lap_count": summary.get("lap_count"),
@@ -202,7 +208,7 @@ def get_time_intervals_tool(
             "window": {"start_s": _round_float(start_s, 1), "end_s": _round_float(end_s, 1)},
         }
 
-    rows = _build_interval_rows(working, "time", bucket_seconds)
+    rows = _build_interval_rows(working, "time", bucket_seconds, is_running=_is_running(parsed))
     return {
         "available": True, "mode": "time", "bucket_seconds": bucket_seconds,
         "record_count": int(len(df)), "filtered_count": int(len(working)),
@@ -242,7 +248,7 @@ def get_distance_intervals_tool(
             "window": {"start_d": _round_float(start_d, 1), "end_d": _round_float(end_d, 1)},
         }
 
-    rows = _build_interval_rows(working, "distance", bucket_distance_m)
+    rows = _build_interval_rows(working, "distance", bucket_distance_m, is_running=_is_running(parsed))
     return {
         "available": True, "mode": "distance", "bucket_distance_m": bucket_distance_m,
         "record_count": int(len(df)), "filtered_count": int(len(working)),
@@ -272,7 +278,9 @@ def scan_activity_segments_tool(
 # 内部 helper
 # =============================================================================
 
-def _build_interval_rows(working: Any, mode: str, bucket_size: int) -> list[dict[str, Any]]:
+def _build_interval_rows(
+    working: Any, mode: str, bucket_size: int, *, is_running: bool = False,
+) -> list[dict[str, Any]]:
     """time/distance intervals 共用的分组统计逻辑."""
     column = "elapsed_s" if mode == "time" else "distance"
     start_key = "start_s" if mode == "time" else "start_d"
@@ -295,6 +303,8 @@ def _build_interval_rows(working: Any, mode: str, bucket_size: int) -> list[dict
         # 功率/踏频/速度的 0 值有训练含义(滑行,停踩,停车),保留占比
         row.update(_series_stats(group, "power", "power_w", include_zero_stats=True))
         row.update(_series_stats(group, "cadence", "cadence_rpm", include_zero_stats=True))
+        if is_running and row.get("avg_cadence_rpm") is not None:
+            row["avg_cadence_spm"] = _round_float(float(row["avg_cadence_rpm"]) * 2, 1)
         row.update(_series_stats(group, "enhanced_speed", "speed_mps", include_zero_stats=True))
         row.update(_series_stats(group, "enhanced_altitude", "altitude_m"))
         avg_speed = _first_number(row.get("avg_speed_mps"), row.get("avg_nonzero_speed_mps"))
@@ -437,14 +447,17 @@ def _build_cadence(
     is_running = "run" in str(sport_type or "").lower()
     avg = _round_float(_first_number(session.get("avg_cadence"), _stats_value(stats, "cadence", "avg")), 1)
     maximum = _round_float(_first_number(session.get("max_cadence"), _stats_value(stats, "cadence", "max")), 1)
+    avg_spm = _round_float(avg * 2 if is_running and avg is not None else None, 1)
+    max_spm = _round_float(maximum * 2 if is_running and maximum is not None else None, 1)
     return {
         "available": "cadence" in stats,
         "record_count_with_data": cadence_stats.get("count"),
         "stats": cadence_stats,
         "summary": {
             "unit": "spm" if is_running else "rpm",
-            "avg_cadence_spm" if is_running else "avg_cadence_rpm": avg,
-            "max_cadence_spm" if is_running else "max_cadence_rpm": maximum,
+            "record_cadence_rpm": avg if is_running else None,
+            "avg_cadence_spm" if is_running else "avg_cadence_rpm": avg_spm if is_running else avg,
+            "max_cadence_spm" if is_running else "max_cadence_rpm": max_spm if is_running else maximum,
         },
     }
 
@@ -501,6 +514,11 @@ def _pace_seconds_per_km(speed_mps: Any) -> float | None:
     if speed is None or speed <= 0:
         return None
     return _round_float(1000 / speed, 1)
+
+
+def _is_running(parsed: dict[str, Any]) -> bool:
+    summary = parsed.get("summary") if isinstance(parsed.get("summary"), dict) else {}
+    return "run" in str(summary.get("sport_type") or "").lower()
 
 
 def _build_elevation(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:

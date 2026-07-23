@@ -281,6 +281,11 @@ def _finalize_efforts(
             "avg_hr_bpm": item.get("avg_hr_bpm"),
             "max_hr_bpm": item.get("max_hr_bpm"),
             "avg_cadence_rpm": item.get("avg_cadence_rpm"),
+            "avg_cadence_spm": (
+                _round_float(_num(item.get("avg_cadence_rpm")) * 2, 1)
+                if baselines.get("scan_basis") == "pace" and _num(item.get("avg_cadence_rpm")) is not None
+                else None
+            ),
             "avg_speed_kmh": item.get("avg_speed_kmh"),
             "avg_pace_s_per_km": item.get("avg_pace_s_per_km"),
             "elevation_gain_m": item.get("elevation_gain_m"),
