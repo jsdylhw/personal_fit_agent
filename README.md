@@ -16,6 +16,7 @@ Garmin 中国 / 本地 FIT -> 活动索引 -> 原生 tool-use loop -> 本地工�
 - 分析单个 FIT,生成 Markdown 活动报告和 `data/summaries/*.summary.json`。
 - 通过 `chat` 用自然语言定位活动、分析单次活动、汇总活动范围、比较活动、总结训练负荷和上传 Strava。
 - 单活动分析由 ActivityAnalysisAgent 子会话完成:模型只能按需读取概览、结构化摘要、区间数据、冲刺/爬坡扫描和历史记录。
+- 分析会按 `sport_type` 区分骑行和跑步：跑步报告使用配速、公里分段、心率、步频和存在的跑步动态数据；没有跑步动态传感器时会明确标为数据缺失。
 - Main Agent 日志以可读 Markdown 为主,记录 intent、工具调用步骤、选中活动和关键结果。
 - Strava 上传使用本地 summary 中的 `fit_path` 和 `strava_summary`;上传步骤会直接执行上传,再把工具返回结果交给大模型组织说明。
 
@@ -61,6 +62,9 @@ strava:
   client_secret: "your-strava-client-secret"
   refresh_token: "your-strava-refresh-token"
   timeout_seconds: 120
+
+# Web API 默认仅允许本机访问；如需经局域网或反向代理访问，必须设置随机 token。
+web_api_token: "replace-with-a-long-random-token"
 ```
 
 `agent.base_url` 需要兼容 Anthropic Messages API 的 `/v1/messages`。
@@ -104,7 +108,7 @@ python -m app.cli strava-auth-url
 python -m app.cli strava-exchange-code "PASTE_CODE_HERE"
 ```
 
-把返回里的 `refresh_token` 写回 `config.yaml`。
+授权结果会保存到本地 `.strava_tokens.json`（已被 git 忽略，权限为仅当前用户可读）；无需手动改写 `config.yaml`。
 
 ## 常用命令
 
