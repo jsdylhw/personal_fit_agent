@@ -12,6 +12,8 @@ from fit.parser import records_dataframe
 
 from core.stats import _round_float, prune_empty_values
 
+from .profiles import canonical_sport, is_running
+
 
 def scan_activity_segments(
     parsed: dict[str, Any],
@@ -86,13 +88,14 @@ def _build_baselines(parsed: dict[str, Any], df: Any) -> dict[str, Any]:
     sessions = parsed.get("sessions") if isinstance(parsed.get("sessions"), list) else []
     session = sessions[-1] if sessions and isinstance(sessions[-1], dict) else {}
     summary = parsed.get("summary") if isinstance(parsed.get("summary"), dict) else {}
-    sport_type = str(summary.get("sport_type") or session.get("sport") or "").lower()
-    is_running = "run" in sport_type
+    sport_type = canonical_sport(summary.get("sport_type") or session.get("sport"))
+    running = is_running(sport_type)
 
+    # 跑步 FIT 内的 FTP 往往是设备保留的骑行设定；跑步扫描只以配速定位。
     ftp = _first_number(
         zones.get("functional_threshold_power"),
         session.get("threshold_power"),
-    )
+    ) if not running else None
     power = _numeric_series(df, "power")
     nonzero_power = power[power > 0] if power is not None else None
     p50 = _quantile(nonzero_power, 0.50)
@@ -104,13 +107,17 @@ def _build_baselines(parsed: dict[str, Any], df: Any) -> dict[str, Any]:
     speed_p70 = _quantile(nonzero_speed, 0.70)
     speed_p90 = _quantile(nonzero_speed, 0.90)
     # 高功率阈值取 FTP 的 95% 和本次非零功率 P70 中更高者;没有 FTP 时退化到本次分位数。
-    high_power = max(_none_to_zero(_multiply(ftp, 0.95)), _none_to_zero(p70)) or None
-    tempo_power = max(_none_to_zero(_multiply(ftp, 0.60)), _none_to_zero(p50)) or None
+    if running:
+        high_power = None
+        tempo_power = None
+    else:
+        high_power = max(_none_to_zero(_multiply(ftp, 0.95)), _none_to_zero(p70)) or None
+        tempo_power = max(_none_to_zero(_multiply(ftp, 0.60)), _none_to_zero(p50)) or None
     threshold_hr, threshold_hr_source = _resolve_threshold_hr(parsed)
 
     return prune_empty_values({
         "sport_type": sport_type,
-        "scan_basis": "pace" if is_running else "power",
+        "scan_basis": "pace" if running else "power",
         "ftp_w": _round_float(ftp, 1),
         "threshold_hr_bpm": _round_float(threshold_hr, 1),
         "threshold_hr_source": threshold_hr_source,

@@ -1,8 +1,7 @@
-"""运动员档案管理与区间计算.
+"""运动员档案管理与区间计算。
 
-从 data/athlete.json 加载 FTP/最大心率/静息心率等个人数据,
-在 FIT 文件缺少区间设定时作为 fallback,并基于 Coggan 功率区间
-和 5 区心率模型自行计算区间边界.
+档案支持 ``shared``、``cycling``、``running`` 三层。旧平铺字段仍兼容，
+但旧 ``ftp`` 只视为骑行 FTP，绝不作为跑步功率阈值。
 """
 
 from __future__ import annotations
@@ -35,48 +34,80 @@ def save_athlete_profile(profile: dict[str, Any], path: str | Path = DEFAULT_ATH
     return target
 
 
-def get_ftp(profile: dict[str, Any]) -> float | None:
-    """从档案中提取 FTP(瓦)."""
-    value = profile.get("ftp")
-    if value is None:
+def get_ftp(profile: dict[str, Any], *, sport_type: str = "cycling") -> float | None:
+    """提取骑行 FTP(瓦)；跑步必须使用独立的 threshold_power_w。"""
+    if _canonical_sport(sport_type) != "cycling":
         return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    value = _sport_value(profile, "cycling", "ftp_w", "ftp")
+    # 旧档案的平铺 ftp 只兼容为 cycling.ftp_w。
+    return _number(value if value is not None else profile.get("ftp"))
 
 
-def get_max_hr(profile: dict[str, Any]) -> float | None:
+def get_running_power_threshold(profile: dict[str, Any]) -> float | None:
+    """提取跑步专属功率阈值；未配置时明确返回空。"""
+    return _number(_sport_value(profile, "running", "threshold_power_w", "threshold_power"))
+
+
+def get_running_threshold_pace(profile: dict[str, Any]) -> float | None:
+    """提取跑步阈值配速（秒/公里）。"""
+    return _number(_sport_value(profile, "running", "threshold_pace_s_per_km"))
+
+
+def get_running_critical_speed(profile: dict[str, Any]) -> float | None:
+    """提取跑步临界速度（米/秒）。"""
+    return _number(_sport_value(profile, "running", "critical_speed_mps"))
+
+
+def get_max_hr(profile: dict[str, Any], *, sport_type: str | None = None) -> float | None:
     """从档案中提取最大心率(bpm)."""
-    value = profile.get("max_heart_rate")
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    return _number(_shared_or_sport_value(profile, sport_type, "max_heart_rate"))
 
 
-def get_resting_hr(profile: dict[str, Any]) -> float | None:
+def get_resting_hr(profile: dict[str, Any], *, sport_type: str | None = None) -> float | None:
     """从档案中提取静息心率(bpm)."""
-    value = profile.get("resting_heart_rate")
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    return _number(_shared_or_sport_value(profile, sport_type, "resting_heart_rate"))
 
 
-def get_threshold_hr(profile: dict[str, Any]) -> float | None:
+def get_threshold_hr(profile: dict[str, Any], *, sport_type: str | None = None) -> float | None:
     """从档案中提取阈值心率(bpm)."""
-    value = profile.get("threshold_heart_rate")
-    if value is None:
-        return None
+    return _number(_shared_or_sport_value(profile, sport_type, "threshold_heart_rate"))
+
+
+def _number(value: Any) -> float | None:
     try:
-        return float(value)
+        return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _canonical_sport(sport_type: str | None) -> str:
+    value = str(sport_type or "").lower()
+    if "run" in value:
+        return "running"
+    if "cycl" in value or value in {"bike", "biking"}:
+        return "cycling"
+    return value
+
+
+def _sport_value(profile: dict[str, Any], sport: str, *keys: str) -> Any:
+    section = profile.get(sport)
+    if not isinstance(section, dict):
+        return None
+    for key in keys:
+        if section.get(key) is not None:
+            return section[key]
+    return None
+
+
+def _shared_or_sport_value(profile: dict[str, Any], sport_type: str | None, key: str) -> Any:
+    sport = _canonical_sport(sport_type) or "cycling"
+    value = _sport_value(profile, sport, key) if sport else None
+    if value is not None:
+        return value
+    shared = profile.get("shared")
+    if isinstance(shared, dict) and shared.get(key) is not None:
+        return shared[key]
+    return profile.get(key)
 
 
 # -- 功率区间 (Coggan 7 区) ---------------------------------------------------
@@ -127,12 +158,12 @@ def _has_ftp(metadata: dict[str, Any]) -> bool:
     return zones.get("functional_threshold_power") is not None
 
 
-def _has_max_hr(metadata: dict[str, Any]) -> bool:
+def _has_max_hr(metadata: dict[str, Any], *, sport_type: str | None = None) -> bool:
     zones = metadata.get("zones_target") or {}
     user_profile = metadata.get("user_profile") or {}
     return (
         zones.get("max_heart_rate") is not None
-        or user_profile.get("default_max_biking_heart_rate") is not None
+        or ((_canonical_sport(sport_type) or "cycling") == "cycling" and user_profile.get("default_max_biking_heart_rate") is not None)
         or user_profile.get("default_max_heart_rate") is not None
     )
 
@@ -160,6 +191,8 @@ def _has_power_zones(metadata: dict[str, Any]) -> bool:
 def enrich_training_metadata(
     metadata: dict[str, Any],
     profile: dict[str, Any] | None = None,
+    *,
+    sport_type: str | None = None,
 ) -> dict[str, Any]:
     """用运动员档案补全 FIT training_metadata 中缺失的 FTP/心率/区间设定.
 
@@ -176,17 +209,24 @@ def enrich_training_metadata(
         return metadata
 
     enriched = _deep_copy_metadata(metadata)
-    ftp = get_ftp(profile)
-    max_hr = get_max_hr(profile)
-    resting_hr = get_resting_hr(profile)
-    threshold_hr = get_threshold_hr(profile)
+    # 未传 sport_type 是旧调用方式，保持其原本“骑行分析”的含义。
+    sport = _canonical_sport(sport_type) or "cycling"
+    is_cycling = sport == "cycling"
+    is_running = sport == "running"
+    ftp = get_ftp(profile, sport_type=sport)
+    running_power_threshold = get_running_power_threshold(profile) if is_running else None
+    running_threshold_pace = get_running_threshold_pace(profile) if is_running else None
+    running_critical_speed = get_running_critical_speed(profile) if is_running else None
+    max_hr = get_max_hr(profile, sport_type=sport)
+    resting_hr = get_resting_hr(profile, sport_type=sport)
+    threshold_hr = get_threshold_hr(profile, sport_type=sport)
 
     # 补 zones_target
     zones = enriched.setdefault("zones_target", {})
-    if not _has_ftp(enriched) and ftp is not None:
+    if is_cycling and not _has_ftp(enriched) and ftp is not None:
         zones["functional_threshold_power"] = ftp
         zones["pwr_calc_type"] = "athlete_profile"
-    if not _has_max_hr(enriched) and max_hr is not None:
+    if not _has_max_hr(enriched, sport_type=sport) and max_hr is not None:
         zones["max_heart_rate"] = max_hr
         zones["hr_calc_type"] = "athlete_profile"
     if zones.get("threshold_heart_rate") is None and threshold_hr is not None:
@@ -194,7 +234,7 @@ def enrich_training_metadata(
 
     # 补 time_in_zone 区间边界
     tiz = enriched.setdefault("time_in_zone", [])
-    if not _has_power_zones(enriched) and ftp is not None:
+    if is_cycling and not _has_power_zones(enriched) and ftp is not None:
         boundaries = power_zone_boundaries(ftp)
         tiz.append({
             "reference_mesg": "athlete_profile",
@@ -224,6 +264,24 @@ def enrich_training_metadata(
     for key, value in profile_fields.items():
         if value is not None and user_profile.get(key) is None:
             user_profile[key] = value
+
+    # 跑步功率阈值必须由 running profile 显式提供。FIT 的
+    # functional_threshold_power 可能是 Garmin 设备保留的骑行设置，保留原始值
+    # 供追溯，但不把它作为分析阈值。
+    if is_running:
+        analysis_profile = enriched.setdefault("analysis_profile", {})
+        analysis_profile["running_power_threshold_w"] = running_power_threshold
+        analysis_profile["running_power_threshold_source"] = (
+            "athlete_profile.running" if running_power_threshold is not None else "unavailable"
+        )
+        analysis_profile["running_threshold_pace_s_per_km"] = running_threshold_pace
+        analysis_profile["running_threshold_pace_source"] = (
+            "athlete_profile.running" if running_threshold_pace is not None else "unavailable"
+        )
+        analysis_profile["running_critical_speed_mps"] = running_critical_speed
+        analysis_profile["running_critical_speed_source"] = (
+            "athlete_profile.running" if running_critical_speed is not None else "unavailable"
+        )
 
     return enriched
 

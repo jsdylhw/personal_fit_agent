@@ -31,6 +31,8 @@ from core.stats import (
 )
 from core.time_utils import local_time_without_timezone
 
+from .profiles import is_running, supports_cycling_power_metrics
+from .running import analyze_running_efficiency, build_running_dynamics, cadence_to_spm
 from .scan import scan_activity_segments
 
 # get_activity_summary 支持的全部 section
@@ -78,16 +80,21 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
     avg_speed = _first_number(session.get("enhanced_avg_speed"), session.get("avg_speed"), _stats_value(stats, "enhanced_speed", "avg"))
     total_ascent = _round_float(session.get("total_ascent"), 1)
     normalized_power = _first_number(session.get("normalized_power"))
-    training_metadata = parsed.get("training_metadata") or {}
-    zones_target = training_metadata.get("zones_target") or {}
-    threshold_power = _first_number(session.get("threshold_power"), zones_target.get("functional_threshold_power"))
-    intensity_factor = _first_number(
-        session.get("intensity_factor"),
-        (normalized_power / threshold_power) if normalized_power and threshold_power else None,
+    is_cycling = supports_cycling_power_metrics(summary.get("sport_type"))
+    threshold_power, _threshold_source = _resolve_power_threshold(parsed, session)
+    intensity_factor = (
+        _first_number(
+            session.get("intensity_factor"),
+            (normalized_power / threshold_power) if normalized_power and threshold_power else None,
+        )
+        if is_cycling else None
     )
-    tss = _first_number(
-        session.get("training_stress_score"),
-        _estimate_tss(normalized_power, threshold_power, duration_s) if normalized_power and threshold_power and duration_s else None,
+    tss = (
+        _first_number(
+            session.get("training_stress_score"),
+            _estimate_tss(normalized_power, threshold_power, duration_s) if normalized_power and threshold_power and duration_s else None,
+        )
+        if is_cycling else None
     )
 
     basic_metrics = {
@@ -101,7 +108,7 @@ def get_activity_overview_tool(parsed: dict[str, Any]) -> dict[str, Any]:
         "intensity_factor": _round_float(intensity_factor, 3),
     }
     if _is_running(parsed):
-        basic_metrics["avg_cadence_spm"] = _round_float(avg_cadence * 2 if avg_cadence is not None else None, 1)
+        basic_metrics["avg_cadence_spm"] = cadence_to_spm(avg_cadence)
         basic_metrics["avg_pace_s_per_km"] = _pace_seconds_per_km(avg_speed)
     else:
         basic_metrics["avg_cadence_rpm"] = _round_float(avg_cadence, 1)
@@ -157,14 +164,14 @@ def get_activity_summary_tool(parsed: dict[str, Any], *, sections: Any = None) -
     section_builders = {
         "activity_identity": lambda: _build_activity_identity(parsed, summary),
         "duration_distance": lambda: _build_duration_distance(summary, session),
-        "power": lambda: _build_power(session, stats, metadata),
+        "power": lambda: _build_power(parsed, session, stats, metadata),
         "heart_rate": lambda: _build_heart_rate(session, stats, metadata),
         "cadence": lambda: _build_cadence(session, stats, summary.get("sport_type")),
         "speed": lambda: _build_speed(session, stats),
-        "pace": lambda: _build_pace(session, stats),
-        "running_dynamics": lambda: _build_running_dynamics(stats),
+        "pace": lambda: _build_pace(parsed, session, stats),
+        "running_dynamics": lambda: build_running_dynamics(stats) if _is_running(parsed) else _unavailable_running_dynamics(),
         "elevation": lambda: _build_elevation(session, stats),
-        "energy_load": lambda: _build_energy_load(session),
+        "energy_load": lambda: _build_energy_load(session, parsed),
         "training_zones": lambda: _build_training_zones(metadata, parsed),
         "laps": lambda: _build_laps(parsed.get("laps") or []),
         "device_profile": lambda: _build_device_profile(metadata),
@@ -258,6 +265,17 @@ def get_distance_intervals_tool(
     }
 
 
+def get_running_efficiency_tool(parsed: dict[str, Any]) -> dict[str, Any]:
+    """返回跑步前后段配速、心率、步频与跑姿稳定性输入。"""
+    if not _is_running(parsed):
+        return {
+            "schema_version": "running_efficiency.v1",
+            "available": False,
+            "reason": "running_efficiency is only applicable to running activities.",
+        }
+    return analyze_running_efficiency(parsed.get("records") or [])
+
+
 def scan_activity_segments_tool(
     parsed: dict[str, Any],
     *,
@@ -304,7 +322,7 @@ def _build_interval_rows(
         row.update(_series_stats(group, "power", "power_w", include_zero_stats=True))
         row.update(_series_stats(group, "cadence", "cadence_rpm", include_zero_stats=True))
         if is_running and row.get("avg_cadence_rpm") is not None:
-            row["avg_cadence_spm"] = _round_float(float(row["avg_cadence_rpm"]) * 2, 1)
+            row["avg_cadence_spm"] = cadence_to_spm(row["avg_cadence_rpm"])
         row.update(_series_stats(group, "enhanced_speed", "speed_mps", include_zero_stats=True))
         row.update(_series_stats(group, "enhanced_altitude", "altitude_m"))
         avg_speed = _first_number(row.get("avg_speed_mps"), row.get("avg_nonzero_speed_mps"))
@@ -392,18 +410,20 @@ def _build_duration_distance(summary: dict[str, Any], session: dict[str, Any]) -
     }
 
 
-def _build_power(session: dict[str, Any], stats: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
+def _build_power(
+    parsed: dict[str, Any], session: dict[str, Any], stats: dict[str, dict[str, Any]], metadata: dict[str, Any],
+) -> dict[str, Any]:
     """功率 section:{available, record_count_with_data, stats, summary}."""
-    zones_target = metadata.get("zones_target") or {}
     power_stats = _select_stats(stats, "power")
     avg_power = _first_number(session.get("avg_power"), _stats_value(stats, "power", "avg"))
     normalized_power = _first_number(session.get("normalized_power"))
 
-    threshold_power = _first_number(session.get("threshold_power"), zones_target.get("functional_threshold_power"))
+    threshold_power, threshold_source = _resolve_power_threshold(parsed, session)
+    is_cycling = supports_cycling_power_metrics((parsed.get("summary") or {}).get("sport_type"))
     intensity_factor = _first_number(
         session.get("intensity_factor"),
         (normalized_power / threshold_power) if normalized_power and threshold_power else None,
-    )
+    ) if is_cycling else None
     return {
         "available": bool(power_stats),
         "record_count_with_data": power_stats.get("count"),
@@ -413,7 +433,11 @@ def _build_power(session: dict[str, Any], stats: dict[str, dict[str, Any]], meta
             "max_power_w": _round_float(_first_number(session.get("max_power"), _stats_value(stats, "power", "max")), 1),
             "normalized_power_w": _round_float(normalized_power, 1),
             "threshold_power_w": _round_float(threshold_power, 1),
+            "threshold_power_source": threshold_source,
             "intensity_factor": _round_float(intensity_factor, 3),
+            "running_power_intensity_ratio": _round_float(
+                (normalized_power / threshold_power) if not is_cycling and normalized_power and threshold_power else None, 3,
+            ),
             # VI = NP / AP,> 1.05 通常表示节奏不稳定
             "variability_index": _round_float((normalized_power / avg_power) if avg_power and normalized_power else None, 3),
             "total_work_kj": _round_float(_first_number(session.get("total_work")) / 1000 if _first_number(session.get("total_work")) is not None else None, 1),
@@ -444,20 +468,20 @@ def _build_cadence(
     session: dict[str, Any], stats: dict[str, dict[str, Any]], sport_type: Any,
 ) -> dict[str, Any]:
     cadence_stats = _select_stats(stats, "cadence")
-    is_running = "run" in str(sport_type or "").lower()
+    running = is_running(sport_type)
     avg = _round_float(_first_number(session.get("avg_cadence"), _stats_value(stats, "cadence", "avg")), 1)
     maximum = _round_float(_first_number(session.get("max_cadence"), _stats_value(stats, "cadence", "max")), 1)
-    avg_spm = _round_float(avg * 2 if is_running and avg is not None else None, 1)
-    max_spm = _round_float(maximum * 2 if is_running and maximum is not None else None, 1)
+    avg_spm = cadence_to_spm(avg) if running else None
+    max_spm = cadence_to_spm(maximum) if running else None
     return {
         "available": "cadence" in stats,
         "record_count_with_data": cadence_stats.get("count"),
         "stats": cadence_stats,
         "summary": {
-            "unit": "spm" if is_running else "rpm",
-            "record_cadence_rpm": avg if is_running else None,
-            "avg_cadence_spm" if is_running else "avg_cadence_rpm": avg_spm if is_running else avg,
-            "max_cadence_spm" if is_running else "max_cadence_rpm": max_spm if is_running else maximum,
+            "unit": "spm" if running else "rpm",
+            "record_cadence_rpm": avg if running else None,
+            "avg_cadence_spm" if running else "avg_cadence_rpm": avg_spm if running else avg,
+            "max_cadence_spm" if running else "max_cadence_rpm": max_spm if running else maximum,
         },
     }
 
@@ -477,7 +501,7 @@ def _build_speed(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> d
     }
 
 
-def _build_pace(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _build_pace(parsed: dict[str, Any], session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
     avg_speed = _first_number(
         session.get("enhanced_avg_speed"), session.get("avg_speed"),
         _stats_value(stats, "enhanced_speed", "avg"), _stats_value(stats, "speed", "avg"),
@@ -486,26 +510,39 @@ def _build_pace(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> di
         session.get("enhanced_max_speed"), session.get("max_speed"),
         _stats_value(stats, "enhanced_speed", "max"), _stats_value(stats, "speed", "max"),
     )
+    metadata = parsed.get("training_metadata") if isinstance(parsed.get("training_metadata"), dict) else {}
+    analysis_profile = metadata.get("analysis_profile") if isinstance(metadata.get("analysis_profile"), dict) else {}
+    settings = metadata.get("training_settings") if isinstance(metadata.get("training_settings"), dict) else {}
+    running = _is_running(parsed)
     return {
         "available": avg_speed is not None or max_speed is not None,
         "summary": {
             "avg_pace_s_per_km": _pace_seconds_per_km(avg_speed),
             "fastest_pace_s_per_km": _pace_seconds_per_km(max_speed),
+            "threshold_pace_s_per_km": _round_float(
+                analysis_profile.get("running_threshold_pace_s_per_km") if running else None, 1,
+            ),
+            "threshold_pace_source": (
+                str(analysis_profile.get("running_threshold_pace_source") or "unavailable")
+                if running else "unsupported_sport"
+            ),
+            "critical_speed_mps": _round_float(
+                analysis_profile.get("running_critical_speed_mps") if running else None, 3,
+            ),
+            "critical_speed_source": (
+                str(analysis_profile.get("running_critical_speed_source") or "unavailable")
+                if running else "unsupported_sport"
+            ),
+            "target_pace_s_per_km": _pace_seconds_per_km(settings.get("target_speed")) if running else None,
+            "target_pace_source": "fit_training_settings" if running and settings.get("target_speed") is not None else "unavailable",
         },
     }
 
 
-def _build_running_dynamics(stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Expose decoded FIT running-dynamics fields without inventing missing values."""
-    fields = (
-        "vertical_oscillation", "stance_time", "stance_time_percent",
-        "step_length", "stride_length", "vertical_ratio",
-    )
-    metrics = {field: _select_stats(stats, field) for field in fields if _select_stats(stats, field)}
+def _unavailable_running_dynamics() -> dict[str, Any]:
     return {
-        "available": bool(metrics),
-        "record_fields": metrics,
-        "note": "Values are decoded FIT record values; use only fields that are present for this device.",
+        "available": False,
+        "reason": "running_dynamics is only applicable to running activities.",
     }
 
 
@@ -518,7 +555,7 @@ def _pace_seconds_per_km(speed_mps: Any) -> float | None:
 
 def _is_running(parsed: dict[str, Any]) -> bool:
     summary = parsed.get("summary") if isinstance(parsed.get("summary"), dict) else {}
-    return "run" in str(summary.get("sport_type") or "").lower()
+    return is_running(summary.get("sport_type"))
 
 
 def _build_elevation(session: dict[str, Any], stats: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -534,10 +571,11 @@ def _build_elevation(session: dict[str, Any], stats: dict[str, dict[str, Any]]) 
     }
 
 
-def _build_energy_load(session: dict[str, Any]) -> dict[str, Any]:
+def _build_energy_load(session: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
+    is_cycling = supports_cycling_power_metrics((parsed.get("summary") or {}).get("sport_type"))
     return {
         "calories": _round_float(session.get("total_calories"), 0),
-        "tss": _round_float(session.get("training_stress_score"), 1),
+        "tss": _round_float(session.get("training_stress_score"), 1) if is_cycling else None,
         "training_load_peak": _round_float(session.get("training_load_peak"), 1),
         "aerobic_training_effect": _round_float(session.get("total_training_effect"), 1),
         "anaerobic_training_effect": _round_float(session.get("total_anaerobic_training_effect"), 1),
@@ -546,14 +584,46 @@ def _build_energy_load(session: dict[str, Any]) -> dict[str, Any]:
 
 def _build_training_zones(metadata: dict[str, Any], parsed: dict[str, Any] | None = None) -> dict[str, Any]:
     """区间定义和时间分布,缺失时从 records 计算."""
-    zones_target = metadata.get("zones_target") or {}
+    zones_target = dict(metadata.get("zones_target") or {})
     time_in_zone = metadata.get("time_in_zone") or []
+
+    # Garmin 的跑步 FIT 也可能携带自行车 FTP / Coggan 区间。它们可保留在原始
+    # metadata 中供调试，但不应作为跑步分析输入或暴露给 LLM。
+    if parsed is not None and _is_running(parsed):
+        zones_target.pop("functional_threshold_power", None)
+        zones_target.pop("pwr_calc_type", None)
+        time_in_zone = [_without_power_zone_fields(entry) for entry in time_in_zone]
 
     # 如果 time_in_zone 有边界但缺少实际时间分布,从 records 计算
     if parsed is not None and time_in_zone:
         time_in_zone = _ensure_time_in_zone_values(time_in_zone, parsed)
 
     return {"zones_target": zones_target, "time_in_zone": time_in_zone}
+
+
+def _without_power_zone_fields(entry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value for key, value in entry.items()
+        if key not in {"functional_threshold_power", "pwr_calc_type", "power_zone_high_boundary", "time_in_power_zone"}
+    }
+
+
+def _resolve_power_threshold(parsed: dict[str, Any], session: dict[str, Any]) -> tuple[float | None, str]:
+    """返回当前专项可信的功率阈值，拒绝把骑行 FTP 用在跑步。"""
+    summary = parsed.get("summary") if isinstance(parsed.get("summary"), dict) else {}
+    metadata = parsed.get("training_metadata") if isinstance(parsed.get("training_metadata"), dict) else {}
+    if supports_cycling_power_metrics(summary.get("sport_type")):
+        zones = metadata.get("zones_target") if isinstance(metadata.get("zones_target"), dict) else {}
+        if _first_number(session.get("threshold_power")) is not None:
+            return _first_number(session.get("threshold_power")), "fit_session"
+        if _first_number(zones.get("functional_threshold_power")) is not None:
+            return _first_number(zones.get("functional_threshold_power")), "fit_or_cycling_profile"
+        return None, "unavailable"
+    if _is_running(parsed):
+        profile = metadata.get("analysis_profile") if isinstance(metadata.get("analysis_profile"), dict) else {}
+        threshold = _first_number(profile.get("running_power_threshold_w"))
+        return threshold, str(profile.get("running_power_threshold_source") or "unavailable")
+    return None, "unsupported_sport"
 
 
 def _ensure_time_in_zone_values(

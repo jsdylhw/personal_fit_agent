@@ -9,6 +9,8 @@ from core.athlete import (
     enrich_training_metadata,
     get_ftp,
     get_max_hr,
+    get_running_power_threshold,
+    get_running_threshold_pace,
     get_resting_hr,
     get_threshold_hr,
     hr_zone_boundaries,
@@ -47,6 +49,16 @@ class TestGetters:
         assert get_ftp({"ftp": "260"}) == 260.0
         assert get_ftp({}) is None
         assert get_ftp({"ftp": None}) is None
+
+    def test_structured_profile_keeps_cycling_and_running_power_separate(self):
+        profile = {
+            "cycling": {"ftp_w": 260},
+            "running": {"threshold_power_w": 310, "threshold_pace_s_per_km": 285},
+        }
+        assert get_ftp(profile) == 260.0
+        assert get_ftp(profile, sport_type="running") is None
+        assert get_running_power_threshold(profile) == 310.0
+        assert get_running_threshold_pace(profile) == 285.0
 
     def test_get_max_hr(self):
         assert get_max_hr({"max_heart_rate": 200}) == 200.0
@@ -165,3 +177,31 @@ class TestEnrichTrainingMetadata:
         result = enrich_training_metadata(existing, profile)
         assert len(result["time_in_zone"]) == 1
         assert "power_zone_high_boundary" in result["time_in_zone"][0]
+
+    def test_running_never_receives_legacy_cycling_ftp(self):
+        metadata = {"zones_target": {}, "time_in_zone": [], "user_profile": {}}
+        result = enrich_training_metadata(metadata, {"ftp": 260}, sport_type="running")
+
+        assert "functional_threshold_power" not in result["zones_target"]
+        assert result["analysis_profile"]["running_power_threshold_source"] == "unavailable"
+        assert not any("power_zone_high_boundary" in item for item in result["time_in_zone"])
+
+    def test_running_uses_only_explicit_running_power_threshold(self):
+        metadata = {
+            "zones_target": {"functional_threshold_power": 397},
+            "time_in_zone": [],
+            "user_profile": {},
+        }
+        profile = {"cycling": {"ftp_w": 397}, "running": {"threshold_power_w": 310}}
+        result = enrich_training_metadata(metadata, profile, sport_type="running")
+
+        # 原始 Garmin 字段可追溯，但分析阈值只能来自 running profile。
+        assert result["zones_target"]["functional_threshold_power"] == 397
+        assert result["analysis_profile"] == {
+            "running_power_threshold_w": 310.0,
+            "running_power_threshold_source": "athlete_profile.running",
+            "running_threshold_pace_s_per_km": None,
+            "running_threshold_pace_source": "unavailable",
+            "running_critical_speed_mps": None,
+            "running_critical_speed_source": "unavailable",
+        }

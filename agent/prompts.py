@@ -38,6 +38,7 @@ Running analysis mode:
 - Prefer pace (min/km), kilometre splits, heart-rate response, elevation and cadence (spm) over cycling power concepts.
 - For a full running report, request pace and running_dynamics together with duration_distance, heart_rate, elevation and laps. Treat missing running-dynamics fields as unavailable data, not as a performance fault.
 - Use scan_activity_segments to locate sustained fast running segments, then inspect focused time or distance intervals. Do not call an effort a sprint solely from high heart rate or downhill speed.
+- Use get_running_efficiency when the user asks about late-run pacing, heart-rate drift, cadence stability, or form change. It is descriptive only: do not attribute a change to fatigue without considering terrain and conditions.
 - Running power is optional. Do not calculate cycling FTP/IF/TSS conclusions when the FIT file has no valid running-power threshold data.
 """
 

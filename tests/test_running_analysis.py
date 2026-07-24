@@ -5,8 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from agent.prompts import build_fit_analysis_system_prompt
-from agent.tools.fit_analysis.data import get_activity_summary_tool, get_distance_intervals_tool
+from agent.tools.fit_analysis.data import (
+    get_activity_overview_tool,
+    get_activity_summary_tool,
+    get_distance_intervals_tool,
+    get_running_efficiency_tool,
+)
 from agent.tools.fit_analysis.scan import scan_activity_segments
+from core.athlete import enrich_training_metadata
 
 
 def _running_parsed() -> dict:
@@ -67,6 +73,8 @@ def test_running_summary_exposes_pace_spm_and_present_dynamics():
     assert result["cadence"]["summary"]["avg_cadence_spm"] == 177.0
     assert result["running_dynamics"]["available"] is True
     assert "stance_time" in result["running_dynamics"]["record_fields"]
+    assert result["running_dynamics"]["summary"]["stance_time_ms"] == 245.0
+    assert result["running_dynamics"]["summary"]["step_length_m"] == 1.12
 
 
 def test_running_segment_scan_uses_pace_baseline_not_power():
@@ -84,6 +92,90 @@ def test_running_distance_intervals_include_pace_and_spm():
     assert "avg_cadence_spm" in result["series"]
 
 
+def test_running_efficiency_compares_early_and_late_active_windows():
+    result = get_running_efficiency_tool(_running_parsed())
+
+    assert result["available"] is True
+    assert result["comparison_basis"] == "first_last_active_30_percent"
+    assert result["early"]["avg_pace_s_per_km"] < result["late"]["avg_pace_s_per_km"]
+    assert result["change"]["pace_change_s_per_km"] > 0
+    assert result["early"]["avg_cadence_spm"] is not None
+
+
+def test_running_efficiency_rejects_non_running_activity():
+    parsed = _running_parsed()
+    parsed["summary"]["sport_type"] = "cycling"
+
+    result = get_running_efficiency_tool(parsed)
+
+    assert result == {
+        "schema_version": "running_efficiency.v1",
+        "available": False,
+        "reason": "running_efficiency is only applicable to running activities.",
+    }
+
+
 def test_running_prompt_includes_sport_specific_guidance():
     assert "Running analysis mode" in build_fit_analysis_system_prompt("running")
     assert "Running analysis mode" not in build_fit_analysis_system_prompt("cycling")
+
+
+def test_running_ignores_fit_ftp_and_cycling_load_metrics():
+    parsed = _running_parsed()
+    parsed["sessions"][0].update({
+        "normalized_power": 291,
+        "threshold_power": 397,
+        "intensity_factor": 0.733,
+        "training_stress_score": 10.3,
+    })
+    parsed["training_metadata"]["zones_target"]["functional_threshold_power"] = 397
+
+    summary = get_activity_summary_tool(parsed, sections=["power", "pace", "energy_load", "training_zones"])
+    overview = get_activity_overview_tool(parsed)
+
+    assert summary["power"]["summary"]["threshold_power_w"] is None
+    assert summary["power"]["summary"]["threshold_power_source"] == "unavailable"
+    assert summary["power"]["summary"]["intensity_factor"] is None
+    assert summary["pace"]["summary"]["threshold_pace_source"] == "unavailable"
+    assert summary["energy_load"]["tss"] is None
+    assert "functional_threshold_power" not in summary["training_zones"]["zones_target"]
+    assert overview["basic_metrics"]["intensity_factor"] is None
+    assert overview["basic_metrics"]["tss"] is None
+
+
+def test_running_power_ratio_requires_running_profile_threshold():
+    parsed = _running_parsed()
+    parsed["sessions"][0]["normalized_power"] = 291
+    parsed["training_metadata"] = enrich_training_metadata(
+        parsed["training_metadata"],
+        {"cycling": {"ftp_w": 397}, "running": {"threshold_power_w": 300}},
+        sport_type="running",
+    )
+
+    summary = get_activity_summary_tool(parsed, sections=["power"])
+
+    assert summary["power"]["summary"]["threshold_power_w"] == 300.0
+    assert summary["power"]["summary"]["threshold_power_source"] == "athlete_profile.running"
+    assert summary["power"]["summary"]["running_power_intensity_ratio"] == 0.97
+
+
+def test_running_pace_exposes_running_profile_and_fit_target_separately():
+    parsed = _running_parsed()
+    parsed["training_metadata"] = enrich_training_metadata(
+        {"zones_target": {}, "time_in_zone": [], "user_profile": {}, "training_settings": {"target_speed": 3.0}},
+        {"running": {"threshold_pace_s_per_km": 285, "critical_speed_mps": 3.6}},
+        sport_type="running",
+    )
+
+    summary = get_activity_summary_tool(parsed, sections=["pace"])
+
+    assert summary["pace"]["summary"] == {
+        "avg_pace_s_per_km": 274.7,
+        "fastest_pace_s_per_km": 238.1,
+        "threshold_pace_s_per_km": 285.0,
+        "threshold_pace_source": "athlete_profile.running",
+        "critical_speed_mps": 3.6,
+        "critical_speed_source": "athlete_profile.running",
+        "target_pace_s_per_km": 333.3,
+        "target_pace_source": "fit_training_settings",
+    }

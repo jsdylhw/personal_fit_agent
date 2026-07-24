@@ -11,6 +11,7 @@ from .data import (
     get_activity_overview_tool,
     get_activity_summary_tool,
     get_distance_intervals_tool,
+    get_running_efficiency_tool,
     get_time_intervals_tool,
     llm_safe_history,
     scan_activity_segments_tool,
@@ -61,6 +62,9 @@ def build_tool_handlers(
             end_d=end_d,
         )
 
+    def _running_efficiency():
+        return get_running_efficiency_tool(parsed)
+
     def _history():
         return llm_safe_history(history_before) or {
             "schema_version": "file_training_history.v1",
@@ -75,6 +79,7 @@ def build_tool_handlers(
         "scan_activity_segments": _segments,
         "get_time_intervals": _time_intervals,
         "get_distance_intervals": _distance_intervals,
+        "get_running_efficiency": _running_efficiency,
         "get_history": _history,
     }
 

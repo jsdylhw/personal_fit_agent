@@ -68,6 +68,12 @@ Prefer for climbs and pacing analysis.""",
         category=CATEGORY_FIT_QUERY,
     ),
     ToolDef(
+        name="get_running_efficiency",
+        description="""Compare the first and last active 30% of a running activity. Returns pace, heart-rate, cadence and available running-dynamics changes, plus data-quality limits.
+Use for: running-form stability, late-run pace change, or heart-rate response. Only use for running activities; it is descriptive and does not normalize terrain, weather, or stops.""",
+        category=CATEGORY_FIT_QUERY,
+    ),
+    ToolDef(
         name="get_history",
         description="""Prior compact training history, if enabled for this analysis.
 Use for: user explicitly asked to reference history, or longitudinal comparison materially improves the answer.

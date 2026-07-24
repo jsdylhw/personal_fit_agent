@@ -69,7 +69,7 @@ web_api_token: "replace-with-a-long-random-token"
 
 `agent.base_url` 需要兼容 Anthropic Messages API 的 `/v1/messages`。
 
-运动员档案已经迁移到 `data/athlete.json`,用于补全 FIT 缺失的 FTP、最大心率、静息心率、阈值心率和区间信息。可以从示例文件复制:
+运动员档案位于 `data/athlete.json`，按运动专项保存阈值。旧平铺的 `ftp` 仍兼容为骑行 FTP，但不会用于跑步。可以从示例文件复制:
 
 ```bash
 cp data/athlete.example.json data/athlete.json
@@ -79,14 +79,24 @@ cp data/athlete.example.json data/athlete.json
 
 ```json
 {
-  "ftp": 250,
-  "max_heart_rate": 190,
-  "resting_heart_rate": 50,
-  "threshold_heart_rate": 170,
-  "weight": 70,
-  "height": 175
+  "shared": {
+    "max_heart_rate": 190,
+    "resting_heart_rate": 50,
+    "weight": 70,
+    "height": 175
+  },
+  "cycling": { "ftp_w": 250, "threshold_heart_rate": 170 },
+  "running": {
+    "threshold_heart_rate": 175,
+    "threshold_power_w": null,
+    "threshold_pace_s_per_km": 285,
+    "critical_speed_mps": null
+  }
 }
 ```
+
+跑步功率阈值只有在 `running.threshold_power_w` 明确配置后才会用于跑步功率强度比；FIT 中可能遗留的骑行 FTP 不会用于跑步 IF/TSS 或功率区间。
+`running.threshold_pace_s_per_km` 的单位是秒/公里，例如 `285` 表示 4'45"/km；`critical_speed_mps` 可选，用于保存跑步专属临界速度。
 
 Strava 上传需要 `activity:write` 权限。推荐配置 `client_id`、`client_secret` 和 `refresh_token`,程序会在请求前刷新短期 access token。
 

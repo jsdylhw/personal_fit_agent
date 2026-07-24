@@ -199,13 +199,13 @@ class TestChooseStravaSummaryTone:
 
 
 class TestFitAnalysisToolCatalog:
-    def test_data_catalog_has_only_6_readonly_tools(self):
-        """Hidden tool loop 只能看到 6 个只读数据工具,不能看到副作用工具."""
+    def test_data_catalog_has_only_7_readonly_tools(self):
+        """Hidden tool loop 只能看到 7 个只读数据工具,不能看到副作用工具."""
         tools = fit_data_tool_catalog()
         tool_names = {t["name"] for t in tools}
         assert tool_names == {
             "get_activity_overview", "get_activity_summary", "scan_activity_segments",
-            "get_time_intervals", "get_distance_intervals", "get_history",
+            "get_time_intervals", "get_distance_intervals", "get_running_efficiency", "get_history",
         }
 
     def test_no_side_effect_tools_in_data_catalog(self, sample_parsed_fit):
