@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.context import AgentContext
+from agent.llm import LLMRequestError
 from agent.main_agent.permission import DENY_LIST
 from agent.main_agent.loop import MAX_TOOL_STEPS, run_tool_loop
 
@@ -146,6 +147,73 @@ def test_retry_executes_last_failed_action():
     assert context.last_failed_action is None
     assert mock_upload.called
     mock_route.assert_not_called()
+
+
+def test_llm_disconnect_returns_recoverable_result_and_keeps_tool_state(monkeypatch):
+    context = AgentContext(session_id="test-llm-disconnect")
+
+    def fake_find(args, ctx):
+        ctx.current_fit_file = Path("/tmp/resolved.fit")
+        return {"step": "find_activity", "status": "completed"}
+
+    import agent.main_agent.tools as tools_module
+
+    monkeypatch.setitem(tools_module.TOOL_HANDLERS, "find_activity", fake_find)
+    responses = [
+        {
+            "id": "msg-find",
+            "content": [{"type": "tool_use", "name": "find_activity", "id": "tu-find", "input": {}}],
+            "stop_reason": "tool_use",
+        },
+        LLMRequestError("connection closed"),
+    ]
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as MockClient:
+        MockClient.return_value.create_messages.side_effect = responses
+        result = run_tool_loop("分析最近活动", context=context)
+
+    assert result["status"] == "llm_unavailable"
+    assert result["steps"] == [{"tool": "find_activity", "input": {}}]
+    assert context.current_fit_file == Path("/tmp/resolved.fit")
+    assert context.last_llm_error["type"] == "LLMRequestError"
+    assert "重试" in result["answer"]
+
+
+def test_retry_after_llm_disconnect_reenters_planning_loop():
+    context = AgentContext(
+        session_id="test-llm-retry",
+        last_llm_error={"type": "LLMRequestError", "message": "connection closed"},
+    )
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as MockClient:
+        MockClient.return_value.create_messages.return_value = {
+            "id": "msg-ok",
+            "content": [{"type": "text", "text": "恢复完成。"}],
+            "stop_reason": "end_turn",
+        }
+        result = run_tool_loop("重试", context=context)
+
+    assert result["status"] == "completed"
+    assert result["answer"] == "恢复完成。"
+    assert context.last_llm_error is None
+
+
+def test_upload_success_is_not_masked_by_result_copy_llm_failure(monkeypatch):
+    from agent.main_agent.handlers import execute_upload_strava_activity
+
+    context = AgentContext(session_id="test-upload-result-copy", current_fit_file=Path("/tmp/current.fit"))
+    monkeypatch.setattr(
+        "agent.main_agent.handlers.upload_to_strava_tool",
+        lambda *args, **kwargs: {"status": "uploaded", "strava_activity_id": 123},
+    )
+    monkeypatch.setattr(
+        "agent.main_agent.handlers._generate_upload_result_response",
+        lambda *args, **kwargs: (_ for _ in ()).throw(LLMRequestError("connection closed")),
+    )
+
+    result = execute_upload_strava_activity("upload_activity", {}, context)
+
+    assert result["status"] == "completed"
+    assert "上传成功" in result["answer"]
+    assert result["result"]["upload_result"]["status"] == "uploaded"
 
 
 # -- max_steps ----------------------------------------------------------------

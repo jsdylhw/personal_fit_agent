@@ -22,7 +22,7 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
         count: 下载最近几条活动 [1, 20],默认 5。
 
     Returns:
-        dict: {fit_dir, total, downloaded, skipped, downloaded_items, skipped_items}
+        dict: {fit_dir, total, downloaded, skipped, failed, *_items}
     """
     if isinstance(count, bool) or not isinstance(count, int) or count <= 0 or count > MAX_SYNC_COUNT:
         raise ValueError(f"count must be an integer between 1 and {MAX_SYNC_COUNT}")
@@ -45,37 +45,49 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
     skipped: list[dict[str, Any]] = []
     indexed: list[dict[str, Any]] = []
     index_errors: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
 
     for activity in activities:
         activity_id = activity.get("activityId")
-        existing = existing_fit_paths(output_dir, activity)
-        if existing:
-            _index_fit_paths(existing, activity_id=activity_id, indexed=indexed, errors=index_errors)
-            skipped.append({
+        try:
+            existing = existing_fit_paths(output_dir, activity)
+            if existing:
+                _index_fit_paths(existing, activity_id=activity_id, indexed=indexed, errors=index_errors)
+                skipped.append({
+                    "activity_id": activity_id,
+                    "name": activity.get("activityName"),
+                    "start_time": activity.get("startTimeLocal"),
+                    "paths": [str(p) for p in existing],
+                })
+                continue
+
+            raw_bytes = downloader.download_original(activity_id)
+            saved = save_original_as_fit(raw_bytes, output_dir, activity)
+            _index_fit_paths(saved, activity_id=activity_id, indexed=indexed, errors=index_errors)
+            downloaded.append({
                 "activity_id": activity_id,
                 "name": activity.get("activityName"),
                 "start_time": activity.get("startTimeLocal"),
-                "paths": [str(p) for p in existing],
+                "paths": [str(p) for p in saved],
             })
-            continue
-
-        raw_bytes = downloader.download_original(activity_id)
-        saved = save_original_as_fit(raw_bytes, output_dir, activity)
-        _index_fit_paths(saved, activity_id=activity_id, indexed=indexed, errors=index_errors)
-        downloaded.append({
-            "activity_id": activity_id,
-            "name": activity.get("activityName"),
-            "start_time": activity.get("startTimeLocal"),
-            "paths": [str(p) for p in saved],
-        })
+        except Exception as exc:
+            failed.append({
+                "activity_id": activity_id,
+                "name": activity.get("activityName"),
+                "start_time": activity.get("startTimeLocal"),
+                "error": type(exc).__name__,
+                "message": str(exc),
+            })
 
     return {
         "fit_dir": str(output_dir),
         "total": len(activities),
         "downloaded": len(downloaded),
         "skipped": len(skipped),
+        "failed": len(failed),
         "downloaded_items": downloaded,
         "skipped_items": skipped,
+        "failed_items": failed,
         "indexed": len(indexed),
         "indexed_items": indexed,
         "index_errors": index_errors,

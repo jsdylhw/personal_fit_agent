@@ -13,7 +13,7 @@ from typing import Any
 from agent.chat_logger import new_session_id, write_main_agent_markdown_log
 from agent.context import AgentContext
 from core.fit_paths import resolve_fit_path as _resolve_fit_path
-from agent.llm import AnthropicMessagesClient, build_tool_result_block
+from agent.llm import AnthropicMessagesClient, LLMRequestError, build_tool_result_block
 from agent.tools import MAIN_AGENT_TOOLS, render_anthropic_tools
 from agent.tools.spec import CATEGORY_PLANNING
 from agent.main_agent.intent import route_intent, intent_tool_categories
@@ -143,7 +143,12 @@ def run_tool_loop(
     if context.pending_action and is_confirm(message) and context.pending_action.get("resume"):
         pending = context.pending_action
         context.pending_action = None
-        return _resume_confirmed_turn(pending, context, verbose=verbose, default_max_tokens=max_tokens)
+        try:
+            return _resume_confirmed_turn(pending, context, verbose=verbose, default_max_tokens=max_tokens)
+        except LLMRequestError as exc:
+            return _build_llm_unavailable_result(
+                "confirmed", context, steps=getattr(exc, "steps_taken", []), error=exc,
+            )
 
     control_result = handle_control_turn(message, context, verbose=verbose)
     if control_result is not None:
@@ -152,16 +157,21 @@ def run_tool_loop(
     intent = route_intent(message)
     allowed_cats = intent_tool_categories(intent)
 
-    step_count, steps_taken = _run_agent_turn(
-        message,
-        intent,
-        allowed_cats,
-        context,
-        verbose,
-        max_tokens,
-        fit_path=fit_path,
-        use_history=use_history,
-    )
+    try:
+        step_count, steps_taken = _run_agent_turn(
+            message,
+            intent,
+            allowed_cats,
+            context,
+            verbose,
+            max_tokens,
+            fit_path=fit_path,
+            use_history=use_history,
+        )
+    except LLMRequestError as exc:
+        return _build_llm_unavailable_result(
+            intent, context, steps=getattr(exc, "steps_taken", []), error=exc,
+        )
     return _build_result(intent, context, message, fit_path, use_history, step_count, steps_taken)
 
 
@@ -204,8 +214,16 @@ def _run_agent_turn(message, intent, allowed_cats, context, verbose, max_tokens,
     if verbose:
         _log_hdr(message, intent, len(tools), bool(context.current_fit_file))
 
-    step_count = agent_loop(messages, tools=tools, handlers=handlers, hooks=hooks,
-                            system=system, max_tokens=max_tokens)
+    try:
+        step_count = agent_loop(messages, tools=tools, handlers=handlers, hooks=hooks,
+                                system=system, max_tokens=max_tokens)
+    except LLMRequestError as exc:
+        exc.steps_taken = list(steps_taken)
+        raise
+    finally:
+        # LLM 可能在任意一个工具轮次之后断线；保留已完成工具造成的状态，
+        # 让交互模式可用“重试”继续，而不是丢失本轮上下文。
+        _sync_messages_to_context(context, messages)
 
     if context.pending_action and isinstance(context.pending_action.get("resume"), dict):
         context.pending_action["resume"]["intent"] = intent
@@ -213,7 +231,6 @@ def _run_agent_turn(message, intent, allowed_cats, context, verbose, max_tokens,
         context.pending_action["resume"]["fit_path"] = fit_path
         context.pending_action["resume"]["use_history"] = use_history
 
-    _sync_messages_to_context(context, messages)
     return step_count, steps_taken
 
 
@@ -287,15 +304,21 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
             steps_taken,
         )
 
-    step_count = agent_loop(
-        messages,
-        tools=tools,
-        handlers=handlers,
-        hooks=hooks,
-        system=str(resume.get("system") or ""),
-        max_tokens=int(resume.get("max_tokens") or default_max_tokens),
-        max_steps=remaining_steps,
-    )
+    try:
+        step_count = agent_loop(
+            messages,
+            tools=tools,
+            handlers=handlers,
+            hooks=hooks,
+            system=str(resume.get("system") or ""),
+            max_tokens=int(resume.get("max_tokens") or default_max_tokens),
+            max_steps=remaining_steps,
+        )
+    except LLMRequestError as exc:
+        exc.steps_taken = list(steps_taken)
+        raise
+    finally:
+        _sync_messages_to_context(context, messages)
 
     intent = resume.get("intent") or "confirmed"
     if context.pending_action and isinstance(context.pending_action.get("resume"), dict):
@@ -304,7 +327,6 @@ def _resume_confirmed_turn(pending, context, *, verbose: bool, default_max_token
         context.pending_action["resume"]["fit_path"] = resume.get("fit_path")
         context.pending_action["resume"]["use_history"] = bool(resume.get("use_history", context.history_enabled))
 
-    _sync_messages_to_context(context, messages)
     return _build_result(
         intent,
         context,
@@ -363,6 +385,7 @@ def _build_result(intent, context, message, fit_path, use_history, step_count=0,
                        f"⚠ {context.pending_action.get('message', '确认执行？')}\n\n请回复 '确认' 或 'yes' 来执行。")
 
     context.permission_grants.clear()
+    context.last_llm_error = None
 
     if step_count > MAX_TOOL_STEPS:
         return _result("max_steps_exceeded", intent, context, steps,
@@ -383,6 +406,20 @@ def _build_result(intent, context, message, fit_path, use_history, step_count=0,
         current_fit_file=str(context.current_fit_file) if context.current_fit_file else None,
     )
     return _result("completed", intent, context, steps, final_answer or "已完成。", str(log_path))
+
+
+def _build_llm_unavailable_result(intent, context, *, steps: list[dict], error: Exception):
+    context.last_llm_error = {
+        "type": type(error).__name__,
+        "message": str(error),
+    }
+    context.permission_grants.clear()
+    answer = (
+        "LLM 服务连接暂时不可用，已保留本轮活动选择和已执行工具状态。"
+        f"本轮已执行 {len(steps)} 步；不会自动执行新的下载、分析或上传。\n\n"
+        "请稍后回复“重试”继续。"
+    )
+    return _result("llm_unavailable", intent, context, steps, answer)
 
 
 # -- helpers -------------------------------------------------------------

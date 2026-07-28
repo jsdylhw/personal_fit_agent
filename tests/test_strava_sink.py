@@ -41,8 +41,13 @@ class TestMissingActivityWrite:
 
 
 class TestStravaSinkInit:
-    def test_uses_access_token_directly(self):
-        sink = StravaSink({"strava": {"access_token": "direct_token_123"}})
+    def test_uses_access_token_directly(self, tmp_path):
+        sink = StravaSink({
+            "strava": {
+                "access_token": "direct_token_123",
+                "token_store": str(tmp_path / "strava_tokens.json"),
+            }
+        })
         assert sink.access_token == "direct_token_123"
 
     @patch("sinks.strava.requests.post")
@@ -62,8 +67,8 @@ class TestStravaSinkInit:
         sink = StravaSink(config)
         assert sink.access_token == "refreshed_token"
 
-    def test_raises_without_credentials(self):
-        config = {"strava": {}}
+    def test_raises_without_credentials(self, tmp_path):
+        config = {"strava": {"token_store": str(tmp_path / "strava_tokens.json")}}
         with pytest.raises(RuntimeError, match="access_token"):
             StravaSink(config)
 

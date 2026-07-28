@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from core.config import ensure_data_dirs
 from core.path_utils import project_relative_or_absolute
@@ -56,8 +58,21 @@ def save_activity_index(index: dict[str, Any], path: str | Path | None = None) -
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "activities": rows,
     }
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    _atomic_write_json(target, data)
     return target
+
+
+def _atomic_write_json(target: Path, data: dict[str, Any]) -> None:
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2, default=str)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def upsert_activity_from_fit(

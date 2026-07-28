@@ -12,6 +12,7 @@ import re
 import zipfile
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from core.config import cfg_bool, cfg_get
 
@@ -49,7 +50,7 @@ def save_original_as_fit(raw_bytes: bytes, output_dir: Path, activity: dict[str,
     output_dir.mkdir(parents=True, exist_ok=True)
     if not zipfile.is_zipfile(io.BytesIO(raw_bytes)):
         fit_path = output_dir / f"{base_name}.fit"
-        fit_path.write_bytes(raw_bytes)
+        _atomic_write_bytes(fit_path, raw_bytes)
         return [fit_path]
 
     saved_paths: list[Path] = []
@@ -57,16 +58,30 @@ def save_original_as_fit(raw_bytes: bytes, output_dir: Path, activity: dict[str,
         fit_names = [name for name in zf.namelist() if name.lower().endswith(".fit")]
         if not fit_names:
             zip_path = output_dir / f"{base_name}.zip"
-            zip_path.write_bytes(raw_bytes)
+            _atomic_write_bytes(zip_path, raw_bytes)
             raise RuntimeError(f"No .fit file found in original archive; saved zip to: {zip_path}")
 
         for index, member in enumerate(fit_names, start=1):
             suffix = "" if len(fit_names) == 1 else f"_{index}"
             fit_path = output_dir / f"{base_name}{suffix}.fit"
-            fit_path.write_bytes(zf.read(member))
+            _atomic_write_bytes(fit_path, zf.read(member))
             saved_paths.append(fit_path)
 
     return saved_paths
+
+
+def _atomic_write_bytes(target: Path, content: bytes) -> None:
+    """仅在完整内容落盘后才让文件对“已下载”检查可见。"""
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.part")
+    try:
+        with temporary.open("wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 class GarminChinaDownloader:

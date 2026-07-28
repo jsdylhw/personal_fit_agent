@@ -33,6 +33,7 @@ class AgentContext:
     history_enabled: bool = True
     last_tool_result: dict[str, Any] | None = None
     last_failed_action: dict[str, Any] | None = None
+    last_llm_error: dict[str, Any] | None = None
 
     # 活动定位 — 新旧接口并存
     selected_handles: list[ActivityHandle] = field(default_factory=list)

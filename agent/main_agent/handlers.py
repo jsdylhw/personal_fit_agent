@@ -22,15 +22,24 @@ def execute_analyze_new_fit_files(context: AgentContext, args: dict[str, Any] | 
     sync_result = previous.get("result") if isinstance(previous.get("result"), dict) else previous
     items = sync_result.get("downloaded_items") or []
     fit_paths = _fit_paths_from_items(items)
-    analyses = [
-        analyze_fit_file_tool(str(path), force=False)
-        for path in fit_paths
-    ]
+    analyses: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for path in fit_paths:
+        try:
+            analyses.append(analyze_fit_file_tool(str(path), force=False))
+        except Exception as exc:
+            failed.append({
+                "fit_path": str(path),
+                "error": type(exc).__name__,
+                "message": str(exc),
+            })
     return {
         "step": "analyze_new_fit_files",
         "result": {
             "count": len(analyses),
             "analyses": analyses,
+            "failed_count": len(failed),
+            "failed": failed,
         },
     }
 
@@ -106,6 +115,17 @@ def execute_upload_strava_activity(
         confirmed=True,
         force=bool(args.get("force")),
     )
+    try:
+        answer = _generate_upload_result_response(
+            upload_result,
+            {"name": name, "reason": reason, "arguments": args},
+            context,
+        )
+    except Exception:
+        # 上传已完成后，说明文案只是展示层增强；LLM 网络故障不能把成功的
+        # Strava 写操作误判为失败，也不能诱导用户重复上传。
+        answer = _format_upload_result_fallback(upload_result)
+
     return {
         "step": name,
         "status": "completed",
@@ -114,11 +134,7 @@ def execute_upload_strava_activity(
             "fit_path": str(fit_path),
             "upload_result": upload_result,
         },
-        "answer": _generate_upload_result_response(
-            upload_result,
-            {"name": name, "reason": reason, "arguments": args},
-            context,
-        ),
+        "answer": answer,
     }
 
 
@@ -249,6 +265,7 @@ def _format_upload_result_fallback(upload_result: dict[str, Any]) -> str:
 def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force: bool = False) -> dict[str, Any]:
     generated: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
     for activity in activities:
         fit_path = activity.get("fit_path")
         if not fit_path:
@@ -257,13 +274,23 @@ def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force:
         if summary_path and Path(str(summary_path)).expanduser().exists() and not force:
             skipped.append(_summary_generation_item(activity, status="skipped_existing_summary"))
             continue
-        result = analyze_fit_file_tool(str(fit_path), force=force)
+        try:
+            result = analyze_fit_file_tool(str(fit_path), force=force)
+        except Exception as exc:
+            failed.append({
+                **_summary_generation_item(activity, status="failed"),
+                "error": type(exc).__name__,
+                "message": str(exc),
+            })
+            continue
         generated.append(_summary_generation_item({**activity, **result}, status=str(result.get("status") or "analyzed")))
     return {
         "generated_count": len(generated),
         "skipped_count": len(skipped),
+        "failed_count": len(failed),
         "generated": generated,
         "skipped": skipped,
+        "failed": failed,
     }
 
 
