@@ -1,13 +1,15 @@
 """Strava API 集成:OAuth 认证,FIT 上传,活动描述更新.
 
 Token 管理策略:
-- 优先用 client_id/secret/refresh_token 自动刷新短期 access_token.
-- 其次直接用 access_token(手动配置).
-- 每次实例化都会刷新 token,如果调用频繁建议复用实例.
+- 优先复用本地尚未过期的 access_token.
+- 需要时用 client_id/secret/refresh_token 自动刷新并持久化轮换 token.
+- 首次 OAuth 的授权 URL / code exchange 可在尚无 access_token 时执行.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,8 @@ from core.config import load_config
 STRAVA_API_BASE = "https://www.strava.com/api/v3"
 STRAVA_OAUTH_AUTHORIZE_URL = "https://www.strava.com/oauth/authorize"
 STRAVA_OAUTH_TOKEN_URL = "https://www.strava.com/oauth/token"
+DEFAULT_TOKEN_STORE = Path(".strava_tokens.json")
+ACCESS_TOKEN_REFRESH_LEEWAY_SECONDS = 60
 
 
 class StravaSink:
@@ -31,10 +35,17 @@ class StravaSink:
 
     name = "strava"
 
-    def __init__(self, config: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        config: dict[str, Any] | None = None,
+        *,
+        require_access_token: bool = True,
+    ):
         root_config = config if config is not None else load_config()
         self.config = root_config.get("strava", root_config)
-        self.access_token = self._access_token()
+        self.token_store = Path(str(self.config.get("token_store") or DEFAULT_TOKEN_STORE)).expanduser()
+        self._stored_tokens = self._load_token_store()
+        self.access_token: str | None = self._access_token() if require_access_token else None
 
     def upload_fit(
         self, fit_path: str, *,
@@ -144,20 +155,33 @@ class StravaSink:
             },
             timeout=float(self.config.get("timeout_seconds", 120)),
         )
-        return self._json_or_raise(response)
+        data = self._json_or_raise(response)
+        self._persist_token_response(data)
+        return data
 
     def _access_token(self) -> str:
-        """获取 access_token:优先 refresh_token 刷新,其次直接配置的 token."""
+        """获取 access_token:优先复用有效缓存,否则刷新,最后兼容直配 token."""
         client_id = self.config.get("client_id")
         client_secret = self.config.get("client_secret")
-        refresh_token = self.config.get("refresh_token")
+        refresh_token = self._stored_tokens.get("refresh_token") or self.config.get("refresh_token")
+        cached_token = self._stored_tokens.get("access_token") or self.config.get("access_token")
+        expires_at = self._token_expiry()
+
+        if cached_token and self._token_is_valid(expires_at, leeway=ACCESS_TOKEN_REFRESH_LEEWAY_SECONDS):
+            return str(cached_token)
 
         if client_id and client_secret and refresh_token:
-            return self._refresh_access_token(client_id, client_secret, refresh_token)
+            try:
+                return self._refresh_access_token(client_id, client_secret, str(refresh_token))
+            except requests.RequestException:
+                # A short TLS/proxy failure should not block an operation when
+                # a locally cached token is still valid at this moment.
+                if cached_token and self._token_is_valid(expires_at):
+                    return str(cached_token)
+                raise
 
-        access_token = self.config.get("access_token")
-        if access_token:
-            return str(access_token)
+        if cached_token:
+            return str(cached_token)
 
         raise RuntimeError(
             "Please configure strava.access_token or "
@@ -177,9 +201,57 @@ class StravaSink:
         token = data.get("access_token")
         if not token:
             raise RuntimeError(f"Strava token refresh did not return access_token: {data}")
+        self._persist_token_response(data)
         return str(token)
 
+    def _load_token_store(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self.token_store.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _persist_token_response(self, data: dict[str, Any]) -> None:
+        """Persist the latest OAuth tokens without rewriting config.yaml.
+
+        Strava can rotate refresh_token responses. Keeping this independent
+        local store preserves comments and hand-managed credentials in config.
+        """
+        token_keys = ("access_token", "refresh_token", "expires_at", "expires_in")
+        updated = {
+            **self._stored_tokens,
+            **{key: data[key] for key in token_keys if data.get(key) is not None},
+        }
+        if not updated.get("access_token") or not updated.get("refresh_token"):
+            return
+
+        self.token_store.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.token_store.with_name(f".{self.token_store.name}.tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(updated, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+            os.replace(temporary, self.token_store)
+            os.chmod(self.token_store, 0o600)
+        finally:
+            temporary.unlink(missing_ok=True)
+        self._stored_tokens = updated
+
+    def _token_expiry(self) -> int | None:
+        value = self._stored_tokens.get("expires_at", self.config.get("expires_at"))
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _token_is_valid(expires_at: int | None, *, leeway: int = 0) -> bool:
+        return expires_at is not None and expires_at > time.time() + leeway
+
     def _headers(self) -> dict[str, str]:
+        if not self.access_token:
+            self.access_token = self._access_token()
         return {"Authorization": f"Bearer {self.access_token}"}
 
     @staticmethod

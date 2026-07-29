@@ -34,6 +34,22 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     return data
 
 
+def cfg_get(config: dict[str, Any], name: str, default: Any = None) -> Any:
+    """读取顶层配置值,把 None/空字符串视为未配置."""
+    value = config.get(name)
+    return default if value in (None, "") else value
+
+
+def cfg_bool(config: dict[str, Any], name: str, default: bool = False) -> bool:
+    """读取顶层布尔配置,兼容 YAML bool 和常见字符串写法."""
+    value = cfg_get(config, name, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 def load_agent_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     """从 config.yaml 中提取 agent: 块.
 

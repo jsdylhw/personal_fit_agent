@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from agent.activity.workflow_executor import execute_activity_run
+from agent.activity.workflow_factory import (
+    TASK_ENSURE_SUMMARY,
+    TASK_UPLOAD_STRAVA,
+    create_activity_run_from_activities,
+)
+from agent.runtime.executor import TaskExecution, TaskHandler, execute_ready_tasks
+from agent.runtime.workflow_models import create_task, create_workflow
+
+
+def test_runtime_executor_runs_ready_task():
+    run = create_workflow(
+        request={},
+        activities=[{"activity_key": "a1"}],
+        tasks=[create_task(task_id="a1:write", kind="write", activity_key="a1")],
+    )
+    calls: list[str] = []
+    handlers = {
+        "write": TaskHandler(execute=lambda run, task: calls.append(task["task_id"]) or TaskExecution(status="completed")),
+    }
+
+    completed = execute_ready_tasks(run, handlers=handlers)
+    assert completed["workflow"]["status"] == "completed"
+    assert run["tasks"][0]["status"] == "completed"
+    assert calls == ["a1:write"]
+
+
+def test_runtime_executor_skips_dependent_task_after_failure():
+    run = create_workflow(
+        request={}, activities=[{"activity_key": "a1"}],
+        tasks=[
+            create_task(task_id="a1:summary", kind="fail", activity_key="a1"),
+            create_task(task_id="a1:upload", kind="upload", activity_key="a1", depends_on=["a1:summary"]),
+        ],
+    )
+    handlers = {"fail": TaskHandler(execute=lambda run, task: TaskExecution(status="failed", details={"error": "bad_fit"}))}
+
+    execute_ready_tasks(run, handlers=handlers)
+    assert run["tasks"][0]["status"] == "failed"
+    assert run["tasks"][1]["status"] == "skipped"
+    assert run["tasks"][1]["reason"] == "dependency_failed"
+
+
+def test_activity_summary_task_persists_result(monkeypatch, tmp_path):
+    fit = tmp_path / "a1.fit"
+    fit.write_bytes(b"fit")
+    summary = tmp_path / "a1.summary.json"
+    result = create_activity_run_from_activities(
+        [{"activity_key": "a1", "fit_path": str(fit)}],
+        request={"source": "local", "goals": [TASK_ENSURE_SUMMARY], "force": False},
+        directory=tmp_path,
+    )
+    run = result["run"]
+    monkeypatch.setattr(
+        "agent.activity.workflow_handlers.ensure_summary",
+        lambda fit_path, force: {
+            "status": "completed", "summary_path": str(summary), "result_status": "analyzed",
+        },
+    )
+
+    summary.write_text("{}", encoding="utf-8")
+    completed = execute_activity_run(run, directory=tmp_path)
+    assert completed["workflow"]["status"] == "completed"
+    assert run["tasks"][0]["status"] == "completed"
+    assert run["activities"][0]["summary_path"] == str(summary)
+
+
+def test_activity_upload_task_updates_activity_snapshot(monkeypatch, tmp_path):
+    fit = tmp_path / "a1.fit"
+    fit.write_bytes(b"fit")
+    summary = tmp_path / "a1.summary.json"
+    summary.write_text("{}", encoding="utf-8")
+    created = create_activity_run_from_activities(
+        [{"activity_key": "a1", "fit_path": str(fit), "summary_path": str(summary)}],
+        request={"source": "test", "goals": [TASK_UPLOAD_STRAVA], "force": False},
+        directory=tmp_path,
+    )
+    run = created["run"]
+    calls = []
+    monkeypatch.setattr(
+        "agent.activity.workflow_handlers.upload_summary",
+        lambda fit_path, force: calls.append((fit_path, force)) or {
+            "status": "completed", "outcome": "uploaded", "strava_activity_id": "123",
+        },
+    )
+
+    completed = execute_activity_run(run, directory=tmp_path)
+    by_kind = {task["kind"]: task for task in run["tasks"]}
+    assert by_kind[TASK_ENSURE_SUMMARY]["status"] == "skipped"
+    assert completed["workflow"]["status"] == "completed"
+    assert by_kind[TASK_UPLOAD_STRAVA]["status"] == "completed"
+    assert run["activities"][0]["strava_activity_id"] == "123"
+    assert calls == [(str(fit), False)]
+
+
+def test_activity_upload_task_skips_known_remote_activity(tmp_path):
+    summary = tmp_path / "a1.summary.json"
+    summary.write_text("{}", encoding="utf-8")
+    created = create_activity_run_from_activities(
+        [{
+            "activity_key": "a1",
+            "fit_path": str(tmp_path / "a1.fit"),
+            "summary_path": str(summary),
+            "strava_activity_id": "123",
+        }],
+        request={"source": "test", "goals": [TASK_UPLOAD_STRAVA], "force": False},
+        directory=tmp_path,
+    )
+    run = created["run"]
+
+    result = execute_activity_run(run, directory=tmp_path)
+
+    assert result["workflow"]["status"] == "completed"
+    upload = next(task for task in run["tasks"] if task["kind"] == TASK_UPLOAD_STRAVA)
+    assert upload["status"] == "skipped"
+    assert upload["reason"] == "already_uploaded"

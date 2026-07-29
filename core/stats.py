@@ -1,6 +1,6 @@
 """纯数值计算和统计辅助函数,无项目内部依赖.
 
-data_tools.py 中的工具实现通过这些函数完成单位转换,统计量提取,DataFrame 聚合等操作.
+agent.tools.fit_analysis.data 中的工具实现通过这些函数完成单位转换,统计量提取,DataFrame 聚合等操作.
 """
 
 from __future__ import annotations
@@ -108,8 +108,10 @@ def _rows_to_column_arrays(rows: list[dict[str, Any]]) -> dict[str, list[Any]]:
         "power_w_zero_samples", "power_w_zero_fraction",
         "avg_cadence_rpm", "avg_nonzero_cadence_rpm", "max_cadence_rpm",
         "cadence_rpm_zero_samples", "cadence_rpm_zero_fraction",
+        "avg_cadence_spm",
         "avg_speed_mps", "avg_nonzero_speed_mps", "max_speed_mps",
         "speed_mps_zero_samples", "speed_mps_zero_fraction",
+        "avg_pace_s_per_km",
         "avg_altitude_m", "max_altitude_m",
     ]
     common_keys = set(rows[0])

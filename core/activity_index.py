@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from core.config import ensure_data_dirs
-from core.data_tools import local_time_without_timezone
+from core.path_utils import project_relative_or_absolute
 from core.stats import _meters_to_km, _round_float, _seconds_to_minutes, prune_empty_values
+from core.time_utils import local_time_without_timezone
 from fit.parser import parse_fit
 
 DEFAULT_ACTIVITY_INDEX_PATH = Path("data") / "activity_index.json"
@@ -49,14 +52,27 @@ def save_activity_index(index: dict[str, Any], path: str | Path | None = None) -
     target = activity_index_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     rows = index.get("activities") if isinstance(index.get("activities"), list) else []
-    rows = sorted(rows, key=lambda row: (row.get("start_time_local") or "", row.get("file_name") or ""))
+    rows = _with_activity_indices(rows)
     data = {
         "schema_version": "activity_index.v1",
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "activities": rows,
     }
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    _atomic_write_json(target, data)
     return target
+
+
+def _atomic_write_json(target: Path, data: dict[str, Any]) -> None:
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2, default=str)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def upsert_activity_from_fit(
@@ -96,9 +112,10 @@ def upsert_activity_from_summary(summary_path: str | Path, *, path: str | Path |
         activity_key=data.get("activity_key"),
     )
     entry.update({
-        "summary_path": str(summary_file),
+        "summary_path": project_relative_or_absolute(summary_file),
         "has_summary": True,
         "has_strava_summary": bool(data.get("strava_summary")),
+        "strava_activity_id": data.get("strava_activity_id"),
         "status": data.get("status"),
         "summary_label": (data.get("history_entry") or {}).get("summary_label") if isinstance(data.get("history_entry"), dict) else None,
         "main_stimulus": (data.get("history_entry") or {}).get("main_stimulus") if isinstance(data.get("history_entry"), dict) else None,
@@ -154,14 +171,26 @@ def list_activities(
     *,
     limit: int = 20,
     sport_type: str | None = None,
+    time_of_day: str | None = None,
+    order: str = "latest",
     path: str | Path | None = None,
 ) -> dict[str, Any]:
-    rows = _filter_rows(load_activity_index(path).get("activities") or [], sport_type=sport_type)
-    rows = rows[-max(1, int(limit)) :] if limit else rows
-    rows = list(reversed(rows))
+    rows = _filter_rows(
+        load_activity_index(path).get("activities") or [],
+        sport_type=sport_type,
+        time_of_day=time_of_day,
+    )
+    order_key = _activity_order_key(order)
+    if order_key == "earliest":
+        rows = rows[: max(1, int(limit))] if limit else rows
+    else:
+        rows = rows[-max(1, int(limit)) :] if limit else rows
+        rows = list(reversed(rows))
     return {
         "schema_version": "activity_list.v1",
         "count": len(rows),
+        "order": order_key,
+        "time_of_day": _normalize_time_of_day(time_of_day),
         "activities": [_compact_activity(row) for row in rows],
     }
 
@@ -169,16 +198,25 @@ def list_activities(
 def resolve_activity(
     *,
     activity_key: str | None = None,
+    activity_index: int | str | None = None,
     date_local: str | None = None,
     name: str | None = None,
     sport_type: str | None = None,
+    time_of_day: str | None = None,
     match: str = "latest",
     path: str | Path | None = None,
 ) -> dict[str, Any]:
     rows = load_activity_index(path).get("activities") or []
-    rows = _filter_rows(rows, sport_type=sport_type)
+    rows = _filter_rows(rows, sport_type=sport_type, time_of_day=time_of_day)
     if activity_key:
         rows = [row for row in rows if str(row.get("activity_key")) == str(activity_key)]
+    if activity_index is not None:
+        try:
+            wanted_index = int(activity_index)
+        except (TypeError, ValueError):
+            rows = []
+        else:
+            rows = [row for row in rows if row.get("activity_index") == wanted_index]
     if date_local:
         rows = [row for row in rows if row.get("date_local") == date_local]
     if name:
@@ -192,7 +230,7 @@ def resolve_activity(
     if not rows:
         return {"schema_version": "activity_resolve.v1", "matched_count": 0, "activity": None, "candidates": []}
 
-    chosen = rows[0] if match == "earliest" else rows[-1]
+    chosen = rows[0] if _activity_order_key(match) == "earliest" else rows[-1]
     return {
         "schema_version": "activity_resolve.v1",
         "matched_count": len(rows),
@@ -206,10 +244,11 @@ def get_activities_in_range(
     start_date: str,
     end_date: str,
     sport_type: str | None = None,
+    time_of_day: str | None = None,
     path: str | Path | None = None,
 ) -> dict[str, Any]:
     rows = load_activity_index(path).get("activities") or []
-    rows = _filter_rows(rows, sport_type=sport_type)
+    rows = _filter_rows(rows, sport_type=sport_type, time_of_day=time_of_day)
     rows = [
         row for row in rows
         if row.get("date_local") and start_date <= str(row.get("date_local")) <= end_date
@@ -221,6 +260,7 @@ def get_activities_in_range(
         "start_date": start_date,
         "end_date": end_date,
         "sport_type": sport_type,
+        "time_of_day": _normalize_time_of_day(time_of_day),
         "count": len(rows),
         "totals": {
             "duration_min": _seconds_to_minutes(total_duration_s),
@@ -243,7 +283,7 @@ def _entry_from_fit_summary(
     summary_path = Path("data") / "summaries" / f"{fit_path.stem}.summary.json"
     return prune_empty_values({
         "activity_key": key,
-        "fit_path": str(fit_path),
+        "fit_path": project_relative_or_absolute(fit_path),
         "summary_path": str(summary_path) if summary_path.exists() else None,
         "file_name": fit_path.name,
         "sport_type": summary.get("sport_type"),
@@ -264,6 +304,7 @@ def _entry_from_fit_summary(
 def _compact_activity(row: dict[str, Any]) -> dict[str, Any]:
     return prune_empty_values({
         "activity_key": row.get("activity_key"),
+        "activity_index": row.get("activity_index"),
         "file_name": row.get("file_name"),
         "fit_path": row.get("fit_path"),
         "summary_path": row.get("summary_path"),
@@ -276,6 +317,7 @@ def _compact_activity(row: dict[str, Any]) -> dict[str, Any]:
         "source": row.get("source"),
         "has_summary": row.get("has_summary"),
         "has_strava_summary": row.get("has_strava_summary"),
+        "strava_activity_id": row.get("strava_activity_id"),
         "summary_label": row.get("summary_label"),
         "main_stimulus": row.get("main_stimulus"),
         "training_load": row.get("training_load"),
@@ -303,11 +345,81 @@ def _same_activity(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return False
 
 
-def _filter_rows(rows: list[dict[str, Any]], *, sport_type: str | None = None) -> list[dict[str, Any]]:
-    filtered = rows
-    if sport_type:
-        filtered = [row for row in filtered if row.get("sport_type") == sport_type]
+def _filter_rows(
+    rows: list[dict[str, Any]],
+    *,
+    sport_type: str | None = None,
+    time_of_day: str | None = None,
+) -> list[dict[str, Any]]:
+    indexed_rows = _with_activity_indices(rows)
+    filtered = indexed_rows
+    normalized_sport_type = _canonical_sport_type(sport_type)
+    if normalized_sport_type:
+        filtered = [
+            row for row in filtered
+            if _canonical_sport_type(row.get("sport_type")) == normalized_sport_type
+        ]
+    normalized_time_of_day = _normalize_time_of_day(time_of_day)
+    if normalized_time_of_day:
+        filtered = [row for row in filtered if _matches_time_of_day(row, normalized_time_of_day)]
     return sorted(filtered, key=lambda row: row.get("start_time_local") or "")
+
+
+def _normalize_time_of_day(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    aliases = {
+        "morning": "morning", "上午": "morning", "早上": "morning", "清晨": "morning",
+        "afternoon": "afternoon", "下午": "afternoon",
+        "evening": "evening", "傍晚": "evening", "晚上": "evening",
+        "night": "night", "夜间": "night", "深夜": "night",
+    }
+    return aliases.get(text)
+
+
+def _canonical_sport_type(value: Any) -> str | None:
+    """Accept user/LLM labels without leaking Garmin's display names into lookup."""
+    text = "".join(str(value or "").strip().lower().split())
+    aliases = {
+        "cycling": "cycling", "cycle": "cycling", "ride": "cycling", "bike": "cycling",
+        "biking": "cycling", "骑行": "cycling", "单车": "cycling", "自行车": "cycling", "公路骑行": "cycling",
+        "running": "running", "run": "running", "跑步": "running",
+        "walking": "walking", "walk": "walking", "徒步": "walking", "hiking": "walking", "hike": "walking",
+    }
+    return aliases.get(text, text or None)
+
+
+def _matches_time_of_day(row: dict[str, Any], time_of_day: str) -> bool:
+    value = str(row.get("start_time_local") or "")
+    try:
+        hour = datetime.fromisoformat(value).hour
+    except ValueError:
+        return False
+    if time_of_day == "morning":
+        return 4 <= hour < 12
+    if time_of_day == "afternoon":
+        return 12 <= hour < 18
+    if time_of_day == "evening":
+        return 18 <= hour < 22
+    return hour >= 22 or hour < 4
+
+
+def _with_activity_indices(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sorted_rows = sorted(rows, key=lambda row: (row.get("start_time_local") or "", row.get("file_name") or ""))
+    # 只保存一个按时间正序的序号:最早为 1,最后一个就是最大序号.
+    return [
+        {
+            **row,
+            "activity_index": index,
+        }
+        for index, row in enumerate(sorted_rows, start=1)
+    ]
+
+
+def _activity_order_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"earliest", "oldest", "first", "chronological", "asc", "ascending"}:
+        return "earliest"
+    return "latest"
 
 
 def _activity_key(path: Path) -> str:

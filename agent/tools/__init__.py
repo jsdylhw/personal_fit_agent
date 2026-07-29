@@ -1,0 +1,76 @@
+"""Agent 工具包 — 所有 LLM 可调用工具的统一定义与导出.
+
+按类型组织:
+- spec.py          — ToolDef + ToolRegistry + renderers + 类别常量
+- fit_analysis/    — ActivityAnalysisAgent 内部只读 FIT 数据工具
+- fit_query.py     — FIT 数据查询工具旧路径兼容导出
+- index_query.py   — 活动索引工具 (3 ToolDef)
+- agent_tools.py   — Main Agent 暴露的粗粒度业务工具
+
+确定性业务操作在 agent.activity.operations.service 中实现；本模块保留 re-export
+以兼容旧 Python 调用方。
+"""
+
+from agent.tools.agent_tools import AGENT_TOOLS, MAIN_AGENT_TOOLS
+from agent.tools.fit_query import (
+    FIT_DATA_TOOLS,
+    build_tool_handlers,
+    call_fit_analysis_tool,
+    fit_analysis_tool_catalog,
+    fit_data_tool_catalog,
+)
+from agent.tools.index_query import INDEX_TOOLS, index_tool_catalog
+from agent.tools.spec import (
+    CATEGORY_ACTIVITY_INDEX,
+    CATEGORY_ACTIVITY_SELECTION,
+    CATEGORY_ANALYSIS,
+    CATEGORY_COACHING,
+    CATEGORY_CONVERSATION,
+    CATEGORY_FIT_QUERY,
+    CATEGORY_OPERATION,
+    CATEGORY_WORKFLOW,
+    ToolDef,
+    ToolRegistry,
+    render_anthropic_tool,
+    render_anthropic_tools,
+)
+# 兼容 re-export: 业务 handler 已移至 activity.operations.service
+from agent.activity.operations.service import (
+    MAX_SYNC_COUNT,
+    analyze_fit_file_tool,
+    sync_garmin_activities_tool,
+    upload_to_strava_tool,
+)
+
+__all__ = [
+    # spec
+    "CATEGORY_ACTIVITY_INDEX",
+    "CATEGORY_ACTIVITY_SELECTION",
+    "CATEGORY_ANALYSIS",
+    "CATEGORY_COACHING",
+    "CATEGORY_CONVERSATION",
+    "CATEGORY_FIT_QUERY",
+    "CATEGORY_OPERATION",
+    "CATEGORY_WORKFLOW",
+    "ToolDef",
+    "ToolRegistry",
+    "render_anthropic_tool",
+    "render_anthropic_tools",
+    # fit_query
+    "FIT_DATA_TOOLS",
+    "build_tool_handlers",
+    "call_fit_analysis_tool",
+    "fit_analysis_tool_catalog",
+    "fit_data_tool_catalog",
+    # index_query
+    "INDEX_TOOLS",
+    "index_tool_catalog",
+    # agent_tools
+    "MAIN_AGENT_TOOLS",
+    "AGENT_TOOLS",
+    # handlers (兼容 re-export)
+    "MAX_SYNC_COUNT",
+    "analyze_fit_file_tool",
+    "sync_garmin_activities_tool",
+    "upload_to_strava_tool",
+]

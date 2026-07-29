@@ -1,19 +1,29 @@
 """LLM API 客户端:Anthropic Messages API 兼容接口.
 
 当前通过 DeepSeek 的 /anthropic 端点使用,兼容 Anthropic Messages API 格式.
-重试仅针对 timeout/URLError,HTTP 错误直接抛出(不做无意义重试).
+重试仅针对 timeout/URLError/IncompleteRead,HTTP 错误直接抛出(不做无意义重试).
 """
 
 from __future__ import annotations
 
 import json
+import random
 import socket
 import time
+from http.client import BadStatusLine, IncompleteRead, RemoteDisconnected
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from core.config import get_agent_config
+
+
+class LLMRequestError(RuntimeError):
+    """LLM 请求在重试耗尽后仍不可用。
+
+    调用方可据此保留 Agent 上下文并返回可恢复的用户提示，而不是让 CLI
+    直接打印 traceback 后退出。
+    """
 
 
 class AnthropicMessagesClient:
@@ -43,6 +53,7 @@ class AnthropicMessagesClient:
     def create_message(
         self, *, system: str | None = None, user: str | list[dict[str, Any]],
         max_tokens: int | None = None, temperature: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """单条 user 消息调用(guided/direct 模式使用)."""
         payload = {
@@ -53,11 +64,14 @@ class AnthropicMessagesClient:
         }
         if system:
             payload["system"] = system
+        if tools:
+            payload["tools"] = tools
         return self._post_messages(payload)
 
     def create_messages(
         self, *, system: str | None = None, messages: list[dict[str, Any]],
         max_tokens: int | None = None, temperature: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """多轮 messages 调用(tool loop 模式使用)."""
         payload = {
@@ -68,13 +82,15 @@ class AnthropicMessagesClient:
         }
         if system:
             payload["system"] = system
+        if tools:
+            payload["tools"] = tools
         return self._post_messages(payload)
 
     def _post_messages(self, payload: dict[str, Any]) -> dict[str, Any]:
         """发送 POST 请求到 Messages API.
 
-        HTTP 错误(4xx/5xx)直接抛出——说明 API key/参数有问题,重试无意义.
-        仅对 timeout 和 URLError 做指数退避重试.
+        对网络中断、限流和服务端错误做有限指数退避重试；认证和请求参数错误
+        则立即失败。LLM 请求本身没有外部业务副作用，因此可以安全重发。
         """
         request = Request(
             self._messages_url(),
@@ -96,19 +112,40 @@ class AnthropicMessagesClient:
                     return json.loads(response.read().decode("utf-8"))
             except HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"LLM request failed: HTTP {exc.code}; body={body[:1000]}") from exc
-            except (TimeoutError, socket.timeout) as exc:
+                if exc.code not in {408, 425, 429} and not 500 <= exc.code <= 599:
+                    raise LLMRequestError(
+                        f"LLM request failed: HTTP {exc.code}; body={body[:1000]}"
+                    ) from exc
                 last_error = exc
-            except URLError as exc:
+                retry_after = _retry_after_seconds(exc)
+            except (
+                TimeoutError, socket.timeout, IncompleteRead, URLError,
+                RemoteDisconnected, BadStatusLine, ConnectionError, OSError,
+            ) as exc:
                 last_error = exc
+                retry_after = None
 
             if attempt < max_retries:
-                time.sleep(min(2 * attempt, 10))
+                time.sleep(_retry_delay_seconds(attempt, retry_after=retry_after))
 
-        raise RuntimeError(
+        raise LLMRequestError(
             f"LLM request timed out or failed after {max_retries} attempt(s); "
             f"timeout_seconds={timeout}; error={last_error}"
         ) from last_error
+
+
+def _retry_after_seconds(error: HTTPError) -> float | None:
+    value = error.headers.get("Retry-After") if error.headers else None
+    try:
+        return max(0.0, min(float(value), 60.0)) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _retry_delay_seconds(attempt: int, *, retry_after: float | None) -> float:
+    """有限指数退避，加微小抖动避免多个客户端同时重试。"""
+    base = retry_after if retry_after is not None else min(float(2 ** (attempt - 1)), 10.0)
+    return base + random.uniform(0.0, 0.25)
 
 
 def extract_text(message: dict[str, Any]) -> str:
@@ -127,3 +164,43 @@ def extract_text(message: dict[str, Any]) -> str:
         if isinstance(part, dict) and part.get("type") == "text" and part.get("text") is not None
     ]
     return "\n".join(texts).strip()
+
+
+def extract_tool_use_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """从 API 响应中提取所有 tool_use content block.
+
+    每个 block 包含 id, name, input 字段.
+
+    Args:
+        message: Anthropic Messages API 的响应 dict.
+
+    Returns:
+        list[dict]: tool_use block 列表.
+    """
+    parts = message.get("content") or []
+    return [
+        {
+            "id": part.get("id"),
+            "name": part.get("name"),
+            "input": part.get("input") or {},
+        }
+        for part in parts
+        if isinstance(part, dict) and part.get("type") == "tool_use"
+    ]
+
+
+def build_tool_result_block(tool_use_id: str, content: str) -> dict[str, Any]:
+    """构建 tool_result content block,用于追加到 messages.
+
+    Args:
+        tool_use_id: tool_use block 的 id.
+        content: 工具执行结果的 JSON 字符串.
+
+    Returns:
+        dict: {"type": "tool_result", "tool_use_id": ..., "content": ...}
+    """
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": content,
+    }

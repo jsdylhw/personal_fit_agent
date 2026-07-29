@@ -11,8 +11,8 @@ from typing import Any
 
 import typer
 
-from agent.guided_chat import resolve_fit_path
-from agent.tools import agent_workflow_tool_catalog, call_fit_analysis_tool, fit_data_tool_catalog
+from core.fit_paths import resolve_fit_path
+from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
 from core.activity_index import (
     get_activities_in_range,
     list_activities,
@@ -27,9 +27,9 @@ app = typer.Typer(help="Personal FIT Agent debug CLI")
 
 
 @app.command("list-tools")
-def list_tools_command(all_tools: bool = True) -> None:
-    """列出 LLM 可用工具."""
-    tools = agent_workflow_tool_catalog() if all_tools else fit_data_tool_catalog()
+def list_tools_command() -> None:
+    """列出 FIT hidden analysis loop 可用的只读工具."""
+    tools = fit_data_tool_catalog()
     _echo_json({"count": len(tools), "tools": tools})
 
 
@@ -40,7 +40,7 @@ def tool_call_command(
     args: str = typer.Option("{}", "--args", help="JSON object 参数."),
     history: bool = True,
 ) -> None:
-    """直接调用一个 agent tool,用于检查返回 payload."""
+    """直接调用一个 FIT 分析只读工具,用于检查返回 payload."""
     arguments = _parse_args_json(args)
     parsed = None
     history_before = None
@@ -57,10 +57,33 @@ def tool_call_command(
 
 
 @app.command("inspect-fit")
-def inspect_fit_command(fit_path: str = typer.Argument("latest")) -> None:
-    """解析 FIT 并输出基础 summary/training metadata 概况."""
+def inspect_fit_command(
+    fit_path: str = typer.Argument("latest"),
+    tool_name: str | None = typer.Argument(None),
+    args: str = typer.Option("{}", "--args", help="可选:调用数据工具时传入的 JSON object 参数."),
+    history: bool = typer.Option(True, "--history/--no-history", help="调用 get_history 等数据工具时是否带历史上下文."),
+) -> None:
+    """解析 FIT;如果传 tool_name,则直接调用对应只读数据工具."""
     fit = resolve_fit_path(fit_path)
     parsed = parse_fit(fit)
+    if tool_name:
+        history_before = None
+        if history:
+            summary_for_history = parsed.get("summary") or {}
+            before = summary_for_history.get("start_time_local") or summary_for_history.get("start_time")
+            history_before = query_activity_history(before=before, days=90, limit=50)
+        result = call_fit_analysis_tool(
+            tool_name,
+            _parse_args_json(args),
+            parsed=parsed,
+            history_before=history_before,
+        )
+        _echo_json({
+            "fit_path": str(fit),
+            **result,
+        })
+        return
+
     summary = parsed.get("summary") or {}
     metadata = parsed.get("training_metadata") or {}
     _echo_json({
@@ -87,8 +110,8 @@ def rebuild_index_command() -> None:
 
 
 @app.command("list-activities")
-def list_activities_command(limit: int = 20, sport_type: str | None = None) -> None:
-    _echo_json(list_activities(limit=limit, sport_type=sport_type))
+def list_activities_command(limit: int = 20, sport_type: str | None = None, order: str = "latest") -> None:
+    _echo_json(list_activities(limit=limit, sport_type=sport_type, order=order))
 
 
 @app.command("resolve-activity")
@@ -96,11 +119,13 @@ def resolve_activity_command(
     date_local: str | None = None,
     name: str | None = None,
     activity_key: str | None = None,
+    activity_index: int | None = None,
     sport_type: str | None = None,
     match: str = "latest",
 ) -> None:
     _echo_json(resolve_activity(
         activity_key=activity_key,
+        activity_index=activity_index,
         date_local=date_local,
         name=name,
         sport_type=sport_type,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from http.client import IncompleteRead, RemoteDisconnected
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -108,3 +109,55 @@ class TestAnthropicMessagesClient:
             user="Hello",
         )
         assert result["id"] == "msg_single"
+
+    @patch("agent.llm.time.sleep")
+    @patch("agent.llm.urlopen")
+    def test_retries_incomplete_read(self, mock_urlopen, mock_sleep):
+        client = AnthropicMessagesClient(
+            {
+                "base_url": "https://api.test.com/anthropic",
+                "api_key": "sk-test",
+                "model": "test-model",
+                "max_retries": 2,
+            }
+        )
+        broken_response = MagicMock()
+        broken_response.read.side_effect = IncompleteRead(b"")
+        ok_response = MagicMock()
+        ok_response.read.return_value = json.dumps({
+            "id": "msg_retry",
+            "content": [{"type": "text", "text": "ok"}],
+        }).encode("utf-8")
+        mock_urlopen.return_value.__enter__.side_effect = [broken_response, ok_response]
+
+        result = client.create_message(user="Hello")
+
+        assert result["id"] == "msg_retry"
+        assert mock_urlopen.call_count == 2
+        mock_sleep.assert_called_once()
+
+    @patch("agent.llm.time.sleep")
+    @patch("agent.llm.urlopen")
+    def test_retries_remote_disconnect(self, mock_urlopen, mock_sleep):
+        client = AnthropicMessagesClient(
+            {
+                "base_url": "https://api.test.com/anthropic",
+                "api_key": "sk-test",
+                "model": "test-model",
+                "max_retries": 2,
+            }
+        )
+        ok_response = MagicMock()
+        ok_response.read.return_value = json.dumps({
+            "id": "msg-reconnected",
+            "content": [{"type": "text", "text": "ok"}],
+        }).encode("utf-8")
+        mock_urlopen.return_value.__enter__.side_effect = [
+            RemoteDisconnected("peer closed connection"), ok_response,
+        ]
+
+        result = client.create_message(user="Hello")
+
+        assert result["id"] == "msg-reconnected"
+        assert mock_urlopen.call_count == 2
+        mock_sleep.assert_called_once()

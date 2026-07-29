@@ -190,11 +190,6 @@ agent:
   max_tokens: 2000
   temperature: 0.5
 
-athlete:
-  ftp: 260
-  weight_kg: 80
-  max_heart_rate: 200
-
 strava:
   client_id: "12345"
   client_secret: "abc123"
