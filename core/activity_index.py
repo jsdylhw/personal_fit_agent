@@ -171,10 +171,15 @@ def list_activities(
     *,
     limit: int = 20,
     sport_type: str | None = None,
+    time_of_day: str | None = None,
     order: str = "latest",
     path: str | Path | None = None,
 ) -> dict[str, Any]:
-    rows = _filter_rows(load_activity_index(path).get("activities") or [], sport_type=sport_type)
+    rows = _filter_rows(
+        load_activity_index(path).get("activities") or [],
+        sport_type=sport_type,
+        time_of_day=time_of_day,
+    )
     order_key = _activity_order_key(order)
     if order_key == "earliest":
         rows = rows[: max(1, int(limit))] if limit else rows
@@ -185,6 +190,7 @@ def list_activities(
         "schema_version": "activity_list.v1",
         "count": len(rows),
         "order": order_key,
+        "time_of_day": _normalize_time_of_day(time_of_day),
         "activities": [_compact_activity(row) for row in rows],
     }
 
@@ -196,11 +202,12 @@ def resolve_activity(
     date_local: str | None = None,
     name: str | None = None,
     sport_type: str | None = None,
+    time_of_day: str | None = None,
     match: str = "latest",
     path: str | Path | None = None,
 ) -> dict[str, Any]:
     rows = load_activity_index(path).get("activities") or []
-    rows = _filter_rows(rows, sport_type=sport_type)
+    rows = _filter_rows(rows, sport_type=sport_type, time_of_day=time_of_day)
     if activity_key:
         rows = [row for row in rows if str(row.get("activity_key")) == str(activity_key)]
     if activity_index is not None:
@@ -237,10 +244,11 @@ def get_activities_in_range(
     start_date: str,
     end_date: str,
     sport_type: str | None = None,
+    time_of_day: str | None = None,
     path: str | Path | None = None,
 ) -> dict[str, Any]:
     rows = load_activity_index(path).get("activities") or []
-    rows = _filter_rows(rows, sport_type=sport_type)
+    rows = _filter_rows(rows, sport_type=sport_type, time_of_day=time_of_day)
     rows = [
         row for row in rows
         if row.get("date_local") and start_date <= str(row.get("date_local")) <= end_date
@@ -252,6 +260,7 @@ def get_activities_in_range(
         "start_date": start_date,
         "end_date": end_date,
         "sport_type": sport_type,
+        "time_of_day": _normalize_time_of_day(time_of_day),
         "count": len(rows),
         "totals": {
             "duration_min": _seconds_to_minutes(total_duration_s),
@@ -336,12 +345,62 @@ def _same_activity(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return False
 
 
-def _filter_rows(rows: list[dict[str, Any]], *, sport_type: str | None = None) -> list[dict[str, Any]]:
+def _filter_rows(
+    rows: list[dict[str, Any]],
+    *,
+    sport_type: str | None = None,
+    time_of_day: str | None = None,
+) -> list[dict[str, Any]]:
     indexed_rows = _with_activity_indices(rows)
     filtered = indexed_rows
-    if sport_type:
-        filtered = [row for row in filtered if row.get("sport_type") == sport_type]
+    normalized_sport_type = _canonical_sport_type(sport_type)
+    if normalized_sport_type:
+        filtered = [
+            row for row in filtered
+            if _canonical_sport_type(row.get("sport_type")) == normalized_sport_type
+        ]
+    normalized_time_of_day = _normalize_time_of_day(time_of_day)
+    if normalized_time_of_day:
+        filtered = [row for row in filtered if _matches_time_of_day(row, normalized_time_of_day)]
     return sorted(filtered, key=lambda row: row.get("start_time_local") or "")
+
+
+def _normalize_time_of_day(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    aliases = {
+        "morning": "morning", "上午": "morning", "早上": "morning", "清晨": "morning",
+        "afternoon": "afternoon", "下午": "afternoon",
+        "evening": "evening", "傍晚": "evening", "晚上": "evening",
+        "night": "night", "夜间": "night", "深夜": "night",
+    }
+    return aliases.get(text)
+
+
+def _canonical_sport_type(value: Any) -> str | None:
+    """Accept user/LLM labels without leaking Garmin's display names into lookup."""
+    text = "".join(str(value or "").strip().lower().split())
+    aliases = {
+        "cycling": "cycling", "cycle": "cycling", "ride": "cycling", "bike": "cycling",
+        "biking": "cycling", "骑行": "cycling", "单车": "cycling", "自行车": "cycling", "公路骑行": "cycling",
+        "running": "running", "run": "running", "跑步": "running",
+        "walking": "walking", "walk": "walking", "徒步": "walking", "hiking": "walking", "hike": "walking",
+    }
+    return aliases.get(text, text or None)
+
+
+def _matches_time_of_day(row: dict[str, Any], time_of_day: str) -> bool:
+    value = str(row.get("start_time_local") or "")
+    try:
+        hour = datetime.fromisoformat(value).hour
+    except ValueError:
+        return False
+    if time_of_day == "morning":
+        return 4 <= hour < 12
+    if time_of_day == "afternoon":
+        return 12 <= hour < 18
+    if time_of_day == "evening":
+        return 18 <= hour < 22
+    return hour >= 22 or hour < 4
 
 
 def _with_activity_indices(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

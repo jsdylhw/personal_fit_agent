@@ -13,11 +13,10 @@ CATEGORY_FIT_QUERY = "fit_query"          # FIT 只读数据查询
 CATEGORY_ACTIVITY_INDEX = "activity_index" # 活动索引查询
 CATEGORY_OPERATION = "operation"           # 有副作用的操作(sync/upload)
 CATEGORY_CONVERSATION = "conversation"     # 闲聊/追问
-CATEGORY_ACTIVITY_RESOLUTION = "activity_resolution"  # 活动定位
+CATEGORY_ACTIVITY_SELECTION = "activity_selection"   # 活动定位
 CATEGORY_ANALYSIS = "analysis"             # 分析/汇总/对比
 CATEGORY_COACHING = "coaching"             # 训练建议/路线建议
-CATEGORY_STRAVA = "strava"                 # Strava 上传
-CATEGORY_PLANNING = "planning"             # 内部计划/TODO 状态
+CATEGORY_WORKFLOW = "workflow"             # 持久化活动工作流
 
 
 @dataclass(frozen=True)

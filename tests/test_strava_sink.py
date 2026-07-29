@@ -51,7 +51,7 @@ class TestStravaSinkInit:
         assert sink.access_token == "direct_token_123"
 
     @patch("sinks.strava.requests.post")
-    def test_refreshes_with_client_credentials(self, mock_post):
+    def test_refreshes_with_client_credentials(self, mock_post, tmp_path):
         mock_response = MagicMock()
         mock_response.json.return_value = {"access_token": "refreshed_token"}
         mock_response.ok = True
@@ -62,6 +62,7 @@ class TestStravaSinkInit:
                 "client_id": "123",
                 "client_secret": "abc",
                 "refresh_token": "refresh_old",
+                "token_store": str(tmp_path / "strava_tokens.json"),
             }
         }
         sink = StravaSink(config)

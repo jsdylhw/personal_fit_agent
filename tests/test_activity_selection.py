@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from agent.activity.resolution import execute_activity_resolution_tool
+from agent.activity.selection import execute_activity_selection, select_activity_mode
 from agent.context import AgentContext
 from core.activity_index import save_activity_index
 
@@ -53,8 +53,14 @@ def _write_index(path):
 
 
 def _run(name, arguments, context, *, reason="", index_path=None, today=None):
-    return execute_activity_resolution_tool(
-        name,
+    mode = {
+        "resolve_current_activity": "current",
+        "resolve_activity_by_date": "single",
+        "resolve_activity_range": "range",
+        "resolve_recent_activities": "recent",
+    }.get(name, name)
+    return execute_activity_selection(
+        mode,
         arguments,
         context,
         reason=reason,
@@ -286,6 +292,60 @@ def test_resolve_recent_activities_updates_selected_activities(tmp_path):
     }
 
 
+def test_resolve_recent_activities_filters_before_applying_limit(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+
+    result = _run(
+        "resolve_recent_activities",
+        {"limit": 2, "time_of_day": "morning"},
+        context,
+        reason="分析最近两个上午的活动",
+        index_path=index_path,
+    )
+
+    assert result["result"]["count"] == 2
+    assert [activity["activity_key"] for activity in context.selected_activities] == ["a3", "a1"]
+    assert context.selected_activity_range["time_of_day"] == "morning"
+
+
+def test_resolution_accepts_ride_alias_for_cycling(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+
+    result = _run(
+        "resolve_activity_by_date",
+        {"date": "yesterday", "sport_type": "Ride"},
+        context,
+        reason="昨天这次骑行",
+        index_path=index_path,
+        today=date(2026, 5, 19),
+    )
+
+    assert result["result"]["matched_count"] == 2
+    assert context.current_activity_key == "a2"
+
+
+def test_single_day_resolution_applies_morning_filter(tmp_path):
+    index_path = tmp_path / "activity_index.json"
+    _write_index(index_path)
+    context = AgentContext(session_id="test")
+
+    result = _run(
+        "resolve_activity_by_date",
+        {"date": "yesterday", "sport_type": "Ride", "time_of_day": "morning"},
+        context,
+        reason="昨天上午骑行",
+        index_path=index_path,
+        today=date(2026, 5, 19),
+    )
+
+    assert result["result"]["matched_count"] == 1
+    assert context.current_activity_key == "a1"
+
+
 def test_resolve_recent_activities_can_select_earliest_activity(tmp_path):
     index_path = tmp_path / "activity_index.json"
     _write_index(index_path)
@@ -339,4 +399,12 @@ def test_non_activity_resolution_step_is_rejected():
         reason="不是活动解析步骤",
     )
 
-    assert result["error"] == "unsupported_activity_resolution_step"
+    assert result["error"] == "unsupported_activity_selection_mode"
+
+
+def test_selection_mode_is_chosen_from_selector_facts():
+    assert select_activity_mode({"date": "today", "time_of_day": "morning"}) == "single"
+    assert select_activity_mode({"scope": "range", "date": "today"}) == "single"
+    assert select_activity_mode({"start_date": "2026-05-01", "end_date": "2026-05-07"}) == "range"
+    assert select_activity_mode({"limit": 3}) == "recent"
+    assert select_activity_mode({"current": True}) == "current"

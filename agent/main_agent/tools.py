@@ -7,13 +7,8 @@ from typing import Any, Callable
 
 from agent.context import AgentContext
 from agent.main_agent.tool_result import remember_failed_action
-from agent.main_agent.todos import write_todos
 
 ToolHandler = Callable[[dict[str, Any], AgentContext], dict[str, Any]]
-
-
-def todo_write(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    return write_todos(context, args.get("todos") or [])
 
 
 def casual_chat(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
@@ -24,53 +19,31 @@ def ask_user_clarification(args: dict[str, Any], context: AgentContext) -> dict[
     return {"answer": args.get("question") or "请再描述一下你的需求。"}
 
 
-def sync_garmin_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.operations import sync_garmin_activities_tool
-
-    result = sync_garmin_activities_tool(count=int(args.get("count", 5)))
-    context.last_tool_result = {"step_name": "download_activities", "result": result}
-    return result
-
-
-def download_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    return sync_garmin_activities(args, context)
-
-
 def find_activity(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    scope = str(args.get("scope") or "").lower()
-    if not scope:
-        scope = _infer_find_activity_scope(args)
+    from agent.activity.selection import select_activity_mode
 
-    if scope == "current":
-        step_name = "resolve_current_activity"
-        step_args: dict[str, Any] = {}
-    elif scope == "range":
-        step_name = "resolve_activity_range"
-        step_args = args
-    elif scope == "activity":
-        step_name = "resolve_activity_by_date"
-        step_args = args
-    else:
-        step_name = "resolve_recent_activities"
-        step_args = args
+    selection_mode = select_activity_mode(args)
+    selection_args: dict[str, Any] = {} if selection_mode == "current" else args
 
-    result = _resolve_activity(step_name, step_args, context)
+    result = _select_activities(selection_mode, selection_args, context)
     if isinstance(result, dict):
         result = {
             **result,
             "step": "find_activity",
-            "resolution_step": step_name,
+            "selection_mode": selection_mode,
         }
     return result
 
 
 def analyze_activity(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     from agent.activity.report import show_selected_activity_report_tool
-    from agent.main_agent.handlers import empty_activity_resolution_answer
+    from agent.main_agent.handlers import empty_activity_selection_answer
 
     last = context.last_tool_result or {}
     last_result = last.get("result") if isinstance(last.get("result"), dict) else {}
-    empty_answer = empty_activity_resolution_answer(str(last.get("step_name") or ""), last_result)
+    empty_answer = empty_activity_selection_answer(
+        str(last_result.get("selection_mode") or ""), last_result,
+    )
     if empty_answer:
         return {
             "step": "analyze_activity",
@@ -78,10 +51,32 @@ def analyze_activity(args: dict[str, Any], context: AgentContext) -> dict[str, A
             "answer": empty_answer,
             "result": {
                 "schema_version": "activity_analysis_skipped.v1",
-                "reason": "empty_activity_resolution",
+                "reason": "empty_activity_selection",
             },
         }
+    if len(context.selected_activities) != 1:
+        return {
+            "error": "single_activity_required",
+            "message": "analyze_activity 只能读取一条已定位活动；多条活动请使用 summarize_activities。",
+            "selected_count": len(context.selected_activities),
+        }
     return show_selected_activity_report_tool(context, args=args, name="analyze_activity")
+
+
+def query_activity_detail(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.activity.report import query_selected_activity_detail_tool
+
+    if len(context.selected_activities) != 1:
+        return {
+            "error": "single_activity_required",
+            "message": "query_activity_detail 只能查询一条已定位活动；请先用 find_activity 精确定位。",
+            "selected_count": len(context.selected_activities),
+        }
+    return query_selected_activity_detail_tool(
+        context,
+        question=str(args.get("question") or "").strip(),
+        name="query_activity_detail",
+    )
 
 
 def summarize_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
@@ -112,46 +107,69 @@ def generate_route_advice(args: dict[str, Any], context: AgentContext) -> dict[s
     return generate_route_advice_tool(context, args=args, name="generate_route_advice")
 
 
-def analyze_new_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.main_agent.handlers import execute_analyze_new_fit_files
+def sync_and_run_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    """同步 Garmin，并把本次已索引活动冻结为一个持久化 Run。"""
+    from agent.activity.workflow_service import sync_and_start_activity_workflow
 
-    return execute_analyze_new_fit_files(context, args)
-
-
-def upload_activity(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.main_agent.handlers import execute_upload_strava_activity
-
-    return execute_upload_strava_activity("upload_activity", args, context)
-
-
-def _resolve_activity(name: str, args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.resolution.executor import execute_activity_resolution_tool
-
-    return execute_activity_resolution_tool(name, args, context)
+    result = sync_and_start_activity_workflow(
+        count=int(args.get("count", 5)),
+        goals=args.get("goals") or ("ensure_summary",),
+        force=bool(args.get("force")),
+        force_upload=bool(args.get("force_upload")),
+    )
+    return result
 
 
-def _infer_find_activity_scope(args: dict[str, Any]) -> str:
-    if args.get("start_date") or args.get("end_date") or args.get("relative_range") or args.get("range_type"):
-        return "range"
-    if str(args.get("range") or "").lower() == "all":
-        return "range"
-    if args.get("activity_key") or args.get("activity_index") or args.get("date") or args.get("date_local") or args.get("name"):
-        return "activity"
-    if args.get("current") is True:
-        return "current"
-    return "recent"
+def run_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.activity.workflow_service import start_local_activity_workflow
+
+    result = start_local_activity_workflow(
+        limit=int(args.get("limit", 5)),
+        order=str(args.get("order") or "latest"),
+        sport_type=str(args["sport_type"]) if args.get("sport_type") else None,
+        goals=args.get("goals") or ("ensure_summary",),
+        force=bool(args.get("force")),
+        force_upload=bool(args.get("force_upload")),
+    )
+    return result
+
+
+def get_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.activity.workflow_service import get_activity_workflow as get_workflow
+
+    return get_workflow(str(args.get("workflow_id") or ""))
+
+
+def retry_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.activity.workflow_service import retry_activity_workflow as retry_workflow
+
+    task_ids = args.get("task_ids")
+    result = retry_workflow(
+        str(args.get("workflow_id") or ""),
+        task_ids=task_ids if isinstance(task_ids, list) else None,
+    )
+    return result
+
+
+def _select_activities(mode: str, args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    # Import the implementation module here so runtime instrumentation and
+    # tests can replace the concrete service without a stale re-export.
+    from agent.activity.selection.service import execute_activity_selection
+
+    return execute_activity_selection(mode, args, context)
 
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
-    "todo_write": todo_write,
     "casual_chat": casual_chat,
     "ask_user_clarification": ask_user_clarification,
     "find_activity": find_activity,
     "analyze_activity": analyze_activity,
+    "query_activity_detail": query_activity_detail,
     "summarize_activities": summarize_activities,
-    "download_activities": download_activities,
-    "analyze_new_activities": analyze_new_activities,
-    "upload_activity": upload_activity,
+    "sync_and_run_activity_workflow": sync_and_run_activity_workflow,
+    "run_activity_workflow": run_activity_workflow,
+    "get_activity_workflow": get_activity_workflow,
+    "retry_activity_workflow": retry_activity_workflow,
     "compare_activities": compare_activities,
     "generate_training_advice": generate_training_advice,
     "summarize_recent_training_load": summarize_recent_training_load,
@@ -190,8 +208,6 @@ def execute_saved_action(
     if verbose:
         from agent.main_agent.hooks import _log
         _log(f"  [{label}] \033[1m{tool_name}\033[0m {result_json[:120]}")
-
-    context.permission_grants.clear()
 
     return {
         "answer": f"已执行 {tool_name}。\n{result_json[:200]}",

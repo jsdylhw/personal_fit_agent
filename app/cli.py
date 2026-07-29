@@ -11,7 +11,7 @@ from agent.chat_logger import new_session_id
 from agent.context import AgentContext
 from agent.main_agent.loop import run_tool_loop
 from core.fit_paths import resolve_fit_path
-from agent.operations import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
+from agent.activity.operations.service import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
 from core.strava_upload import (
     update_strava_description_from_summary,
     upload_summary_to_strava,

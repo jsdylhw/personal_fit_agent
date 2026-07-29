@@ -7,7 +7,8 @@
 - index_query.py   — 活动索引工具 (3 ToolDef)
 - agent_tools.py   — Main Agent 暴露的粗粒度业务工具
 
-确定性业务操作在 agent.operations 中实现，通过 tools/__init__ 保持兼容 re-export。
+确定性业务操作在 agent.activity.operations.service 中实现；本模块保留 re-export
+以兼容旧 Python 调用方。
 """
 
 from agent.tools.agent_tools import AGENT_TOOLS, MAIN_AGENT_TOOLS
@@ -21,21 +22,20 @@ from agent.tools.fit_query import (
 from agent.tools.index_query import INDEX_TOOLS, index_tool_catalog
 from agent.tools.spec import (
     CATEGORY_ACTIVITY_INDEX,
-    CATEGORY_ACTIVITY_RESOLUTION,
+    CATEGORY_ACTIVITY_SELECTION,
     CATEGORY_ANALYSIS,
     CATEGORY_COACHING,
     CATEGORY_CONVERSATION,
     CATEGORY_FIT_QUERY,
     CATEGORY_OPERATION,
-    CATEGORY_PLANNING,
-    CATEGORY_STRAVA,
+    CATEGORY_WORKFLOW,
     ToolDef,
     ToolRegistry,
     render_anthropic_tool,
     render_anthropic_tools,
 )
-# 兼容 re-export: 业务 handler 已移至 agent.operations
-from agent.operations import (
+# 兼容 re-export: 业务 handler 已移至 activity.operations.service
+from agent.activity.operations.service import (
     MAX_SYNC_COUNT,
     analyze_fit_file_tool,
     sync_garmin_activities_tool,
@@ -45,14 +45,13 @@ from agent.operations import (
 __all__ = [
     # spec
     "CATEGORY_ACTIVITY_INDEX",
-    "CATEGORY_ACTIVITY_RESOLUTION",
+    "CATEGORY_ACTIVITY_SELECTION",
     "CATEGORY_ANALYSIS",
     "CATEGORY_COACHING",
     "CATEGORY_CONVERSATION",
     "CATEGORY_FIT_QUERY",
     "CATEGORY_OPERATION",
-    "CATEGORY_PLANNING",
-    "CATEGORY_STRAVA",
+    "CATEGORY_WORKFLOW",
     "ToolDef",
     "ToolRegistry",
     "render_anthropic_tool",

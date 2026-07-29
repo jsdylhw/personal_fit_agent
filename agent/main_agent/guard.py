@@ -1,6 +1,6 @@
 """Tool Guard — 运行时校验 LLM 工具调用的前置条件.
 
-只做依赖/参数/合法性检查. 副作用审批由 permission.py 处理.
+只做依赖/参数/合法性检查，不介入工具的副作用审批。
 """
 
 from __future__ import annotations
@@ -13,12 +13,11 @@ from agent.context import AgentContext
 # 工具 → 前置依赖(context 中必须存在)
 TOOL_DEPENDENCIES: dict[str, set[str]] = {
     "analyze_activity": {"selected_activities"},
+    "query_activity_detail": {"selected_activities"},
     "summarize_activities": {"selected_activities"},
     "compare_activities": {"selected_activities"},
     "summarize_recent_training_load": {"selected_activities"},
     "generate_training_advice": {"selected_activities"},
-    "upload_activity": {"selected_activities"},
-    "analyze_new_activities": {"synced_fit_files"},
 }
 
 
@@ -34,14 +33,13 @@ def guard_tool_call(
     *,
     context: AgentContext,
     allowed_categories: set[str],
-    user_confirmed: bool = False,
     has_resolved: bool = False,
 ) -> GuardResult:
     """校验工具调用的前置条件.
 
     - 依赖检查: analyze 需要 selected_activities
     - 参数检查: sync count 范围
-    - 不涉及副作用审批(由 permission.py 处理)
+    - 不涉及副作用审批
     """
     # 依赖检查
     deps = TOOL_DEPENDENCIES.get(tool_name, set())
@@ -52,7 +50,7 @@ def guard_tool_call(
         )
 
     # 参数检查
-    if tool_name == "download_activities":
+    if tool_name == "sync_and_run_activity_workflow":
         count = arguments.get("count", 5)
         if isinstance(count, (int, float)) and (count <= 0 or count > 20):
             return GuardResult(allowed=False, reason="count 必须在 1-20 之间")

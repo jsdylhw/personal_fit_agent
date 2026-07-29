@@ -1,0 +1,230 @@
+"""ActivityRun 的高层服务入口。
+
+这里是未来聊天工具、CLI 或 API 的共同边界：调用方只表达“创建、查看、重试”，
+不需要枚举每个活动并手工串接分析或上传工具。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Iterable
+
+from agent.activity.workflow_executor import execute_activity_run
+from agent.activity.workflow_factory import (
+    DEFAULT_ACTIVITY_RUN_DIRECTORY,
+    create_activity_run_from_activities,
+    create_local_activity_run,
+)
+from agent.activity.operations.garmin import sync_recent
+from agent.runtime.workflow_models import WorkflowStateError, retry_failed_tasks, workflow_overview
+from agent.runtime.workflow_store import load_workflow, save_workflow, workflow_path
+
+
+def start_local_activity_workflow(
+    *,
+    limit: int = 5,
+    order: str = "latest",
+    sport_type: str | None = None,
+    goals: Iterable[str] = ("ensure_summary",),
+    force: bool = False,
+    force_upload: bool = False,
+    directory: str | Path | None = None,
+) -> dict[str, Any]:
+    """为已在本地的活动创建并立即推进一个新的运行。"""
+    target_directory = _directory(directory)
+    created = create_local_activity_run(
+        limit=limit,
+        order=order,
+        sport_type=sport_type,
+        goals=goals,
+        force=force,
+        force_upload=force_upload,
+        directory=target_directory,
+    )
+    if created.get("status") != "created":
+        return created
+    run = created["run"]
+    execution = execute_activity_run(run, directory=target_directory)
+    return _response(run, target_directory, execution=execution, created=True)
+
+
+def sync_and_start_activity_workflow(
+    *,
+    count: int = 5,
+    goals: Iterable[str] = ("ensure_summary",),
+    force: bool = False,
+    force_upload: bool = False,
+    directory: str | Path | None = None,
+) -> dict[str, Any]:
+    """同步 Garmin 后，仅用本次成功索引的活动创建并推进 Run。
+
+    同步不是 per-activity 任务：它发生在可冻结活动快照之前。其结果被写入
+    Run.request.sync，之后 summary/upload/aggregate 仍使用同一 ActivityRun 状态机。
+    """
+    target_directory = _directory(directory)
+    sync = sync_recent(count=count)
+    if sync.get("status") == "failed":
+        return {
+            "schema_version": "activity_workflow_service.v1",
+            "status": "failed",
+            "error": sync.get("error") or "garmin_sync_failed",
+            "message": sync.get("message") or "Garmin 同步失败",
+            "sync": _sync_overview(sync, requested_count=count),
+        }
+
+    activities = _synced_activities(sync.get("activities") or [])
+    if not activities:
+        return {
+            "schema_version": "activity_workflow_service.v1",
+            "status": "no_activities",
+            "message": "Garmin 同步没有产生可索引的 FIT 活动；未创建工作流。",
+            "sync": _sync_overview(sync, requested_count=count),
+        }
+
+    created = create_activity_run_from_activities(
+        activities,
+        request={
+            "schema_version": "activity_workflow_request.v1",
+            "source": "garmin_sync",
+            "selection": {
+                "kind": "garmin_sync_result",
+                "requested_count": count,
+                "activity_keys": [activity["activity_key"] for activity in activities],
+            },
+            "sync": _sync_overview(sync, requested_count=count),
+            "goals": list(goals),
+            "force": bool(force),
+            "force_upload": bool(force_upload),
+        },
+        directory=target_directory,
+    )
+    if created.get("status") != "created":
+        return {**created, "sync": _sync_overview(sync, requested_count=count)}
+    run = created["run"]
+    execution = execute_activity_run(run, directory=target_directory)
+    return {
+        **_response(run, target_directory, execution=execution, created=True),
+        "sync": _sync_overview(sync, requested_count=count),
+    }
+
+
+def get_activity_workflow(
+    workflow_id: str,
+    *,
+    directory: str | Path | None = None,
+) -> dict[str, Any]:
+    """读取一个持久化运行，不推进也不触发任何副作用。"""
+    target_directory = _directory(directory)
+    run = load_workflow(workflow_id, directory=target_directory)
+    if run is None:
+        return _not_found(workflow_id)
+    return _response(run, target_directory)
+
+
+def retry_activity_workflow(
+    workflow_id: str,
+    *,
+    task_ids: Iterable[str] | None = None,
+    directory: str | Path | None = None,
+) -> dict[str, Any]:
+    """重试失败任务并恢复其依赖失败而跳过的后续任务。"""
+    target_directory = _directory(directory)
+    run = load_workflow(workflow_id, directory=target_directory)
+    if run is None:
+        return _not_found(workflow_id)
+    try:
+        revived_task_ids = retry_failed_tasks(run, task_ids=task_ids)
+    except WorkflowStateError as exc:
+        return {
+            "schema_version": "activity_workflow_service.v1",
+            "status": "failed",
+            "error": "retry_not_available",
+            "message": str(exc),
+            "workflow": workflow_overview(run),
+        }
+    if not revived_task_ids:
+        return {
+            **_response(run, target_directory),
+            "status": "nothing_to_retry",
+            "message": "当前运行没有失败任务。",
+        }
+    save_workflow(run, directory=target_directory)
+    execution = execute_activity_run(run, directory=target_directory)
+    return {
+        **_response(run, target_directory, execution=execution),
+        "retried_task_ids": revived_task_ids,
+    }
+
+
+def _response(
+    run: dict[str, Any],
+    directory: Path,
+    *,
+    execution: dict[str, Any] | None = None,
+    created: bool = False,
+) -> dict[str, Any]:
+    overview = workflow_overview(run)
+    response = {
+        "schema_version": "activity_workflow_service.v1",
+        "status": overview["status"],
+        "created": created,
+        "workflow_id": run.get("workflow_id"),
+        "run_path": str(workflow_path(str(run.get("workflow_id")), directory=directory)),
+        "workflow": overview,
+        "activities": run.get("activities") or [],
+        "tasks": run.get("tasks") or [],
+    }
+    if execution is not None:
+        response["execution"] = execution
+    return response
+
+
+def _not_found(workflow_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": "activity_workflow_service.v1",
+        "status": "not_found",
+        "error": "workflow_not_found",
+        "message": f"找不到活动工作流: {workflow_id}",
+    }
+
+
+def _directory(directory: str | Path | None) -> Path:
+    return Path(directory) if directory is not None else DEFAULT_ACTIVITY_RUN_DIRECTORY
+
+
+def _synced_activities(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """将 Garmin 索引结果转为 Run 快照，保留本次同步的精确活动集合。"""
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict) or not item.get("activity_key") or not item.get("path"):
+            continue
+        key = str(item["activity_key"])
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            "activity_key": key,
+            "fit_path": str(item["path"]),
+            "source_activity_id": str(item["activity_id"]) if item.get("activity_id") is not None else None,
+            "sport_type": item.get("sport_type"),
+            "start_time_local": item.get("start_time_local"),
+        })
+    return rows
+
+
+def _sync_overview(sync: dict[str, Any], *, requested_count: int) -> dict[str, Any]:
+    return {
+        "schema_version": "activity_workflow_sync.v1",
+        "requested_count": requested_count,
+        "status": sync.get("status"),
+        "downloaded": int(sync.get("downloaded") or 0),
+        "skipped": int(sync.get("skipped") or 0),
+        "failed": int(sync.get("failed") or 0),
+        "indexed_activity_keys": [
+            str(item["activity_key"])
+            for item in sync.get("activities") or []
+            if isinstance(item, dict) and item.get("activity_key")
+        ],
+        "failed_items": sync.get("failed_items") or [],
+    }

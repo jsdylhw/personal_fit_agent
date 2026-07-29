@@ -7,135 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from agent.context import AgentContext
-from agent.activity.permission import request_analysis_write_confirmation
 from agent.llm import AnthropicMessagesClient, extract_text
-from agent.operations import analyze_fit_file_tool, upload_to_strava_tool
-
-
-def execute_analyze_new_fit_files(context: AgentContext, args: dict[str, Any] | None = None) -> dict[str, Any]:
-    args = args or {}
-    permission = request_analysis_write_confirmation(context, tool_name="analyze_new_activities", args=args)
-    if permission is not None:
-        return permission
-
-    previous = (context.last_tool_result or {}).get("result") or {}
-    sync_result = previous.get("result") if isinstance(previous.get("result"), dict) else previous
-    items = sync_result.get("downloaded_items") or []
-    fit_paths = _fit_paths_from_items(items)
-    analyses: list[dict[str, Any]] = []
-    failed: list[dict[str, Any]] = []
-    for path in fit_paths:
-        try:
-            analyses.append(analyze_fit_file_tool(str(path), force=False))
-        except Exception as exc:
-            failed.append({
-                "fit_path": str(path),
-                "error": type(exc).__name__,
-                "message": str(exc),
-            })
-    return {
-        "step": "analyze_new_fit_files",
-        "result": {
-            "count": len(analyses),
-            "analyses": analyses,
-            "failed_count": len(failed),
-            "failed": failed,
-        },
-    }
-
-
-def execute_generate_summary_file(
-    name: str,
-    args: dict[str, Any],
-    context: AgentContext,
-) -> dict[str, Any]:
-    fit_path = _current_fit_path(context)
-    permission = request_analysis_write_confirmation(context, tool_name=name, args=args)
-    if permission is not None:
-        return permission
-
-    result = analyze_fit_file_tool(str(fit_path), force=bool(args.get("force")))
-    if result.get("fit_path"):
-        context.current_fit_file = Path(str(result["fit_path"])).expanduser()
-    return {"step": name, "result": result}
-
-
-def execute_ensure_activity_summaries(
-    name: str,
-    args: dict[str, Any],
-    context: AgentContext,
-) -> dict[str, Any]:
-    force = bool(args.get("force"))
-    will_write = force or any(
-        not (
-            isinstance(activity, dict)
-            and activity.get("summary_path")
-            and Path(str(activity.get("summary_path"))).expanduser().exists()
-        )
-        for activity in context.selected_activities
-    )
-    if will_write:
-        permission = request_analysis_write_confirmation(context, tool_name=name, args=args)
-        if permission is not None:
-            return permission
-
-    analyses = []
-    for activity in context.selected_activities:
-        fit_path = activity.get("fit_path") if isinstance(activity, dict) else None
-        if not fit_path:
-            continue
-        summary_path = activity.get("summary_path") if isinstance(activity, dict) else None
-        if summary_path and Path(str(summary_path)).expanduser().exists() and not force:
-            analyses.append({
-                "fit_path": str(fit_path),
-                "summary_path": str(summary_path),
-                "status": "skipped_existing_summary",
-            })
-            continue
-        analyses.append(analyze_fit_file_tool(str(fit_path), force=force))
-    return {
-        "step": name,
-        "result": {
-            "count": len(analyses),
-            "analyses": analyses,
-        },
-    }
-
-
-def execute_upload_strava_activity(
-    name: str,
-    args: dict[str, Any],
-    context: AgentContext,
-    *,
-    reason: str = "tool_use",
-) -> dict[str, Any]:
-    fit_path = _current_fit_path(context)
-    upload_result = upload_to_strava_tool(
-        str(fit_path),
-        confirmed=True,
-        force=bool(args.get("force")),
-    )
-    try:
-        answer = _generate_upload_result_response(
-            upload_result,
-            {"name": name, "reason": reason, "arguments": args},
-            context,
-        )
-    except Exception:
-        # 上传已完成后，说明文案只是展示层增强；LLM 网络故障不能把成功的
-        # Strava 写操作误判为失败，也不能诱导用户重复上传。
-        answer = _format_upload_result_fallback(upload_result)
-
-    return {
-        "step": name,
-        "status": "completed",
-        "result": {
-            "schema_version": "strava_upload_execution.v1",
-            "fit_path": str(fit_path),
-            "upload_result": upload_result,
-        },
-        "answer": answer,
-    }
+from agent.activity.operations.service import analyze_fit_file_tool
 
 
 def execute_summarize_activity_range(
@@ -166,11 +39,6 @@ def execute_summarize_activity_range(
         }
 
     force = bool(args.get("force"))
-    if _activities_need_summary_generation(activities, force=force):
-        permission = request_analysis_write_confirmation(context, tool_name=name, args=args)
-        if permission is not None:
-            return permission
-
     summary_generation = _ensure_summaries_for_activities(activities, force=force)
 
     activities = _reload_activities_from_index(activities)
@@ -203,7 +71,7 @@ def execute_summarize_activity_range(
     }
 
 
-def empty_activity_resolution_answer(step_name: str, result: dict[str, Any]) -> str | None:
+def empty_activity_selection_answer(selection_mode: str, result: dict[str, Any]) -> str | None:
     payload = result.get("result") if isinstance(result.get("result"), dict) else result
     if not isinstance(payload, dict):
         return None
@@ -214,52 +82,15 @@ def empty_activity_resolution_answer(step_name: str, result: dict[str, Any]) -> 
     if not is_empty:
         return None
 
-    if step_name == "resolve_activity_range":
+    if selection_mode == "range":
         start = payload.get("start_date")
         end = payload.get("end_date")
         if start and end:
             return f"{start} 到 {end} 没有找到已索引的活动。"
         return "这个时间范围内没有找到已索引的活动。"
-    if step_name == "resolve_recent_activities":
+    if selection_mode == "recent":
         return "没有找到已索引的最近活动。你可以先重建索引或同步 Garmin 活动。"
     return "没有找到符合条件的活动。你可以先重建索引，或确认日期、序号、活动名称是否正确。"
-
-
-def _generate_upload_result_response(
-    upload_result: dict[str, Any],
-    step: dict[str, Any],
-    context: AgentContext,
-) -> str:
-    payload = {
-        "user_message": _latest_user_message(context),
-        "step": step,
-        "upload_result": upload_result,
-    }
-    response = AnthropicMessagesClient().create_message(
-        system=(
-            "你是 Personal FIT Agent 的 Strava 上传结果说明助手."
-            "只基于 upload_result 用中文简洁说明上传成功、重复、更新描述或失败原因;"
-            "不要补充新的活动分析,不要建议重新分析,除非工具错误明确要求先分析生成 summary."
-        ),
-        user=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        max_tokens=600,
-        temperature=0,
-    )
-    text = extract_text(response).strip()
-    return text or _format_upload_result_fallback(upload_result)
-
-
-def _format_upload_result_fallback(upload_result: dict[str, Any]) -> str:
-    if upload_result.get("error"):
-        return str(upload_result.get("message") or f"Strava 上传失败:{upload_result.get('error')}")
-    status = upload_result.get("status")
-    if status == "uploaded":
-        return f"Strava 上传成功,活动 ID: {upload_result.get('strava_activity_id')}。"
-    if status == "duplicate":
-        return str(upload_result.get("message") or "该活动已在 Strava 上存在。")
-    if status == "description_updated":
-        return str(upload_result.get("message") or "已更新 Strava 活动描述。")
-    return f"Strava 上传工具已返回结果: {status or 'unknown'}。"
 
 
 def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force: bool = False) -> dict[str, Any]:
@@ -292,18 +123,6 @@ def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force:
         "skipped": skipped,
         "failed": failed,
     }
-
-
-def _activities_need_summary_generation(activities: list[dict[str, Any]], *, force: bool = False) -> bool:
-    if force:
-        return True
-    return any(
-        not (
-            activity.get("summary_path")
-            and Path(str(activity.get("summary_path"))).expanduser().exists()
-        )
-        for activity in activities
-    )
 
 
 def _summary_generation_item(activity: dict[str, Any], *, status: str) -> dict[str, Any]:
@@ -414,22 +233,6 @@ def _read_summary_detail(summary_path: Any) -> dict[str, Any]:
         )
         if history_entry.get(key) is not None
     }
-
-
-def _current_fit_path(context: AgentContext) -> Path:
-    if not context.current_fit_file:
-        raise ValueError("current_fit_file is required")
-    return Path(context.current_fit_file).expanduser()
-
-
-def _fit_paths_from_items(items: list[Any]) -> list[Path]:
-    paths: list[Path] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        for path in item.get("paths") or []:
-            paths.append(Path(str(path)).expanduser())
-    return paths
 
 
 def _compact_range_activity(activity: dict[str, Any]) -> dict[str, Any]:

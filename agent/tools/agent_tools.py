@@ -6,43 +6,16 @@
 from __future__ import annotations
 
 from agent.tools.spec import (
-    CATEGORY_ACTIVITY_RESOLUTION,
+    CATEGORY_ACTIVITY_SELECTION,
     CATEGORY_ANALYSIS,
     CATEGORY_COACHING,
     CATEGORY_CONVERSATION,
     CATEGORY_OPERATION,
-    CATEGORY_PLANNING,
-    CATEGORY_STRAVA,
+    CATEGORY_WORKFLOW,
     ToolDef,
 )
 
 MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
-    # -- planning ------------------------------------------------------
-    ToolDef(
-        name="todo_write",
-        description=(
-            "创建或更新当前会话的 TODO 计划。仅用于规划和跟踪状态,不执行任何业务操作。"
-            "多步骤任务应先调用它,并在步骤状态变化时更新。"
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "todos": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "content": {"type": "string"},
-                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
-                        },
-                        "required": ["content", "status"],
-                    },
-                },
-            },
-            "required": ["todos"],
-        },
-        category=CATEGORY_PLANNING,
-    ),
     # -- conversation --------------------------------------------------
     ToolDef(
         name="casual_chat",
@@ -67,18 +40,14 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         name="find_activity",
         description=(
             "定位活动并写入当前会话上下文。"
-            "scope=current 使用当前活动; scope=recent 定位最近/最早 N 条;"
-            "scope=activity 按 activity_key/activity_index/date/name 定位单条;"
-            "scope=range 按日期范围定位多条。activity_index 是时间正序编号,1 表示最早。"
+            "根据提供的事实条件自动选择单条、范围或最近活动；不要传 scope/mode。"
+            "activity_key/activity_index/date/name 表示单条；start/end/relative_range/days 表示范围；"
+            "没有这些条件时返回最近 N 条。activity_index 是时间正序编号,1 表示最早。"
         ),
         input_schema={
             "type": "object",
             "properties": {
-                "scope": {
-                    "type": "string",
-                    "enum": ["current", "recent", "activity", "range"],
-                    "default": "recent",
-                },
+                "current": {"type": "boolean", "description": "使用当前已定位活动"},
                 "activity_key": {"type": "string"},
                 "activity_index": {"type": "integer"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 1},
@@ -86,7 +55,12 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "date_local": {"type": "string", "description": "ISO date, e.g. 2026-05-18"},
                 "date": {"type": "string", "description": "相对或 ISO 日期,如 today/yesterday/2026-05-18"},
                 "name": {"type": "string"},
-                "sport_type": {"type": "string"},
+                "sport_type": {"type": "string", "description": "可传 cycling/running/walking，也接受 Ride、骑行、run、跑步等常见别名。"},
+                "time_of_day": {
+                    "type": "string",
+                    "enum": ["morning", "afternoon", "evening", "night"],
+                    "description": "按本地开始时间过滤；morning 为 04:00-11:59。",
+                },
                 "match": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
                 "start_date": {"type": "string", "description": "ISO date"},
                 "end_date": {"type": "string", "description": "ISO date"},
@@ -95,25 +69,37 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "range": {"type": "string", "description": "可传 all 表示全部历史活动"},
             },
         },
-        category=CATEGORY_ACTIVITY_RESOLUTION,
+        category=CATEGORY_ACTIVITY_SELECTION,
     ),
     ToolDef(
         name="analyze_activity",
-        description="分析已定位的单条活动,生成或读取活动报告。通常先调用 find_activity。",
+        description="读取已定位单条活动的完整报告；已有 summary 时直接返回，缺失时才生成。通常先调用 find_activity，且不能用于批量逐条分析。",
         input_schema={
             "type": "object",
             "properties": {
                 "force": {"type": "boolean", "default": False, "description": "强制重新分析"},
-                "activity_key": {"type": "string"},
-                "activity_index": {"type": "integer"},
-                "user_request": {"type": "string"},
             },
         },
         category=CATEGORY_ANALYSIS,
     ),
     ToolDef(
+        name="query_activity_detail",
+        description=(
+            "回答单条活动必须读取 FIT 原始区间数据的定向问题，例如指定秒数、距离段、冲刺、爬升或分段。"
+            "先定位且只能选中一条活动；此工具会优先确保已有完整报告，再启动只读子 Agent 做一次定向查询。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "需要 FIT 原始数据验证的具体问题"},
+            },
+            "required": ["question"],
+        },
+        category=CATEGORY_ANALYSIS,
+    ),
+    ToolDef(
         name="summarize_activities",
-        description="汇总多条活动生成整体总结报告。",
+        description="汇总已定位的多条活动：优先读取已有 summary，仅对缺失 summary 的活动生成报告，然后一次性给出范围结论。",
         input_schema={
             "type": "object",
             "properties": {
@@ -162,29 +148,76 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
     ),
     # -- operation -----------------------------------------------------
     ToolDef(
-        name="download_activities",
-        description="下载最近的 Garmin 活动。有副作用，需要确认。",
+        name="sync_and_run_activity_workflow",
+        description=(
+            "从 Garmin 同步最近活动后，严格只处理本次同步并成功索引的活动。"
+            "可组合生成 summary、上传 Strava 和汇总；同步结果会冻结为持久化活动快照。"
+            "用户要求“同步/下载后分析并上传”时使用此工具；不要把同步、分析和上传拆成对话中的多次调用。"
+        ),
         input_schema={
             "type": "object",
-            "properties": {"count": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5}},
+            "properties": {
+                "count": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                "goals": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["ensure_summary", "upload_strava", "aggregate_report"]},
+                },
+                "force": {"type": "boolean", "default": False},
+                "force_upload": {"type": "boolean", "default": False},
+            },
         },
         category=CATEGORY_OPERATION,
     ),
+    # -- persistent activity workflow --------------------------------
     ToolDef(
-        name="analyze_new_activities",
-        description="对刚下载得到的新 FIT 运行保存型分析。需要 download_activities 先执行。",
-        input_schema={"type": "object", "properties": {}},
-        category=CATEGORY_OPERATION,
-    ),
-    # -- strava --------------------------------------------------------
-    ToolDef(
-        name="upload_activity",
-        description="直接上传 Strava，不额外分析或刷新报告。有副作用，需要确认。",
+        name="run_activity_workflow",
+        description=(
+            "对本地已存在的多条活动创建并推进持久化工作流。"
+            "可组合生成单条 summary、上传 Strava、汇总；任务状态会持久化，可在失败后重试。"
+            "本地已有活动无需同步 Garmin。"
+        ),
         input_schema={
             "type": "object",
-            "properties": {"force": {"type": "boolean", "default": False, "description": "遇到重复时更新描述"}},
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 5},
+                "order": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
+                "sport_type": {"type": "string"},
+                "goals": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["ensure_summary", "upload_strava", "aggregate_report"]},
+                    "description": "目标可组合；upload_strava 和 aggregate_report 会自动依赖 ensure_summary。",
+                },
+                "force": {"type": "boolean", "default": False, "description": "重新生成已有 summary"},
+                "force_upload": {"type": "boolean", "default": False, "description": "重复活动时更新 Strava 描述"},
+            },
         },
-        category=CATEGORY_STRAVA,
+        category=CATEGORY_WORKFLOW,
+    ),
+    ToolDef(
+        name="get_activity_workflow",
+        description="读取持久化活动工作流的真实状态和任务结果；不执行操作。",
+        input_schema={
+            "type": "object",
+            "properties": {"workflow_id": {"type": "string"}},
+            "required": ["workflow_id"],
+        },
+        category=CATEGORY_WORKFLOW,
+    ),
+    ToolDef(
+        name="retry_activity_workflow",
+        description=(
+            "重试一个工作流中失败的任务；会恢复因其失败被跳过的下游任务和旧的 partial 汇总。"
+            "重试会直接推进可恢复的任务。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "workflow_id": {"type": "string"},
+                "task_ids": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["workflow_id"],
+        },
+        category=CATEGORY_WORKFLOW,
     ),
 )
 

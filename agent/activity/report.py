@@ -7,7 +7,6 @@ from typing import Any
 
 from agent.activity.analysis_agent import run_activity_analysis_agent
 from agent.activity.comparison import read_activity_summary
-from agent.activity.permission import request_analysis_write_confirmation
 from agent.context import AgentContext
 
 
@@ -38,10 +37,6 @@ def show_selected_activity_report_tool(
         if generated.get("error"):
             return generated
         return generated
-
-    user_request = str(args.get("user_request") or "").strip()
-    if user_request and isinstance(summary, dict):
-        return _answer_targeted_question(name, context, activity, summary, summary_path, user_request)
 
     if error or summary is None:
         generated = _analyze_missing_summary(name, args, context, activity)
@@ -75,6 +70,36 @@ def show_selected_activity_report_tool(
             "history_entry": summary.get("history_entry") if isinstance(summary.get("history_entry"), dict) else {},
         },
     }
+
+
+def query_selected_activity_detail_tool(
+    context: AgentContext,
+    *,
+    question: str,
+    name: str = "query_activity_detail",
+) -> dict[str, Any]:
+    """Answer a FIT-level question, creating the normal summary first when absent."""
+    if not question:
+        return {"error": "missing_question", "message": "query_activity_detail requires a concrete question."}
+    activity = _selected_activity(context)
+    if not activity:
+        return {"error": "missing_selected_activity", "message": "query_activity_detail requires a resolved activity."}
+
+    summary_path, summary, error = read_activity_summary(activity)
+    if error or summary is None:
+        generated = _analyze_missing_summary(name, {}, context, activity)
+        if generated.get("error"):
+            return generated
+        summary_path, summary, error = read_activity_summary({
+            **activity,
+            "summary_path": generated.get("result", {}).get("summary_path"),
+        })
+        if error or not isinstance(summary, dict):
+            return {
+                "error": "missing_summary_after_analysis",
+                "message": "完整报告生成后无法读取 summary，无法继续定向查询。",
+            }
+    return _answer_targeted_question(name, context, activity, summary, summary_path, question)
 
 
 def _answer_targeted_question(
@@ -137,10 +162,6 @@ def _analyze_missing_summary(
             "message": "Selected activity does not have a readable summary report or FIT path.",
             "activity": activity,
         }
-
-    permission = request_analysis_write_confirmation(context, tool_name=name, args=args)
-    if permission is not None:
-        return permission
 
     analysis = run_activity_analysis_agent(
         str(fit_path),

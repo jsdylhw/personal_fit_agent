@@ -25,7 +25,7 @@ class AgentContext:
       current_fit_file / current_activity_key / current_summary_path
 
     内部缓存:
-      pending_action / last_failed_action / current_todos / parsed / history_before
+      last_failed_action / parsed / history_before
     """
 
     session_id: str
@@ -46,10 +46,6 @@ class AgentContext:
     current_summary_path: Path | None = None
 
     # 内部缓存
-    pending_action: dict[str, Any] | None = None
-    current_todos: list[dict[str, Any]] = field(default_factory=list)
-    todo_rounds_since_update: int = 0
-    permission_grants: set[str] = field(default_factory=set)
     parsed: dict[str, Any] | None = None
     history_before: dict[str, Any] | None = None
 

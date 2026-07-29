@@ -27,12 +27,12 @@ class IntentKind(str, Enum):
 
 # 工具组 → ToolDef category 映射
 TOOL_GROUP = {
-    "resolve": {"activity_resolution"},
+    "resolve": {"activity_selection"},
     "analyze": {"analysis"},
     "fit_query": {"fit_query"},
     "coaching": {"coaching"},
     "operation": {"operation"},
-    "strava": {"strava"},
+    "workflow": {"workflow"},
     "chat": {"conversation"},
 }
 
@@ -40,14 +40,14 @@ TOOL_GROUP = {
 INTENT_TOOL_GROUPS: dict[IntentKind, set[str]] = {
     IntentKind.CHAT:           {"chat"},
     IntentKind.ANALYZE_SINGLE: {"resolve", "analyze", "fit_query"},
-    IntentKind.ANALYZE_RANGE:  {"resolve", "analyze"},
+    IntentKind.ANALYZE_RANGE:  {"resolve", "analyze", "workflow"},
     IntentKind.COMPARE:        {"resolve", "analyze"},
     IntentKind.TRAINING_LOAD:  {"resolve", "analyze"},
     IntentKind.TRAINING_ADVICE: {"resolve", "analyze", "coaching"},
     IntentKind.ROUTE_ADVICE:   {"coaching"},
     IntentKind.SYNC:           {"operation"},
-    IntentKind.UPLOAD:         {"resolve", "strava", "operation"},
-    IntentKind.MIXED:          {"resolve", "analyze", "fit_query", "coaching", "operation", "strava"},
+    IntentKind.UPLOAD:         {"resolve", "operation", "workflow"},
+    IntentKind.MIXED:          {"resolve", "analyze", "fit_query", "coaching", "operation", "workflow"},
 }
 
 
@@ -57,7 +57,6 @@ class Intent:
     kind: IntentKind
     tool_groups: set[str] = field(default_factory=set)
     allow_side_effects: bool = False
-    needs_confirmation: bool = False
 
 
 def route_intent(user_message: str) -> Intent:
@@ -73,23 +72,21 @@ def route_intent(user_message: str) -> Intent:
         return Intent(kind=IntentKind.CHAT, tool_groups=INTENT_TOOL_GROUPS[IntentKind.CHAT])
 
     # 副作用操作 — 检查是否混合意图(同步并分析/上传前分析)
-    wants_sync = any(t in text for t in ("下载", "同步", "sync", "garmin"))
-    wants_upload = any(t in text for t in ("上传", "strava", "upload"))
+    wants_sync = _has_positive_action(text, ("下载", "同步", "sync", "garmin"))
+    wants_upload = _has_positive_action(text, ("上传", "strava", "upload"))
     wants_analyze = any(t in text for t in ("分析", "查看", "报告", "总结", "汇总"))
 
     if wants_sync and wants_analyze:
-        return Intent(kind=IntentKind.MIXED,
-                      tool_groups={"resolve", "analyze", "operation", "fit_query"},
-                      allow_side_effects=True)
+        groups = {"resolve", "analyze", "operation", "fit_query", "workflow"}
+        return Intent(kind=IntentKind.MIXED, tool_groups=groups, allow_side_effects=True)
 
     if wants_sync and not wants_upload:
         return Intent(kind=IntentKind.SYNC, tool_groups=INTENT_TOOL_GROUPS[IntentKind.SYNC],
                       allow_side_effects=True)
 
-    force_upload = any(t in text for t in ("强制上传", "force upload", "覆盖上传"))
     if wants_upload:
         return Intent(kind=IntentKind.UPLOAD, tool_groups=INTENT_TOOL_GROUPS[IntentKind.UPLOAD],
-                      allow_side_effects=True, needs_confirmation=not force_upload)
+                      allow_side_effects=True)
 
     # 分析类
     wants_compare = any(t in text for t in ("比较", "对比", "差异", "哪次更好", "哪次更"))
@@ -116,8 +113,12 @@ def route_intent(user_message: str) -> Intent:
     if wants_range:
         return Intent(kind=IntentKind.ANALYZE_RANGE, tool_groups=INTENT_TOOL_GROUPS[IntentKind.ANALYZE_RANGE])
 
-    # 默认: 单活动分析
-    return Intent(kind=IntentKind.ANALYZE_SINGLE, tool_groups=INTENT_TOOL_GROUPS[IntentKind.ANALYZE_SINGLE])
+    # 单活动分析必须有明确的运动数据线索。不能因为会话中恰好保留了 FIT，
+    # 就把普通对话错误地暴露为分析工具面。
+    if _has_activity_signal(text):
+        return Intent(kind=IntentKind.ANALYZE_SINGLE, tool_groups=INTENT_TOOL_GROUPS[IntentKind.ANALYZE_SINGLE])
+
+    return Intent(kind=IntentKind.CHAT, tool_groups=INTENT_TOOL_GROUPS[IntentKind.CHAT])
 
 
 def intent_tool_categories(intent: Intent) -> set[str]:
@@ -127,3 +128,30 @@ def intent_tool_categories(intent: Intent) -> set[str]:
         cats = TOOL_GROUP.get(group, set())
         categories.update(cats)
     return categories
+
+
+def _has_positive_action(text: str, terms: tuple[str, ...]) -> bool:
+    """识别操作意图，忽略“不要/不需要/无需”明确否定的关键词。"""
+    negations = ("不要", "不需要", "无需", "不用", "别", "不必")
+    for term in terms:
+        start = 0
+        while True:
+            index = text.find(term, start)
+            if index < 0:
+                break
+            # 中文否定通常紧挨在动词前；保留较短窗口避免吞掉上句的无关否定。
+            prefix = text[max(0, index - 6):index]
+            if not any(negation in prefix for negation in negations):
+                return True
+            start = index + len(term)
+    return False
+
+
+def _has_activity_signal(text: str) -> bool:
+    """识别没有显式“分析”一词的单活动数据问题。"""
+    signals = (
+        "活动", "骑行", "骑车", "跑步", "训练", "fit", "功率", "心率", "踏频",
+        "配速", "冲刺", "爬升", "公里", "距离", "速度", "tss", "if", "np",
+        "这次", "本次", "这趟", "表现如何", "表现怎么样",
+    )
+    return any(signal in text for signal in signals)

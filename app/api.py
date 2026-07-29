@@ -19,15 +19,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from core.config import cfg_get, load_config
-from core.activity_index import upsert_activity_from_fit
-from agent.activity.analysis_agent import analyze_fit_file
-from core.garmin_cn import (
-    DEFAULT_OUTPUT_DIR,
-    build_downloader,
-    existing_fit_paths,
-    save_original_as_fit,
+from agent.activity.operations.service import (
+    analyze_fit_document,
+    check_garmin_connection,
+    sync_garmin_activities_tool,
+    upload_summary_document,
 )
-from core.strava_upload import upload_summary_to_strava
+from core.garmin_cn import DEFAULT_OUTPUT_DIR
 from fit.parser import parse_fit
 
 
@@ -50,7 +48,6 @@ class UploadStravaRequest(BaseModel):
     summary_path: str
     title: str | None = None
     wait: bool = True
-    confirmed: bool = False
     force: bool = False
 
 
@@ -87,10 +84,7 @@ def dashboard_status_endpoint(request: Request) -> dict[str, Any]:
 @app.post("/api/garmin/connect")
 def garmin_connect_endpoint(request: Request) -> dict[str, Any]:
     _require_api_access(request)
-    downloader = build_downloader(load_config())
-    downloader.login()
-    activities = downloader.list_activities(1)
-    return {"status": "connected", "latest_activity": activities[0] if activities else None}
+    return check_garmin_connection()
 
 
 @app.post("/api/garmin/download")
@@ -100,74 +94,30 @@ def garmin_download_endpoint(request: DownloadGarminRequest, http_request: Reque
     output_dir = _fit_output_dir(config)
     count = request.count or int(cfg_get(config, "download_count", 5))
 
-    downloader = build_downloader(config)
-    downloader.login()
-    activities = downloader.list_activities(count)
-    results: list[dict[str, Any]] = []
-    for activity in activities:
-        activity_id = activity.get("activityId")
-        existing_paths = existing_fit_paths(output_dir, activity)
-        if existing_paths:
-            index_results = _index_downloaded_fit_paths(existing_paths, activity_id)
-            results.append(
-                {
-                    "activity_id": activity_id,
-                    "name": activity.get("activityName"),
-                    "status": "skipped_existing",
-                    "paths": [str(path) for path in existing_paths],
-                    "index_results": index_results,
-                }
-            )
-            continue
-
-        raw_bytes = downloader.download_original(activity_id)
-        saved_paths = save_original_as_fit(raw_bytes, output_dir, activity)
-        index_results = _index_downloaded_fit_paths(saved_paths, activity_id)
-        results.append(
-            {
-                "activity_id": activity_id,
-                "name": activity.get("activityName"),
-                "status": "downloaded",
-                "paths": [str(path) for path in saved_paths],
-                "index_results": index_results,
-            }
-        )
+    result = sync_garmin_activities_tool(count=count)
+    results = [
+        {**item, "status": "downloaded"}
+        for item in result.get("downloaded_items") or []
+    ]
+    results.extend(
+        {**item, "status": "skipped_existing"}
+        for item in result.get("skipped_items") or []
+    )
+    results.extend(
+        {**item, "status": "failed"}
+        for item in result.get("failed_items") or []
+    )
 
     return {
-        "status": "ok",
-        "fit_dir": str(output_dir),
+        "status": "partial" if result.get("failed") else "ok",
+        "fit_dir": result.get("fit_dir") or str(output_dir),
         "count": len(results),
-        "downloaded": sum(1 for item in results if item["status"] == "downloaded"),
-        "skipped": sum(1 for item in results if item["status"] == "skipped_existing"),
+        "downloaded": int(result.get("downloaded") or 0),
+        "skipped": int(result.get("skipped") or 0),
+        "failed": int(result.get("failed") or 0),
+        "index_errors": result.get("index_errors") or [],
         "results": results,
     }
-
-
-def _index_downloaded_fit_paths(paths: list[Path], activity_id: Any) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    for path in paths:
-        try:
-            entry = upsert_activity_from_fit(
-                path,
-                source="garmin_cn",
-                source_activity_id=str(activity_id) if activity_id is not None else None,
-            )
-        except Exception as exc:
-            results.append({
-                "path": str(path),
-                "status": "failed",
-                "error": type(exc).__name__,
-                "message": str(exc),
-            })
-            continue
-        results.append({
-            "path": str(path),
-            "status": "indexed",
-            "activity_key": entry.get("activity_key"),
-            "sport_type": entry.get("sport_type"),
-            "start_time_local": entry.get("start_time_local"),
-        })
-    return results
 
 
 @app.get("/api/fit-files")
@@ -190,7 +140,7 @@ def analyze_fit_endpoint(request: AnalyzeFitRequest, http_request: Request) -> d
         suffix=".fit",
         label="FIT file",
     )
-    return analyze_fit_file(fit_path, use_history=request.history, force=request.force)
+    return analyze_fit_document(fit_path, use_history=request.history, force=request.force)
 
 
 @app.get("/api/summary")
@@ -219,9 +169,7 @@ def strava_upload_endpoint(request: UploadStravaRequest, http_request: Request) 
         suffix=".summary.json",
         label="summary file",
     )
-    if not request.confirmed:
-        raise HTTPException(status_code=409, detail="Set confirmed=true to upload to Strava.")
-    return upload_summary_to_strava(
+    return upload_summary_document(
         summary_path,
         title=request.title,
         wait=request.wait,
