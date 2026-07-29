@@ -8,17 +8,18 @@
 Garmin 中国 / 本地 FIT -> 活动索引 -> 原生 tool-use loop -> 本地工具函数 -> Markdown 报告 / summary JSON / Strava 上传
 ```
 
-当前主路径是 `python -m app.cli chat`:大模型直接通过 tool_use 选择工具,运行时按工具名调用本地 handler,权限和前置条件由 hook/guard 处理。
+当前主路径是 `python -m app.cli chat`:大模型直接通过 tool_use 选择工具,运行时按工具名调用本地 handler；批量副作用操作统一创建持久化工作流，guard 只校验参数和数据前置条件。
 
 ## 功能
 
 - 下载 Garmin 中国最近活动为 `.fit` 文件,本地已存在时跳过。
 - 分析单个 FIT,生成 Markdown 活动报告和 `data/summaries/*.summary.json`。
-- 通过 `chat` 用自然语言定位活动、分析单次活动、汇总活动范围、比较活动、总结训练负荷和上传 Strava。
+- 通过 `chat` 用自然语言定位活动、分析单次活动、汇总活动范围、比较活动、总结训练负荷，以及创建可恢复的 Strava 上传工作流。
+- 对本地已有的多条活动，可创建持久化工作流：逐条确保 summary、按需上传 Strava，并在所有单条结果后生成汇总；进程中断后可从同一 Run 继续。
 - 单活动分析由 ActivityAnalysisAgent 子会话完成:模型只能按需读取概览、结构化摘要、区间数据、冲刺/爬坡扫描和历史记录。
 - 分析会按 `sport_type` 区分骑行和跑步：跑步报告使用配速、公里分段、心率、步频和存在的跑步动态数据；没有跑步动态传感器时会明确标为数据缺失。
 - Main Agent 日志以可读 Markdown 为主,记录 intent、工具调用步骤、选中活动和关键结果。
-- Strava 上传使用本地 summary 中的 `fit_path` 和 `strava_summary`;上传步骤会直接执行上传,再把工具返回结果交给大模型组织说明。
+- Strava 上传使用本地 summary 中的 `fit_path` 和 `strava_summary`；批量上传由 ActivityRun 的原子任务执行并持久化结果。
 
 ## 安装
 
@@ -170,16 +171,47 @@ python -m app.cli update-strava-description STRAVA_ACTIVITY_ID "data/summaries/a
 
 - `find_activity`
 - `analyze_activity`
+- `query_activity_detail`
 - `summarize_activities`
 - `compare_activities`
 - `summarize_recent_training_load`
 - `generate_training_advice`
 - `generate_route_advice`
-- `download_activities`
-- `analyze_new_activities`
-- `upload_activity`
+- `sync_and_run_activity_workflow`
+- `run_activity_workflow`
+- `get_activity_workflow`
+- `retry_activity_workflow`
 
-运行时逻辑很薄:循环读取 tool_use,检查权限与 guard,找到同名 handler 执行,把 tool_result 返回给大模型。已删除旧的 planner / validator / selector / executor 层。
+运行时逻辑很薄:循环读取 tool_use,检查 guard,找到同名 handler 执行,把 tool_result 返回给大模型。已删除旧的 planner / validator / selector / executor 层，也不再暴露依赖会话临时状态的“下载后再分析/上传”工具链。
+
+单活动完整报告使用 `analyze_activity`：已有 summary 时只读取报告，缺失时才调用 FIT 子 Agent 生成。只有“100–200 秒有没有冲刺”“第几公里掉速”等必须查询原始 FIT 区间的单条问题才使用 `query_activity_detail`；它不会覆盖原有 summary。多条活动一律使用 `summarize_activities`，优先读取每条已有 summary，仅补齐缺失报告。
+
+## 批量活动工作流
+
+当请求是“本地最近五条分析后上传”或“汇总本地活动”时，Main Agent 使用 `run_activity_workflow`。Run 会在创建时冻结目标活动快照，并持久化每项任务：
+
+```text
+ActivityRun
+  activity A -> ensure_summary -> upload_strava
+  activity B -> ensure_summary -> upload_strava
+  ...
+  all ensure_summary ----------> aggregate_report
+```
+
+- summary、上传与汇总任务会按依赖顺序直接执行；任务状态和每次尝试都保存到 Run，失败后可精确重试。
+- 已有的 summary 和已记录的 Strava activity ID 会跳过对应操作。
+- 失败任务可通过 `retry_activity_workflow` 重试；其依赖失败而跳过的下游任务、以及旧的 partial 汇总会被重新排队，历史尝试保存在任务快照中。
+- 若请求是“同步 Garmin 最近五条，再分析并上传”，使用 `sync_and_run_activity_workflow`。它仅将本次已成功索引的活动写入同一个 Run；同步结果（请求数量、下载/跳过/失败数、活动 key、失败项）保存到 `request.sync`，不会因后续对话重新选择“最近五条”而漂移。
+- Run 文件位于 `data/activity_runs/<workflow_id>.json`，是业务事实和恢复依据；对话不再维护独立 TODO 状态。
+
+在 chat 中可直接这样说：
+
+```text
+分析本地最近五个活动并生成汇总
+分析最近三个上午的活动
+把本地最近五个已分析活动上传到 Strava
+重试工作流 <workflow_id> 中失败的上传
+```
 
 ## 输出文件
 
@@ -188,6 +220,7 @@ garmin_cn_fit_files/          # 下载的原始 FIT 文件
 data/activity_index.json      # 本地活动索引,用于按日期/序号/范围定位活动
 data/activity_history.jsonl   # 大模型生成的紧凑训练历史
 data/summaries/               # 每条活动的 summary JSON
+data/activity_runs/            # 批量 ActivityRun 的持久化任务快照
 log/                          # Main Agent 和单活动分析日志,以 Markdown 可读日志为主
 ```
 
