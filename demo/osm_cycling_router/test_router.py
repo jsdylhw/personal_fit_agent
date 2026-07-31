@@ -8,7 +8,11 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.error import URLError
 
 from demo.osm_cycling_router.router import Point, SEMICIRCLE_TO_DEGREES, round_trip, semicircles_to_degrees
-from demo.osm_cycling_router.strava_segments import explore_segments
+from demo.osm_cycling_router.strava_segments import (
+    COMPATIBLE_API_BASE_URL,
+    DEFAULT_API_BASE_URL,
+    explore_segments,
+)
 
 
 class RouterHelpersTest(unittest.TestCase):
@@ -45,6 +49,28 @@ class RouterHelpersTest(unittest.TestCase):
         self.assertEqual(query["ch.disable"], ["true"])
         self.assertEqual(query["round_trip.distance"], ["10000"])
         self.assertEqual(query["round_trip.seed"], ["4"])
+
+    def test_segment_explorer_falls_back_to_compatible_hostname_after_tls_error(self):
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        payload = json.dumps({"segments": [{"id": 1, "name": "测试路段"}]}).encode()
+        with patch(
+            "demo.osm_cycling_router.strava_segments.urlopen",
+            side_effect=[URLError("TLS EOF"), Response(payload)],
+        ) as open_request:
+            result = explore_segments("31.0,121.0,31.1,121.1", "token", retry_attempts=1)
+
+        self.assertEqual(result["api_base_url"], COMPATIBLE_API_BASE_URL)
+        self.assertEqual(result["segment_count"], 1)
+        first_url = open_request.call_args_list[0].args[0].full_url
+        second_url = open_request.call_args_list[1].args[0].full_url
+        self.assertTrue(first_url.startswith(DEFAULT_API_BASE_URL))
+        self.assertTrue(second_url.startswith(COMPATIBLE_API_BASE_URL))
 
 
 if __name__ == "__main__":
