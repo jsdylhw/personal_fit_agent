@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agent.context import AgentContext
+from agent.main_agent.guard import guard_tool_call
 from agent.main_agent.intent import intent_tool_categories, route_intent
 from agent.main_agent.tools import TOOL_HANDLERS
 from agent.tools.agent_tools import MAIN_AGENT_TOOLS
@@ -87,6 +88,30 @@ def test_router_keeps_non_activity_conversation_in_chat_mode():
 
 def test_router_still_recognizes_implicit_single_activity_question():
     assert route_intent("这次骑行表现怎么样").kind.value == "analyze_single"
+
+
+def test_guard_rejects_registered_tool_outside_the_current_category_allowlist():
+    result = guard_tool_call(
+        "sync_and_run_activity_workflow",
+        {"count": 1},
+        context=AgentContext(session_id="guard"),
+        allowed_categories={"conversation"},
+    )
+
+    assert result.allowed is False
+    assert "不在本轮允许" in result.reason
+
+
+def test_guard_rejects_unknown_tool_before_handler_dispatch():
+    result = guard_tool_call(
+        "unadvertised_side_effect",
+        {},
+        context=AgentContext(session_id="guard"),
+        allowed_categories={"conversation"},
+    )
+
+    assert result.allowed is False
+    assert "未知或未注册" in result.reason
 
 
 def test_analyze_activity_refuses_to_reanalyze_a_selected_range():

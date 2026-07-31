@@ -37,10 +37,17 @@ def guard_tool_call(
 ) -> GuardResult:
     """校验工具调用的前置条件.
 
+    - 工具白名单: 只能调用本轮暴露类别中的已注册 Main Agent 工具
     - 依赖检查: analyze 需要 selected_activities
     - 参数检查: sync count 范围
     - 不涉及副作用审批
     """
+    category = _tool_category(tool_name)
+    if category is None:
+        return GuardResult(allowed=False, reason=f"未知或未注册工具: {tool_name}")
+    if category not in allowed_categories:
+        return GuardResult(allowed=False, reason=f"{tool_name} 不在本轮允许的工具类别中")
+
     # 依赖检查
     deps = TOOL_DEPENDENCIES.get(tool_name, set())
     if "selected_activities" in deps and not has_resolved:
@@ -56,3 +63,13 @@ def guard_tool_call(
             return GuardResult(allowed=False, reason="count 必须在 1-20 之间")
 
     return GuardResult(allowed=True)
+
+
+def _tool_category(tool_name: str) -> str | None:
+    """从唯一的 Main Agent 工具目录查询类别，避免依赖可变 handler 表。"""
+    from agent.tools.agent_tools import MAIN_AGENT_TOOLS
+
+    for tool in MAIN_AGENT_TOOLS:
+        if tool.name == tool_name:
+            return tool.category
+    return None
