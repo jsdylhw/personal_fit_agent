@@ -263,6 +263,9 @@ def _build_llm_unavailable_result(intent, context, *, steps: list[dict], error: 
         "type": type(error).__name__,
         "message": str(error),
     }
+    workflow_answer = _completed_workflow_fallback(context)
+    if workflow_answer:
+        return _result("llm_unavailable", intent, context, steps, workflow_answer)
     answer = (
         "LLM 服务连接暂时不可用，已保留本轮活动选择和已执行工具状态。"
         f"本轮已执行 {len(steps)} 步；不会自动执行新的下载、分析或上传。\n\n"
@@ -353,9 +356,63 @@ def _build_state_preamble(context):
     if context.current_fit_file: parts.append(f"当前 FIT: {context.current_fit_file}")
     if context.selected_activities: parts.append(f"已选活动: {len(context.selected_activities)} 条")
     if context.selected_activity_range: parts.append(f"活动范围: {json.dumps(context.selected_activity_range, ensure_ascii=False)}")
+    workflow = _last_workflow_result(context)
+    if workflow:
+        workflow_id = str(workflow.get("workflow_id") or "")
+        status = str(workflow.get("status") or "unknown")
+        if workflow_id:
+            parts.append(f"最近工作流: {workflow_id}（{status}；仅用于衔接刚才的批量操作）")
     if not parts:
         return ""
     return "\n".join(["[本轮状态]", *parts])
+
+
+def _last_workflow_result(context: AgentContext) -> dict[str, Any] | None:
+    """返回最近一次工作流工具的原始结果，避免依赖已裁剪的 tool_result 消息。"""
+    last = context.last_tool_result or {}
+    if last.get("step_name") not in {
+        "run_activity_workflow",
+        "sync_and_run_activity_workflow",
+        "get_activity_workflow",
+        "retry_activity_workflow",
+    }:
+        return None
+    result = last.get("result")
+    return result if isinstance(result, dict) and result.get("workflow_id") else None
+
+
+def _completed_workflow_fallback(context: AgentContext) -> str | None:
+    """LLM 在工具执行后断线时，仍如实报告已完成的持久化 Run。"""
+    workflow = _last_workflow_result(context)
+    if not workflow or workflow.get("status") != "completed":
+        return None
+
+    task_counts: dict[str, int] = {}
+    for task in workflow.get("tasks") or []:
+        if isinstance(task, dict):
+            status = str(task.get("status") or "unknown")
+            task_counts[status] = task_counts.get(status, 0) + 1
+
+    details = []
+    sync = workflow.get("sync")
+    if isinstance(sync, dict):
+        details.append(
+            f"同步：下载 {int(sync.get('downloaded') or 0)} 条，跳过 {int(sync.get('skipped') or 0)} 条"
+        )
+    if task_counts:
+        details.append(
+            "任务：" + "，".join(
+                f"{label} {task_counts.get(status, 0)}"
+                for status, label in (("completed", "完成"), ("skipped", "跳过"), ("failed", "失败"))
+                if task_counts.get(status, 0)
+            )
+        )
+
+    summary = "；".join(details) or "所有已规划任务均已完成"
+    return (
+        f"工作流已完成：{workflow['workflow_id']}。{summary}。\n\n"
+        "LLM 仅在生成最终说明时连接中断；不会重复执行同步、分析或上传。"
+    )
 
 def _log_hdr(message, intent, tool_count, has_fit):
     from agent.main_agent.hooks import _log

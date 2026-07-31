@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from agent.context import AgentContext
 from agent.llm import LLMRequestError
-from agent.main_agent.loop import MAX_TOOL_STEPS, _build_system_prompt, run_tool_loop
+from agent.main_agent.loop import MAX_TOOL_STEPS, _build_state_preamble, _build_system_prompt, run_tool_loop
 
 
 def test_main_prompt_prefers_persistent_workflows():
@@ -76,6 +76,35 @@ def test_llm_disconnect_keeps_completed_tool_state(monkeypatch):
     assert context.last_llm_error["type"] == "LLMRequestError"
 
 
+def test_llm_disconnect_after_completed_workflow_reports_real_completion(monkeypatch):
+    context = AgentContext(session_id="test-workflow-disconnect")
+    monkeypatch.setattr(
+        "agent.activity.workflow_service.sync_and_start_activity_workflow",
+        lambda **kwargs: {
+            "status": "completed",
+            "workflow_id": "run-finished",
+            "sync": {"downloaded": 2, "skipped": 1},
+            "tasks": [
+                {"status": "completed"}, {"status": "completed"}, {"status": "skipped"},
+            ],
+        },
+    )
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
+        client.return_value.create_messages.side_effect = [
+            {"id": "msg-sync", "content": [
+                {"type": "tool_use", "name": "sync_and_run_activity_workflow", "id": "tu-sync", "input": {"count": 3}},
+            ], "stop_reason": "tool_use"},
+            LLMRequestError("connection closed"),
+        ]
+        result = run_tool_loop("同步最新三条活动，分析并上传", context=context)
+
+    assert result["status"] == "llm_unavailable"
+    assert "工作流已完成：run-finished" in result["answer"]
+    assert "同步：下载 2 条，跳过 1 条" in result["answer"]
+    assert "不会重复执行" in result["answer"]
+    assert "最近工作流: run-finished（completed" in _build_state_preamble(context)
+
+
 def test_max_steps_exceeded_returns_not_completed():
     context = AgentContext(session_id="test-max")
     response = {
@@ -85,7 +114,7 @@ def test_max_steps_exceeded_returns_not_completed():
     }
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
         client.return_value.create_messages.return_value = response
-        result = run_tool_loop("分析", context=context)
+        result = run_tool_loop("分析最近活动", context=context)
 
     assert result["status"] == "max_steps_exceeded"
     assert len(result["steps"]) == MAX_TOOL_STEPS
