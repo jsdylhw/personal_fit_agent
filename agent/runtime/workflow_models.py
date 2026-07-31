@@ -102,6 +102,8 @@ def transition_task(run: dict[str, Any], task_id: str, status: str, **details: A
 
 def retry_task(run: dict[str, Any], task_id: str) -> dict[str, Any]:
     """只允许失败任务进入新的 pending 尝试，并保留上一次失败信息。"""
+    if run.get("status") == "cancelled":
+        raise WorkflowStateError("cannot retry a cancelled workflow")
     task = task_by_id(run, task_id)
     if task.get("status") != "failed":
         # 保持既有的状态机错误信息和校验语义。
@@ -121,6 +123,8 @@ def retry_failed_tasks(
     聚合类任务允许失败依赖并可能已经生成 partial 结果；只要它依赖被重试的
     任务，也必须重新计算，不能继续展示旧聚合快照。
     """
+    if run.get("status") == "cancelled":
+        raise WorkflowStateError("cannot retry a cancelled workflow")
     tasks = {str(task.get("task_id")): task for task in run.get("tasks") or [] if isinstance(task, dict)}
     requested = [str(task_id) for task_id in task_ids] if task_ids is not None else [
         task_id for task_id, task in tasks.items() if task.get("status") == "failed"
@@ -166,6 +170,31 @@ def cancel_workflow(run: dict[str, Any], *, reason: str = "cancelled_by_user") -
     run["status"] = "cancelled"
     run["cancellation"] = {"reason": reason, "created_at": _now()}
     run["updated_at"] = _now()
+
+
+def recover_interrupted_tasks(run: dict[str, Any]) -> list[str]:
+    """将上次进程退出时遗留的 running 任务变为可审计的失败状态。
+
+    ``running`` 已经写入检查点，说明 handler 是否真正完成未知。特别是上传
+    任务不能在没有用户确认的情况下假装 exactly-once 地自动重放；调用方可以
+    通过现有 retry 接口显式开始下一次尝试。
+    """
+    if run.get("status") == "cancelled":
+        return []
+    recovered: list[str] = []
+    for task in run.get("tasks") or []:
+        if not isinstance(task, dict) or task.get("status") != "running":
+            continue
+        task_id = str(task.get("task_id") or "")
+        transition_task(
+            run,
+            task_id,
+            "failed",
+            error="interrupted",
+            message="Task was running when the previous process stopped; retry explicitly to continue.",
+        )
+        recovered.append(task_id)
+    return recovered
 
 
 def refresh_workflow_status(run: dict[str, Any]) -> str:

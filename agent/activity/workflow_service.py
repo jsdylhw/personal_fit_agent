@@ -16,8 +16,19 @@ from agent.activity.workflow_factory import (
     create_local_activity_run,
 )
 from agent.activity.operations.garmin import sync_recent
-from agent.runtime.workflow_models import WorkflowStateError, retry_failed_tasks, workflow_overview
-from agent.runtime.workflow_store import load_workflow, save_workflow, workflow_path
+from agent.runtime.workflow_models import (
+    WorkflowStateError,
+    recover_interrupted_tasks,
+    retry_failed_tasks,
+    workflow_overview,
+)
+from agent.runtime.workflow_store import (
+    WorkflowLockError,
+    acquire_workflow_lock,
+    load_workflow,
+    save_workflow,
+    workflow_path,
+)
 
 
 def start_local_activity_workflow(
@@ -133,27 +144,44 @@ def retry_activity_workflow(
     if run is None:
         return _not_found(workflow_id)
     try:
-        revived_task_ids = retry_failed_tasks(run, task_ids=task_ids)
-    except WorkflowStateError as exc:
-        return {
-            "schema_version": "activity_workflow_service.v1",
-            "status": "failed",
-            "error": "retry_not_available",
-            "message": str(exc),
-            "workflow": workflow_overview(run),
-        }
-    if not revived_task_ids:
+        with acquire_workflow_lock(workflow_id, directory=target_directory):
+            # The prior lock holder may have checkpointed after our first read.
+            run = load_workflow(workflow_id, directory=target_directory)
+            if run is None:
+                return _not_found(workflow_id)
+            # A lock guarantees no active executor owns this Run.  Only now
+            # may a persisted running task be classified as crash-interrupted.
+            if recover_interrupted_tasks(run):
+                save_workflow(run, directory=target_directory)
+            try:
+                revived_task_ids = retry_failed_tasks(run, task_ids=task_ids)
+            except WorkflowStateError as exc:
+                return {
+                    "schema_version": "activity_workflow_service.v1",
+                    "status": "failed",
+                    "error": "retry_not_available",
+                    "message": str(exc),
+                    "workflow": workflow_overview(run),
+                }
+            if not revived_task_ids:
+                return {
+                    **_response(run, target_directory),
+                    "status": "nothing_to_retry",
+                    "message": "当前运行没有失败任务。",
+                }
+            save_workflow(run, directory=target_directory)
+            execution = execute_activity_run(run, directory=target_directory, lock_held=True)
+            return {
+                **_response(run, target_directory, execution=execution),
+                "retried_task_ids": revived_task_ids,
+            }
+    except WorkflowLockError as exc:
         return {
             **_response(run, target_directory),
-            "status": "nothing_to_retry",
-            "message": "当前运行没有失败任务。",
+            "status": "busy",
+            "error": "workflow_locked",
+            "message": str(exc),
         }
-    save_workflow(run, directory=target_directory)
-    execution = execute_activity_run(run, directory=target_directory)
-    return {
-        **_response(run, target_directory, execution=execution),
-        "retried_task_ids": revived_task_ids,
-    }
 
 
 def _response(

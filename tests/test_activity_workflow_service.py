@@ -7,6 +7,9 @@ from agent.activity.workflow_service import (
     retry_activity_workflow,
     sync_and_start_activity_workflow,
 )
+from agent.runtime.workflow_models import cancel_workflow
+from agent.runtime.workflow_store import save_workflow
+from agent.runtime.workflow_store import acquire_workflow_lock
 
 
 def test_service_runs_and_retries_persisted_upload_run(monkeypatch, tmp_path):
@@ -52,6 +55,72 @@ def test_service_reports_missing_run_and_nothing_to_retry(tmp_path):
     )
     result = retry_activity_workflow(created["run"]["workflow_id"], directory=tmp_path)
     assert result["status"] == "nothing_to_retry"
+
+
+def test_service_rejects_retry_for_cancelled_run(tmp_path):
+    created = create_activity_run_from_activities(
+        [{"activity_key": "a1", "fit_path": str(tmp_path / "a1.fit")}],
+        request={"source": "test", "goals": ["ensure_summary"], "force": False},
+        directory=tmp_path,
+    )
+    run = created["run"]
+    cancel_workflow(run)
+    save_workflow(run, directory=tmp_path)
+
+    result = retry_activity_workflow(run["workflow_id"], directory=tmp_path)
+
+    assert result["status"] == "failed"
+    assert result["error"] == "retry_not_available"
+    assert "cancelled workflow" in result["message"]
+
+
+def test_service_does_not_retry_while_another_executor_holds_the_run_lock(tmp_path):
+    created = create_activity_run_from_activities(
+        [{"activity_key": "a1", "fit_path": str(tmp_path / "a1.fit")}],
+        request={"source": "test", "goals": ["ensure_summary"], "force": False},
+        directory=tmp_path,
+    )
+    run = created["run"]
+    from agent.runtime.workflow_models import transition_task
+    transition_task(run, "a1:ensure_summary", "failed", error="temporary")
+    save_workflow(run, directory=tmp_path)
+
+    with acquire_workflow_lock(run["workflow_id"], directory=tmp_path):
+        result = retry_activity_workflow(run["workflow_id"], directory=tmp_path)
+
+    assert result["status"] == "busy"
+    assert result["error"] == "workflow_locked"
+
+
+def test_service_retry_recovers_persisted_running_task_after_lock_is_acquired(monkeypatch, tmp_path):
+    fit = tmp_path / "a1.fit"
+    fit.write_bytes(b"fit")
+    summary = tmp_path / "a1.summary.json"
+    summary.write_text("{}", encoding="utf-8")
+    created = create_activity_run_from_activities(
+        [{"activity_key": "a1", "fit_path": str(fit)}],
+        request={"source": "test", "goals": ["ensure_summary"], "force": False},
+        directory=tmp_path,
+    )
+    run = created["run"]
+    from agent.runtime.workflow_models import transition_task
+    transition_task(run, "a1:ensure_summary", "running")
+    save_workflow(run, directory=tmp_path)
+    monkeypatch.setattr(
+        "agent.activity.workflow_handlers.ensure_summary",
+        lambda _path, force: {
+            "status": "completed", "summary_path": str(summary), "result_status": "analyzed",
+        },
+    )
+
+    result = retry_activity_workflow(run["workflow_id"], directory=tmp_path)
+
+    task = next(task for task in result["tasks"] if task["task_id"] == "a1:ensure_summary")
+    assert result["workflow"]["status"] == "completed"
+    assert result["retried_task_ids"] == ["a1:ensure_summary"]
+    assert task["status"] == "completed"
+    assert task["attempts"] == 2
+    assert task["attempt_history"][0]["details"]["error"] == "interrupted"
 
 
 def test_sync_service_freezes_exact_indexed_items_and_persists_sync_metadata(monkeypatch, tmp_path):

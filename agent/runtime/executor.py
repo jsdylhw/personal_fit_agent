@@ -12,6 +12,7 @@ from typing import Any
 
 from agent.runtime.workflow_models import (
     TERMINAL_TASK_STATUSES,
+    recover_interrupted_tasks,
     transition_task,
     workflow_overview,
 )
@@ -42,9 +43,20 @@ def execute_ready_tasks(
     """推进已注册且可运行的任务，直至完成或无可运行任务。"""
     checkpoint = checkpoint or (lambda _run: None)
 
+    if run.get("status") == "cancelled":
+        checkpoint(run)
+        return _result(run)
+
+    if recover_interrupted_tasks(run):
+        checkpoint(run)
+
     progress = True
     while progress:
+        if run.get("status") == "cancelled":
+            break
         progress = _skip_failed_dependents(run, checkpoint)
+        if run.get("status") == "cancelled":
+            break
         runnable = _runnable_tasks(run, handlers)
         if not runnable:
             break
@@ -64,8 +76,14 @@ def _execute_one(
     checkpoint: Callable[[dict[str, Any]], None],
 ) -> None:
     task_id = str(task["task_id"])
+    if run.get("status") == "cancelled":
+        return
     transition_task(run, task_id, "running")
     checkpoint(run)
+    if run.get("status") == "cancelled":
+        transition_task(run, task_id, "skipped", reason="workflow_cancelled")
+        checkpoint(run)
+        return
     try:
         outcome = handler.execute(run, task)
     except Exception as exc:

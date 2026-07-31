@@ -4,10 +4,12 @@ import pytest
 
 from agent.runtime.workflow_models import (
     WorkflowStateError,
+    cancel_workflow,
     create_task,
     create_workflow,
     retry_failed_tasks,
     retry_task,
+    recover_interrupted_tasks,
     transition_task,
     workflow_overview,
 )
@@ -52,6 +54,32 @@ def test_only_failed_task_can_be_retried():
     assert retried["status"] == "pending"
     assert retried["attempt_history"][0]["details"]["error"] == "analysis_error"
     assert run["status"] == "active"
+
+
+def test_interrupted_running_task_becomes_failed_until_explicit_retry():
+    run = _run()
+    transition_task(run, "a1:summary", "running")
+
+    recovered = recover_interrupted_tasks(run)
+
+    assert recovered == ["a1:summary"]
+    task = run["tasks"][0]
+    assert task["status"] == "failed"
+    assert task["error"] == "interrupted"
+    assert "retry explicitly" in task["message"]
+    retry_task(run, "a1:summary")
+    assert task["status"] == "pending"
+    assert task["attempt_history"][0]["details"]["error"] == "interrupted"
+
+
+def test_cancelled_workflow_rejects_retry_and_running_recovery():
+    run = _run()
+    transition_task(run, "a1:summary", "running")
+    cancel_workflow(run)
+
+    assert recover_interrupted_tasks(run) == []
+    with pytest.raises(WorkflowStateError, match="cancelled workflow"):
+        retry_failed_tasks(run)
 
 
 def test_retry_failed_tasks_restores_skipped_dependents_and_partial_aggregate():

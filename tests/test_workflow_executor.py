@@ -7,7 +7,8 @@ from agent.activity.workflow_factory import (
     create_activity_run_from_activities,
 )
 from agent.runtime.executor import TaskExecution, TaskHandler, execute_ready_tasks
-from agent.runtime.workflow_models import create_task, create_workflow
+from agent.runtime.workflow_models import cancel_workflow, create_task, create_workflow, transition_task
+from agent.runtime.workflow_store import acquire_workflow_lock
 
 
 def test_runtime_executor_runs_ready_task():
@@ -41,6 +42,58 @@ def test_runtime_executor_skips_dependent_task_after_failure():
     assert run["tasks"][0]["status"] == "failed"
     assert run["tasks"][1]["status"] == "skipped"
     assert run["tasks"][1]["reason"] == "dependency_failed"
+
+
+def test_runtime_executor_never_starts_a_cancelled_run():
+    run = create_workflow(
+        request={}, activities=[{"activity_key": "a1"}],
+        tasks=[create_task(task_id="a1:upload", kind="upload", activity_key="a1")],
+    )
+    calls: list[str] = []
+    cancel_workflow(run)
+
+    result = execute_ready_tasks(
+        run,
+        handlers={"upload": TaskHandler(execute=lambda _run, task: calls.append(task["task_id"]) or TaskExecution(status="completed"))},
+    )
+
+    assert result["workflow"]["status"] == "cancelled"
+    assert calls == []
+    assert run["tasks"][0]["status"] == "pending"
+
+
+def test_runtime_executor_marks_persisted_running_task_interrupted_without_replaying():
+    run = create_workflow(
+        request={}, activities=[{"activity_key": "a1"}],
+        tasks=[create_task(task_id="a1:upload", kind="upload", activity_key="a1")],
+    )
+    transition_task(run, "a1:upload", "running")
+    calls: list[str] = []
+
+    result = execute_ready_tasks(
+        run,
+        handlers={"upload": TaskHandler(execute=lambda _run, task: calls.append(task["task_id"]) or TaskExecution(status="completed"))},
+    )
+
+    assert result["workflow"]["status"] == "partial"
+    assert run["tasks"][0]["error"] == "interrupted"
+    assert calls == []
+
+
+def test_activity_executor_does_not_recover_running_task_held_by_another_process(tmp_path):
+    run = create_workflow(
+        request={}, activities=[{"activity_key": "a1"}],
+        tasks=[create_task(task_id="a1:upload", kind="upload_strava", activity_key="a1")],
+        workflow_id="locked-run",
+    )
+    transition_task(run, "a1:upload", "running")
+
+    with acquire_workflow_lock("locked-run", directory=tmp_path):
+        result = execute_activity_run(run, directory=tmp_path)
+
+    assert result["busy"] is True
+    assert result["error"] == "workflow_locked"
+    assert run["tasks"][0]["status"] == "running"
 
 
 def test_activity_summary_task_persists_result(monkeypatch, tmp_path):
