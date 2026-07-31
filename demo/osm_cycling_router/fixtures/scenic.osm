@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="personal-fit-agent-test">
+  <node id="1" lat="31.1200" lon="121.0000">
+    <tag k="name" v="测试观景台" />
+    <tag k="tourism" v="viewpoint" />
+  </node>
+  <node id="2" lat="31.1300" lon="121.0100" />
+  <node id="3" lat="31.1400" lon="121.0200" />
+  <node id="4" lat="31.1300" lon="121.0300" />
+  <way id="10">
+    <nd ref="2" />
+    <nd ref="3" />
+    <nd ref="4" />
+    <nd ref="2" />
+    <tag k="name" v="测试湖" />
+    <tag k="natural" v="water" />
+    <tag k="water" v="lake" />
+  </way>
+</osm>
