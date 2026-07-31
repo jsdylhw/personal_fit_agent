@@ -3,6 +3,8 @@ const state = {
   selectedPath: null,
 };
 
+const API_TOKEN_STORAGE_KEY = "personal-fit-agent.api-token";
+
 const els = {
   status: document.getElementById("status"),
   fitDir: document.getElementById("fitDir"),
@@ -20,6 +22,7 @@ const els = {
   analyzeBtn: document.getElementById("analyzeBtn"),
   viewReportBtn: document.getElementById("viewReportBtn"),
   uploadStravaBtn: document.getElementById("uploadStravaBtn"),
+  apiToken: document.getElementById("apiToken"),
 };
 
 function setStatus(text) {
@@ -32,10 +35,33 @@ function log(message, data) {
   els.log.textContent = `[${time}] ${message}${suffix}\n\n${els.log.textContent}`;
 }
 
+function apiHeaders(headers = {}) {
+  const token = els.apiToken.value.trim();
+  return {
+    "content-type": "application/json",
+    ...(token ? { "X-API-Token": token } : {}),
+    ...headers,
+  };
+}
+
+function restoreApiToken() {
+  els.apiToken.value = sessionStorage.getItem(API_TOKEN_STORAGE_KEY) || "";
+}
+
+function persistApiToken() {
+  const token = els.apiToken.value.trim();
+  if (token) {
+    sessionStorage.setItem(API_TOKEN_STORAGE_KEY, token);
+  } else {
+    sessionStorage.removeItem(API_TOKEN_STORAGE_KEY);
+  }
+}
+
 async function fetchJson(url, options = {}) {
+  const { headers, ...requestOptions } = options;
   const response = await fetch(url, {
-    headers: { "content-type": "application/json" },
-    ...options,
+    ...requestOptions,
+    headers: apiHeaders(headers),
   });
   if (!response.ok) {
     const text = await response.text();
@@ -204,9 +230,7 @@ async function viewReport() {
   }
   setStatus("读取报告");
   try {
-    const response = await fetch(`/api/summary?path=${encodeURIComponent(file.summary_path)}`);
-    if (!response.ok) throw new Error(await response.text());
-    const summary = await response.json();
+    const summary = await fetchJson(`/api/summary?path=${encodeURIComponent(file.summary_path)}`);
     els.reportText.textContent = summary.markdown_report || "(报告为空)";
     setStatus("准备就绪");
   } catch (error) {
@@ -225,10 +249,21 @@ async function uploadStrava() {
   try {
     const result = await fetchJson("/api/strava/upload", {
       method: "POST",
-      body: JSON.stringify({ summary_path: file.summary_path, wait: false }),
+      body: JSON.stringify({ summary_path: file.summary_path, wait: true }),
     });
+    const uploadStatus = result.upload_status || {};
+    const completed = ["duplicate", "description_updated"].includes(result.status)
+      || Boolean(uploadStatus.activity_id);
+    if (!completed) {
+      if (uploadStatus.error) {
+        throw new Error(uploadStatus.error);
+      }
+      log("Strava 上传状态未确认", result);
+      setStatus("Strava 处理超时，尚未确认最终结果");
+      return;
+    }
     log("Strava 上传完成", result);
-    setStatus("上传完成");
+    setStatus(result.status === "duplicate" ? "Strava 已存在该活动" : "上传完成");
   } catch (error) {
     log("Strava 上传失败", { error: error.message });
     setStatus("上传失败");
@@ -274,6 +309,9 @@ els.refreshBtn.addEventListener("click", refreshFiles);
 els.analyzeBtn.addEventListener("click", analyzeSelected);
 els.viewReportBtn.addEventListener("click", viewReport);
 els.uploadStravaBtn.addEventListener("click", uploadStrava);
+
+restoreApiToken();
+els.apiToken.addEventListener("change", persistApiToken);
 
 refreshFiles().catch((error) => {
   log("初始化失败", { error: error.message });

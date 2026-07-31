@@ -68,6 +68,8 @@ strava:
 web_api_token: "replace-with-a-long-random-token"
 ```
 
+配置 `web_api_token` 后，内置 Web UI 首次打开会显示 401；在页面上方的 **API Token** 输入框填写同一 Token 后即可使用。Token 只保存在当前浏览器会话的 `sessionStorage`，不会写入仓库或配置文件。通过局域网/反向代理访问时应启用 HTTPS。
+
 `agent.base_url` 需要兼容 Anthropic Messages API 的 `/v1/messages`。
 
 运动员档案位于 `data/athlete.json`，按运动专项保存阈值。旧平铺的 `ftp` 仍兼容为骑行 FTP，但不会用于跑步。可以从示例文件复制:
