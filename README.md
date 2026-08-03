@@ -1,5 +1,7 @@
 # Personal FIT Agent
 
+![Personal FIT Agent — 运动分析助手主视觉](figure.png)
+
 本项目是一个本地运动数据助手:下载 Garmin 中国 FIT 文件,用大模型生成活动报告,维护本地活动索引,再按需要上传到 Strava。
 
 当前主链路是:
