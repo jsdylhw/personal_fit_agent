@@ -1,9 +1,0 @@
-get_activity_overview      # 很轻，第一眼
-get_activity_summary       # 完整概要 + 统计 + metadata
-
-get_time_intervals
-get_distance_intervals
-
-
-detect_key_events          # 事件识别
-get_history                # 历史对比
