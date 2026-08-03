@@ -1,0 +1,39 @@
+# Copy this file to config.yaml, then fill only the services you plan to use.
+# config.yaml is ignored by Git. Never commit real credentials.
+
+# Local activity storage.
+download_count: 5
+output_dir: "garmin_cn_fit_files"
+
+# Required for chat-based analysis. The endpoint must be compatible with the
+# Anthropic Messages API (the client calls <base_url>/messages).
+agent:
+  provider: "anthropic"
+  base_url: "https://your-api-base-url/v1"
+  api_key: "replace-with-your-api-key"
+  model: "your-model"
+  max_tokens: 4096
+  temperature: 0.3
+  anthropic_version: "2023-06-01"
+  timeout_seconds: 300
+  max_retries: 2
+
+# Optional: required only when synchronising from Garmin China.
+garmin_username: "your-garmin-cn-username"
+garmin_password: "your-garmin-cn-password"
+garmin_tokenstore: ".garmin_cn_tokens"
+# garmin_proxy: "http://127.0.0.1:7890"
+disable_curl_cffi: false
+
+# Optional: required only when uploading to Strava. Refresh-token OAuth is
+# recommended; generated tokens are stored locally in token_store.
+strava:
+  client_id: "your-strava-client-id"
+  client_secret: "your-strava-client-secret"
+  refresh_token: "your-strava-refresh-token"
+  token_store: ".strava_tokens.json"
+  timeout_seconds: 120
+
+# Leave blank for local-only Web UI access. Set a long random value before
+# exposing the Web UI through a LAN or reverse proxy.
+web_api_token: ""

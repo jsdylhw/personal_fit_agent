@@ -27,17 +27,13 @@
 pip install -r requirements.txt
 ```
 
-在项目根目录创建本地 `config.yaml`，至少配置你要使用的服务。例如只体验本地 FIT 分析时只需配置大模型；需要同步或上传时再添加 Garmin 和 Strava 凭据：
+从示例创建本地配置：
 
-```yaml
-agent:
-  base_url: "https://your-api-base-url"
-  api_key: "your-api-key"
-  model: "your-model"
-
-garmin_username: "your-garmin-cn-username"
-garmin_password: "your-garmin-cn-password"
+```bash
+cp config.yaml.example config.yaml
 ```
+
+编辑 `config.yaml` 并填入凭据：`agent` 用于对话和分析；Garmin 配置仅在同步时需要；Strava 配置仅在上传时需要。若要通过局域网或反向代理访问 Web UI，请设置随机的 `web_api_token`。`config.yaml` 不会提交到 Git。
 
 启动对话：
 
