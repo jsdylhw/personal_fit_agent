@@ -13,6 +13,7 @@ import argparse
 import json
 import mimetypes
 import os
+import re
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,6 +34,7 @@ except ImportError:  # pragma: no cover - exercised by the Docker entrypoint
 MAX_RESULTS = 20
 MAX_ROUTE_POINTS = 8
 MAX_FREE_LOOP_CANDIDATES = 5
+ROUTE_PROBE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def parse_point(value: str) -> tuple[float, float]:
@@ -72,7 +74,7 @@ def graphhopper_route(base_url: str, query: dict[str, list[str]]) -> dict[str, A
 
     profile = (query.get("profile") or ["racingbike"])[0]
     if profile not in VALID_PROFILES:
-        raise ValueError("profile must be 'bike' or 'racingbike'")
+        raise ValueError("profile must be 'car', 'bike' or 'racingbike'")
 
     request_query: list[tuple[str, str]] = [
         *(('point', point) for point in points),
@@ -95,7 +97,7 @@ def graphhopper_free_loop(base_url: str, query: dict[str, list[str]]) -> dict[st
     point = parse_point((query.get("point") or [""])[0])
     profile = (query.get("profile") or ["racingbike"])[0]
     if profile not in VALID_PROFILES:
-        raise ValueError("profile must be 'bike' or 'racingbike'")
+        raise ValueError("profile must be 'car', 'bike' or 'racingbike'")
     distance_km = bounded_float(
         (query.get("distance_km") or [None])[0], minimum=1, maximum=300, name="distance_km",
     )
@@ -112,6 +114,19 @@ def graphhopper_free_loop(base_url: str, query: dict[str, list[str]]) -> dict[st
     return plan.as_dict()
 
 
+def load_route_probe(probe_dir: Path, name: str) -> dict[str, Any]:
+    """Load a locally generated route experiment without exposing arbitrary files."""
+    if not ROUTE_PROBE_NAME.fullmatch(name):
+        raise ValueError("invalid route probe name")
+    path = probe_dir / f"{name}.geojson"
+    if not path.is_file():
+        raise FileNotFoundError(f"route probe '{name}' is not available")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
+        raise RuntimeError("route probe is not valid GeoJSON")
+    return payload
+
+
 def create_server(
     *,
     host: str,
@@ -119,6 +134,7 @@ def create_server(
     static_dir: Path,
     database: Path,
     graphhopper_url: str,
+    route_probe_dir: Path | None = None,
 ) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         server_version = "OSMCyclingRouterDemo/1.0"
@@ -181,12 +197,19 @@ def create_server(
                     self.send_json(graphhopper_route(graphhopper_url, query))
                 elif parsed.path == "/api/free-loop":
                     self.send_json(graphhopper_free_loop(graphhopper_url, query))
+                elif parsed.path.startswith("/api/route-probes/"):
+                    if route_probe_dir is None:
+                        raise FileNotFoundError("route probe directory is not configured")
+                    name = parsed.path.removeprefix("/api/route-probes/")
+                    self.send_json(load_route_probe(route_probe_dir, name))
                 elif parsed.path == "/" or parsed.path.startswith("/static/"):
                     self.serve_static(parsed.path)
                 else:
                     self.send_error_json("not found", HTTPStatus.NOT_FOUND)
             except ValueError as exc:
                 self.send_error_json(str(exc))
+            except FileNotFoundError as exc:
+                self.send_error_json(str(exc), HTTPStatus.NOT_FOUND)
             except Exception as exc:  # noqa: BLE001 - error must become browser-readable JSON
                 self.send_error_json(str(exc), HTTPStatus.BAD_GATEWAY)
 
@@ -198,6 +221,7 @@ def main() -> None:
     parser.add_argument("--host", default=os.getenv("WEB_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("WEB_PORT", "8080")))
     parser.add_argument("--database", type=Path, default=Path(os.getenv("PLACES_DB", "/app/data/scenic_places.sqlite")))
+    parser.add_argument("--route-probe-dir", type=Path, default=Path(os.getenv("ROUTE_PROBE_DIR", "/app/data/route-probes")))
     parser.add_argument("--graphhopper-url", default=os.getenv("GRAPHHOPPER_URL", "http://127.0.0.1:8989"))
     args = parser.parse_args()
     static_dir = Path(__file__).with_name("web")
@@ -210,6 +234,7 @@ def main() -> None:
         static_dir=static_dir,
         database=args.database,
         graphhopper_url=args.graphhopper_url,
+        route_probe_dir=args.route_probe_dir,
     ).serve_forever()
 
 

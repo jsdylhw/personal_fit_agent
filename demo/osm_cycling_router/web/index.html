@@ -30,13 +30,22 @@
           <label>起点 <input id="origin" value="30.2420,120.0960" placeholder="纬度,经度"></label>
           <label id="destination-field">终点 <input id="destination" value="30.2670,120.0920" placeholder="纬度,经度"></label>
           <label>车型
-            <select id="profile"><option value="racingbike">公路车</option><option value="bike">通用自行车</option></select>
+            <select id="profile"><option value="racingbike">公路车</option><option value="bike">通用自行车</option><option value="car">汽车（避开高速）</option></select>
           </label>
           <label id="loop-distance-field">目标距离（km）<input id="loop-distance" type="number" min="1" max="300" step="1" value="20"></label>
           <button id="route-button">计算路线</button>
           <button id="free-loop-button">生成自由环线</button>
           <output id="route-summary">尚未计算</output>
           <ul id="loop-candidates" aria-live="polite"></ul>
+        </section>
+        <section>
+          <h2>路线骨架实验</h2>
+          <p class="hint">用 Strava 主爬段作为骨架，再由本地 GraphHopper 连接。仅显示本地已生成的试验数据。</p>
+          <button id="show-hangzhou-nw-probe" class="secondary">显示杭州西北主爬闭环</button>
+          <button id="show-hangzhou-nw-reversible-probe" class="secondary">显示杭州西北可反向闭环</button>
+          <button id="show-jingshan-town-probe" class="secondary">显示径山镇出发闭环</button>
+          <button id="show-hangzhou-retrace-probe" class="secondary">显示王位山连接候选</button>
+          <ul id="route-probes" aria-live="polite"></ul>
         </section>
         <section>
           <h2>风景点检索</h2>

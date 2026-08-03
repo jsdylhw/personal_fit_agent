@@ -17,6 +17,11 @@ class WebServerTests(unittest.TestCase):
         self.temp_dir = TemporaryDirectory()
         root = Path(self.temp_dir.name)
         self.database = root / "places.sqlite"
+        self.route_probe_dir = root / "route-probes"
+        self.route_probe_dir.mkdir()
+        (self.route_probe_dir / "sample.geojson").write_text(json.dumps({
+            "type": "FeatureCollection", "metadata": {"name": "sample"}, "features": [],
+        }), encoding="utf-8")
         fixture = Path(__file__).with_name("fixtures") / "scenic.osm"
         build_index(fixture, self.database)
         self.server = create_server(
@@ -25,6 +30,7 @@ class WebServerTests(unittest.TestCase):
             static_dir=Path(__file__).with_name("web"),
             database=self.database,
             graphhopper_url="http://127.0.0.1:9",
+            route_probe_dir=self.route_probe_dir,
         )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -54,12 +60,18 @@ class WebServerTests(unittest.TestCase):
 
     def test_rejects_invalid_route_profile_without_proxying(self) -> None:
         with self.assertRaises(HTTPError) as error:
-            self.opener.open(f"{self.base_url}/api/route?point=31,121&point=31.1,121.1&profile=car")
+            self.opener.open(f"{self.base_url}/api/route?point=31,121&point=31.1,121.1&profile=plane")
         self.assertEqual(error.exception.code, 400)
 
     def test_rejects_free_loop_without_target_distance(self) -> None:
         with self.assertRaises(HTTPError) as error:
             self.opener.open(f"{self.base_url}/api/free-loop?point=31,121")
+        self.assertEqual(error.exception.code, 400)
+
+    def test_reads_only_named_local_route_probe(self) -> None:
+        self.assertEqual(self.get_json("/api/route-probes/sample")["metadata"]["name"], "sample")
+        with self.assertRaises(HTTPError) as error:
+            self.opener.open(f"{self.base_url}/api/route-probes/../sample")
         self.assertEqual(error.exception.code, 400)
 
 

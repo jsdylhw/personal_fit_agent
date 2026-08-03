@@ -15,7 +15,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import ProxyHandler, build_opener, urlopen
 
 SEMICIRCLE_TO_DEGREES = 180.0 / (1 << 31)
-VALID_PROFILES = frozenset({"bike", "racingbike"})
+VALID_PROFILES = frozenset({"car", "bike", "racingbike"})
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ def route(
 ) -> dict[str, Any]:
     """Call a local GraphHopper instance and return normalized route facts."""
     if profile not in VALID_PROFILES:
-        raise ValueError("profile must be bike or racingbike")
+        raise ValueError("profile must be car, bike or racingbike")
     query = urlencode([
         ("point", origin.query_value()),
         ("point", destination.query_value()),
@@ -98,7 +98,7 @@ def round_trip(
     though normal two-point requests use the faster CH preparation.
     """
     if profile not in VALID_PROFILES:
-        raise ValueError("profile must be bike or racingbike")
+        raise ValueError("profile must be car, bike or racingbike")
     if not 1_000 <= distance_m <= 300_000:
         raise ValueError("distance_m must be between 1000 and 300000")
     if seed < 0:

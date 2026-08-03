@@ -12,6 +12,7 @@ const routeHintNode = document.querySelector("#route-hint");
 const destinationFieldNode = document.querySelector("#destination-field");
 const loopDistanceFieldNode = document.querySelector("#loop-distance-field");
 const loopCandidatesNode = document.querySelector("#loop-candidates");
+const routeProbesNode = document.querySelector("#route-probes");
 let endpoints = [];
 let endpointLayer = L.layerGroup().addTo(map);
 let routeLayer = L.geoJSON(null, { style: { color: "#1c7c4a", weight: 5, opacity: .9 } }).addTo(map);
@@ -20,6 +21,8 @@ let placeLayer = L.layerGroup().addTo(map);
 // exposes getBounds(), needed to fit all generated loop candidates at once.
 let loopLayer = L.featureGroup().addTo(map);
 let loopRoutes = [];
+let routeProbeLayer = L.featureGroup().addTo(map);
+let routeProbeMarkerLayer = L.layerGroup().addTo(map);
 
 function pointText(latlng) { return `${latlng.lat.toFixed(6)},${latlng.lng.toFixed(6)}`; }
 function parsePoint(value) {
@@ -61,6 +64,11 @@ function clearLoopRoutes() {
   loopCandidatesNode.replaceChildren();
 }
 function clearPointRoute() { routeLayer.clearLayers(); }
+function clearRouteProbe() {
+  routeProbeLayer.clearLayers();
+  routeProbeMarkerLayer.clearLayers();
+  routeProbesNode.replaceChildren();
+}
 function updatePlannerMode(clearSelection = false) {
   const isFreeLoop = modeNode.value === "free-loop";
   destinationFieldNode.hidden = isFreeLoop;
@@ -177,6 +185,75 @@ async function nearbyPlaces() {
     setStatus(`找到 ${data.places.length} 个附近风景点`, "ready");
   } catch (error) { setStatus(error.message, "error"); }
 }
+function renderRouteProbe(probe) {
+  clearRouteProbe();
+  for (const feature of probe.features) {
+    const isSegment = feature.properties?.kind === "strava_segment";
+    const isLocalRebuild = feature.properties?.kind === "local_graphhopper_rebuild";
+    const isCandidate = feature.properties?.kind === "graphhopper_candidate";
+    const layer = L.geoJSON(feature, {
+      style: { color: feature.properties?.color || (isSegment ? "#d7438d" : "#2d7dd2"), weight: isSegment ? 6 : 4, opacity: .88 },
+    }).addTo(routeProbeLayer);
+    const item = document.createElement("li");
+    const title = document.createElement("strong");
+    title.textContent = `${isSegment ? "Strava 路段" : isLocalRebuild ? "本地重建" : isCandidate ? "连接候选" : "连接"} · ${feature.properties?.name || "未命名路段"}`;
+    const detail = document.createElement("small");
+    detail.textContent = `${formatDistance(feature.properties?.distance_m || 0)}${feature.properties?.reverse_overlap_m ? ` · 反向重叠 ${formatDistance(feature.properties.reverse_overlap_m)}` : ""}${feature.properties?.ascend_m ? ` · 爬升 ${Math.round(feature.properties.ascend_m)} m` : ""}`;
+    item.append(title, detail);
+    item.addEventListener("click", () => {
+      if (isCandidate) {
+        routeProbeLayer.eachLayer((otherLayer) => {
+          const otherKind = otherLayer.feature?.properties?.kind;
+          const selected = otherLayer === layer;
+          otherLayer.setStyle({
+            opacity: selected ? 1 : otherKind === "strava_segment" ? .7 : .12,
+            weight: selected ? 7 : otherKind === "strava_segment" ? 6 : 3,
+          });
+        });
+      }
+      map.fitBounds(layer.getBounds(), { padding: [30, 30] });
+    });
+    routeProbesNode.append(item);
+  }
+  const start = probe.metadata?.start_latlng;
+  const end = probe.metadata?.end_latlng;
+  if (Array.isArray(start) && start.length === 2 && Array.isArray(end) && end.length === 2) {
+    const closure = Number(probe.metadata?.closure_gap_m || 0);
+    L.circleMarker(start, { radius: 9, color: "#f7d154", fillColor: "#1e9b58", fillOpacity: .95, weight: 3 })
+      .bindTooltip(`起终点 · 闭合差 ${Math.round(closure)} m`, { permanent: true, direction: "top" })
+      .addTo(routeProbeMarkerLayer);
+  }
+  if (routeProbeLayer.getLayers().length) map.fitBounds(routeProbeLayer.getBounds(), { padding: [30, 30] });
+}
+async function showRouteProbe(name, loadingText, fallbackName, readyText) {
+  try {
+    setStatus(loadingText);
+    const probe = await api(`/api/route-probes/${name}`);
+    renderRouteProbe(probe);
+    const meta = probe.metadata || {};
+    const distance = meta.total_distance_m || meta.local_distance_m || meta.source_distance_m || 0;
+    summaryNode.textContent = `${meta.name || fallbackName} · ${formatDistance(distance)}${meta.known_segment_ascent_m ? ` · 已知主爬 ${Math.round(meta.known_segment_ascent_m)} m` : meta.source_ascent_m ? ` · 已知爬升 ${Math.round(meta.source_ascent_m)} m` : ""}${meta.closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.closure_gap_m)} m` : meta.local_closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.local_closure_gap_m)} m` : ""}`;
+    setStatus(readyText, "ready");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
+function showHangzhouNorthwestProbe() {
+  return showRouteProbe("hangzhou-nw-climb-loop", "正在读取本地杭州西北爬坡环线探针…", "杭州西北爬坡环线", "已叠加 Strava 主爬与本地连接段");
+}
+
+function showHangzhouNorthwestReversibleProbe() {
+  return showRouteProbe("hangzhou-nw-reversible-loop", "正在读取杭州西北可反向闭环探针…", "杭州西北可反向闭环", "已叠加允许反向后的主爬与本地连接段");
+}
+
+function showJingshanTownProbe() {
+  return showRouteProbe("jingshan-town-reversible-loop", "正在读取径山镇出发闭环探针…", "径山镇出发主爬闭环", "已叠加径山镇起终点、可反向主爬与本地连接段");
+}
+
+function showHangzhouRetraceProbe() {
+  return showRouteProbe("hangzhou-retrace-candidates", "正在读取王位山连接候选…", "王位山连接候选", "已叠加主爬和 GraphHopper 回头路惩罚候选");
+}
 
 map.on("click", (event) => {
   if (modeNode.value === "free-loop") {
@@ -193,5 +270,9 @@ document.querySelector("#free-loop-button").addEventListener("click", calculateF
 modeNode.addEventListener("change", () => updatePlannerMode(true));
 document.querySelector("#search-form").addEventListener("submit", (event) => { event.preventDefault(); searchPlaces(); });
 document.querySelector("#nearby-button").addEventListener("click", nearbyPlaces);
+document.querySelector("#show-hangzhou-nw-probe").addEventListener("click", showHangzhouNorthwestProbe);
+document.querySelector("#show-hangzhou-nw-reversible-probe").addEventListener("click", showHangzhouNorthwestReversibleProbe);
+document.querySelector("#show-jingshan-town-probe").addEventListener("click", showJingshanTownProbe);
+document.querySelector("#show-hangzhou-retrace-probe").addEventListener("click", showHangzhouRetraceProbe);
 updatePlannerMode();
 api("/health").then(() => setStatus("本地服务已就绪", "ready")).catch(() => setStatus("本地服务不可用", "error"));

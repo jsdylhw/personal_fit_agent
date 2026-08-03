@@ -38,6 +38,7 @@ services:
       WEB_HOST: "127.0.0.1"
       WEB_PORT: "8080"
       PLACES_DB: "/app/data/scenic_places.sqlite"
+      ROUTE_PROBE_DIR: "/app/data/route-probes"
       GRAPHHOPPER_URL: "http://127.0.0.1:8989"
     depends_on:
       graphhopper:

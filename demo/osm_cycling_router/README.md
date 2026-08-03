@@ -8,7 +8,7 @@
 - 路由计算：仅 GraphHopper + OpenStreetMap，内部坐标统一 WGS-84。
 - 地图范围：江苏、浙江、上海。GraphHopper 与地点检索使用同一份合并 PBF，避免搜索结果落在算路范围外。
 - 地点检索：本地 SQLite + RTree。仅索引湖泊/水库/瀑布、山峰、观景点、公园/自然区域、景点/古迹，以及用于路线锚定的城镇；默认忽略餐馆、商店等无关 POI。
-- 验证对象：青浦与杭州等江浙沪范围内的真实 FIT 起终点，比较 `bike` 和 `racingbike`。
+- 验证对象：青浦与杭州等江浙沪范围内的真实 FIT 起终点，比较 `bike`、`racingbike` 和 `car`（避开高速）。
 - Strava：仅调用有界的 `segments/explore` 获取一个矩形内的热门骑行路段样本；它不是全量公开骑行轨迹数据源。
 - 不做：导航、生产 API、后台批量抓取、把 Strava 路段当作安全或合法通行保证。
 
@@ -38,7 +38,7 @@ cd demo/osm_cycling_router
 docker compose up --build
 ```
 
-启动完成后打开 <http://127.0.0.1:8080>，即可在地图上点击起点和终点、搜索本地风景点，或切换到“自由环线”并点击一个起点。两种模式都可选择 `bike` / `racingbike`，默认是 `racingbike`。网页底图由浏览器请求在线 OpenStreetMap 瓦片，因此可以浏览全球；路线和风景点查询仍严格使用本地江浙沪数据。该网页仅为 demo：页面后端监听本机回环地址，读取本地 SQLite，并代理到同机 GraphHopper；没有接入主 Agent 或任何外部写操作。
+启动完成后打开 <http://127.0.0.1:8080>，即可在地图上点击起点和终点、搜索本地风景点，或切换到“自由环线”并点击一个起点。两种模式都可选择 `bike`、`racingbike` 或 `car`；其中 `car` 在导入路网时排除了 `motorway` 与 `motorway_link`，适合用于比较主爬之间的普通道路连接，默认仍是 `racingbike`。网页底图由浏览器请求在线 OpenStreetMap 瓦片，因此可以浏览全球；路线和风景点查询仍严格使用本地江浙沪数据。该网页仅为 demo：页面后端监听本机回环地址，读取本地 SQLite，并代理到同机 GraphHopper；没有接入主 Agent 或任何外部写操作。
 
 服务以 host 网络模式运行，但 GraphHopper 在配置中只监听 `127.0.0.1:8989`。这样 rootless Docker / WSL 可以复用本机代理下载地图，同时 API 不会暴露到局域网。默认容器 JVM 上限为 6GB；如果首次导入内存不足，可在 `compose.yml` 调高 `JAVA_OPTS`，同时保证 Docker Desktop / WSL 有足够内存。停止服务不会删除本地地图数据；如需重新下载并完整导入，手动删除 `data/` 后重新启动。
 
@@ -120,6 +120,29 @@ python demo/osm_cycling_router/probe.py \
 
 先只比较：是否能连通、距离是否接近真实活动、是否出现明显不合理的主路 / 绕行。不要把首个返回路线直接视为安全骑行建议。
 
+## 主爬段的正反向选择
+
+Strava 的爬坡方向是训练事实，但不一定是路书中唯一合理的行进方向。`segment_loop.py` 默认保留原方向；对风景闭环或路书探索，可传入 `--allow-reverse`，让每条候选道路既可作为主爬，也可反向作为下坡/连接段：
+
+```bash
+python demo/osm_cycling_router/segment_loop.py \
+  --input demo/osm_cycling_router/data/route-probes/hangzhou-nw-climb-loop.geojson \
+  --output demo/osm_cycling_router/data/route-probes/hangzhou-nw-reversible-loop.geojson \
+  --target-km 80 --profile car --allow-reverse
+```
+
+要让路线真正从指定地点出发，传入 `--start`。规划器会把“起点→第一段”和“最后一段→起点”都计入路线评分和总距离，而不是仅把主爬段本身闭合：
+
+```bash
+python demo/osm_cycling_router/segment_loop.py \
+  --input demo/osm_cycling_router/data/route-probes/hangzhou-nw-climb-loop.geojson \
+  --output demo/osm_cycling_router/data/route-probes/jingshan-town-reversible-loop.geojson \
+  --target-km 80 --profile car --allow-reverse \
+  --start "30.377490,119.860585" --start-name "径山镇"
+```
+
+反向段会在 GeoJSON 中标记 `route_direction: reverse`，且不计入“已知主爬爬升”。该搜索最多支持 5 条路段，避免方向组合指数增长。它仍会对连接段重叠、距离和最长转场评分；找不到质量足够的组合时，应拒绝结果而不是强行闭环。
+
 运行不需要路由服务的单元测试：
 
 ```bash
@@ -130,6 +153,7 @@ python -m unittest demo/osm_cycling_router/test_router.py
 
 Strava Segment Explorer 对一个 bounds 只返回有限的热门路段。它可以作为候选路线的“骑行活跃度”信号，不能替代 OSM 路网，也不能批量下载他人活动。
 请求失败时只会对临时网络 / 5xx / 429 做有限重试；不会关闭 HTTPS 证书校验。当前 WSL 如仍出现 `SSLEOFError`，应先修复该环境的代理或 TLS 路径，而不是修改 demo 代码跳过验证。
+
 
 ```bash
 export STRAVA_ACCESS_TOKEN='...'
