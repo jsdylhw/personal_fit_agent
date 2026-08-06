@@ -125,6 +125,21 @@ python demo/osm_cycling_router/road_corridors.py nearby \
 
 查询结果给出道路名、编号、所属道路关系和少量可用作途经点的 anchors。它们是后续生成“直连 / 经春风十里路 / 经绿道”等连接候选的事实输入；道路本身仍由本地 GraphHopper 计算并校验可通性。
 
+## 多候选主爬闭环
+
+`route_candidates.py` 把每一段主爬之间的连接扩展为“直连 + 经指定语义走廊的局部途经”候选，并同时搜索主爬顺序、正反方向和连接候选。它返回最多三条路线；“经 YBA4”只选择合适锚点，不强制骑完整条春风十里路。
+
+```bash
+python demo/osm_cycling_router/route_candidates.py \
+  --input demo/osm_cycling_router/data/route-probes/jurong-maoshan-wawushan-climbs.geojson \
+  --road-database demo/osm_cycling_router/data/road_corridors.sqlite \
+  --corridor YBA4 \
+  --start "31.946528,119.163720" --target-km 100 \
+  --profile car --max-routes 3
+```
+
+评分暂时只考虑目标距离、连接段长度、几何重叠与覆盖不同走廊；全程高程不在这一版承诺范围内。输出是可解释的规划 JSON，下一阶段再将它渲染为动态地图路线并接入 Agent。
+
 ## 用真实 FIT 探针算路
 
 另开终端：
