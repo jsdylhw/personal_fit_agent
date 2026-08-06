@@ -275,4 +275,20 @@ document.querySelector("#show-hangzhou-nw-reversible-probe").addEventListener("c
 document.querySelector("#show-jingshan-town-probe").addEventListener("click", showJingshanTownProbe);
 document.querySelector("#show-hangzhou-retrace-probe").addEventListener("click", showHangzhouRetraceProbe);
 updatePlannerMode();
-api("/health").then(() => setStatus("本地服务已就绪", "ready")).catch(() => setStatus("本地服务不可用", "error"));
+
+// Local experiments can be opened directly without adding a permanent button
+// for every ignored route-probe GeoJSON file.
+const requestedProbe = new URLSearchParams(window.location.search).get("probe");
+const validRequestedProbe = requestedProbe && /^[a-z0-9][a-z0-9_-]*$/.test(requestedProbe);
+api("/health").then(() => {
+  setStatus("本地服务已就绪", "ready");
+  if (validRequestedProbe) {
+    return showRouteProbe(
+      requestedProbe,
+      "正在读取本地路线探针…",
+      "本地路线探针",
+      "已叠加本地路线探针",
+    );
+  }
+  return null;
+}).catch(() => setStatus("本地服务不可用", "error"));
