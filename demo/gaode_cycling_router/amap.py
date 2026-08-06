@@ -93,15 +93,16 @@ class AmapCyclingRouter:
             # v5 only includes per-step geometry when explicitly requested.
             "show_fields": "cost,navi,polyline",
         })
-        # Respect a local WSL proxy for this external request.  Unlike the
-        # GraphHopper adapter, this is intentionally not a localhost request.
-        # The WSL proxy can occasionally close TLS during a multi-leg plan;
-        # retrying an idempotent GET is safe and avoids discarding a whole loop.
+        # Prefer the configured proxy, but WSL proxy tunnels can occasionally
+        # close TLS during a multi-leg plan. AMap is often directly reachable,
+        # so retry the idempotent GET once without proxy before giving up.
         request_url = f"{self.base_url}?{query}"
+        openers = (build_opener(ProxyHandler()), build_opener(ProxyHandler({})))
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
-                with build_opener(ProxyHandler()).open(request_url, timeout=self.timeout_s) as response:
+                opener = openers[attempt % len(openers)]
+                with opener.open(request_url, timeout=self.timeout_s) as response:
                     payload = json.load(response)
                 break
             except (OSError, TimeoutError, URLError) as exc:

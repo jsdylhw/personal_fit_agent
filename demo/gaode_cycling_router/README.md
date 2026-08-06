@@ -46,4 +46,5 @@ python -m demo.gaode_cycling_router.compose_segments \
 
 - `AMAP_WEB_SERVICE_KEY` 仅在本地 Python 服务中使用，浏览器不会收到它。
 - JS API Key 必须发送给浏览器；Demo 为方便本地测试，`securityJsCode` 也走浏览器直配。生产环境应按高德文档改为 `serviceHost` 反向代理，并限制 Key 的 Referer/IP。
+- WSL 设置了 HTTP(S) 代理时，Demo 会先经代理请求；若 TLS 被代理瞬时断开，会自动改为直连重试一次。
 - 目前是验证 Demo，不接入 Main Agent，也不替换原 OSM/GraphHopper 版本。
