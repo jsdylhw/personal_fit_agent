@@ -104,6 +104,27 @@ python demo/osm_cycling_router/places.py nearby \
 
 结果包含 OSM ID、类别、坐标、原始标签和距离。它们是给后续地点消歧、GraphHopper 算路与 LLM 路线解释使用的事实输入；没有结果只代表当前 OSM 数据未标注，不代表现实中不存在该地点。
 
+## 语义道路走廊索引
+
+GraphHopper 保存完整的可路由路网，但不能直接回答“春风十里路 / YBA4 在哪里、可作为哪一段连接走廊”。`road_corridors.py` 从同一份 PBF 额外索引有道路名称、编号、道路关系或自行车属性的道路；保存简化几何和 SQLite RTree，而不重复 GraphHopper 的图结构。
+
+容器首次启动会自动建立 `data/road_corridors.sqlite`。也可手动重建：
+
+```bash
+python demo/osm_cycling_router/road_corridors.py build \
+  --pbf demo/osm_cycling_router/data/osm/jzsh-latest.osm.pbf \
+  --database demo/osm_cycling_router/data/road_corridors.sqlite
+
+python demo/osm_cycling_router/road_corridors.py search "YBA4" \
+  --database demo/osm_cycling_router/data/road_corridors.sqlite
+
+python demo/osm_cycling_router/road_corridors.py nearby \
+  --point "31.706,119.334" --radius-m 5000 \
+  --database demo/osm_cycling_router/data/road_corridors.sqlite
+```
+
+查询结果给出道路名、编号、所属道路关系和少量可用作途经点的 anchors。它们是后续生成“直连 / 经春风十里路 / 经绿道”等连接候选的事实输入；道路本身仍由本地 GraphHopper 计算并校验可通性。
+
 ## 用真实 FIT 探针算路
 
 另开终端：
