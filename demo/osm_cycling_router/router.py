@@ -10,6 +10,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlencode, urlparse
 from urllib.request import ProxyHandler, build_opener, urlopen
@@ -66,17 +67,30 @@ def route(
     timeout_s: float = 30.0,
 ) -> dict[str, Any]:
     """Call a local GraphHopper instance and return normalized route facts."""
+    return route_points((origin, destination), profile=profile, base_url=base_url, timeout_s=timeout_s)
+
+
+def route_points(
+    points: Sequence[Point],
+    *,
+    profile: str = "bike",
+    base_url: str = "http://127.0.0.1:8989",
+    timeout_s: float = 30.0,
+) -> dict[str, Any]:
+    """Route through two or more local WGS-84 points, preserving via points."""
     if profile not in VALID_PROFILES:
         raise ValueError("profile must be car, bike or racingbike")
+    if len(points) < 2:
+        raise ValueError("route_points requires at least two points")
     query = urlencode([
-        ("point", origin.query_value()),
-        ("point", destination.query_value()),
+        *(("point", point.query_value()) for point in points),
         ("profile", profile),
         ("points_encoded", "false"),
         ("instructions", "true"),
         ("details", "road_class"),
         ("details", "surface"),
         ("details", "bike_priority"),
+        ("details", "osm_way_id"),
     ])
     return _route_request(query, profile=profile, base_url=base_url, timeout_s=timeout_s)
 
