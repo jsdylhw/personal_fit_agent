@@ -56,9 +56,10 @@ function renderProbe(probe) {
     const kind = properties.kind || "connector";
     const isSegment = kind === "strava_segment";
     const isGap = kind === "strava_handoff_gap";
-    const line = drawLine(feature.geometry.coordinates, { color: isSegment ? "#d7438d" : isGap ? "#e0a62b" : "#2d7dd2", weight: isSegment ? 7 : 5, dashed: isGap });
+    const isCandidate = kind === "amap_bicycling_candidate";
+    const line = drawLine(feature.geometry.coordinates, { color: properties.color || (isSegment ? "#d7438d" : isGap ? "#e0a62b" : "#2d7dd2"), weight: isCandidate ? 6 : isSegment ? 7 : 5, dashed: isGap });
     const item = document.createElement("li");
-    item.innerHTML = `<strong>${isSegment ? "Strava 骨架" : isGap ? "待核验接缝" : "连接段"} · ${properties.name || "未命名"}</strong><small>${formatDistance(properties.distance_m || 0)}${isGap ? " · 非高德验证道路" : ""}</small>`;
+    item.innerHTML = `<strong>${isCandidate ? "高德骑行候选" : isSegment ? "Strava 骨架" : isGap ? "待核验接缝" : "连接段"} · ${properties.name || "未命名"}</strong><small>${formatDistance(properties.distance_m || 0)}${properties.duration_s ? ` · ${formatDuration(properties.duration_s)}` : ""}${properties.waypoints ? ` · ${properties.waypoints.join(" → ")}` : ""}${isGap ? " · 非高德验证道路" : ""}</small>`;
     item.addEventListener("click", () => map.setFitView([line], false, [30, 30, 30, 30])); probeItemsNode.append(item);
   }
   if (routeOverlays.length) map.setFitView(routeOverlays, false, [30, 30, 30, 30]);
