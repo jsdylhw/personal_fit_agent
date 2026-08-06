@@ -74,6 +74,26 @@ class SegmentLoopTests(unittest.TestCase):
         self.assertEqual(result.entry_connector.source.name, "径山镇")
         self.assertEqual(result.total_distance_m, 5_000)
 
+    def test_one_closed_segment_can_be_connected_to_a_fixed_city_start(self) -> None:
+        loop = segment("已知完整环线", (120.0, 30.0), (120.0, 30.0))
+
+        def connector(origin: Point, destination: Point):
+            return {
+                "distance_m": 1_000,
+                "ascend_m": 0,
+                "details": {},
+                "raw": {"paths": [{"points": {"coordinates": [[origin.lon, origin.lat], [destination.lon, destination.lat]]}}]},
+            }
+
+        result = plan_segment_loop(
+            [loop], target_distance_m=3_000, connector_fetcher=connector,
+            max_candidates=1, start=Point(30.1, 119.9), start_name="城市起点",
+        )[0]
+
+        self.assertEqual(result.total_distance_m, 3_000)
+        self.assertEqual(result.connector_distance_m, 2_000)
+        self.assertEqual(len(result.connectors), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
