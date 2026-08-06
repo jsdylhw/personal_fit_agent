@@ -16,4 +16,31 @@
     <tag k="natural" v="water" />
     <tag k="water" v="lake" />
   </way>
+  <node id="5" lat="31.1500" lon="121.0400" />
+  <node id="6" lat="31.1550" lon="121.0450" />
+  <node id="7" lat="31.1600" lon="121.0500" />
+  <node id="8" lat="31.1650" lon="121.0550" />
+  <way id="20">
+    <nd ref="5" />
+    <nd ref="6" />
+    <tag k="highway" v="secondary" />
+    <tag k="name" v="春风十里路" />
+    <tag k="ref" v="YBA4" />
+  </way>
+  <way id="21">
+    <nd ref="6" />
+    <nd ref="7" />
+    <nd ref="8" />
+    <tag k="highway" v="secondary" />
+    <tag k="ref" v="YBA4" />
+  </way>
+  <relation id="30">
+    <member type="way" ref="20" role="" />
+    <member type="way" ref="20" role="forward" />
+    <member type="way" ref="21" role="" />
+    <tag k="type" v="route" />
+    <tag k="route" v="road" />
+    <tag k="name" v="上阮连接线" />
+    <tag k="ref" v="YBA4" />
+  </relation>
 </osm>
