@@ -134,6 +134,7 @@ python demo/osm_cycling_router/route_candidates.py \
   --input demo/osm_cycling_router/data/route-probes/jurong-maoshan-wawushan-climbs.geojson \
   --road-database demo/osm_cycling_router/data/road_corridors.sqlite \
   --corridor YBA4 \
+  --segment-id 1530562 --segment-id 11607745 \
   --start "31.946528,119.163720" --target-km 100 \
   --profile car --max-routes 3
 ```
