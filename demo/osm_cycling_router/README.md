@@ -145,6 +145,25 @@ python demo/osm_cycling_router/route_candidates.py \
 传入 `--output` 后会同时生成可直接在 Demo 查看的 GeoJSON。运行服务后打开
 `http://127.0.0.1:8080/?probe=jurong-yba4-candidates`；点击左侧每条候选可单独高亮并缩放到该路线。
 
+## 干线 + 区域闭环
+
+`lollipop_loop.py` 用于“城市出发、进入一个骑行区域、在区域内绕圈后按相同或近似干线返回”的路线。它把 `A → B` 和 `B → A` 只计算一次，保留在总距离中，但只对 B 区内部的多点闭环计算回头比例；不会把合理的进出山区共用道路误判为差路线。
+
+区域边界点暂时需要由 OSM 查询或人工审核后按一个方向提供，避免把单个地点名误当成可靠的环线边界：
+
+```bash
+python demo/osm_cycling_router/lollipop_loop.py \
+  --start "32.0226,118.7836" \
+  --gateway "32.0100,118.6958" \
+  --via "32.0350,118.6980" --via "32.0320,118.6670" \
+  --via "31.9850,118.6650" --via "31.9820,118.6900" \
+  --profile car \
+  --name "夫子庙—江心洲环线（实验）" \
+  --output demo/osm_cycling_router/data/route-probes/fuzimiao-jiangxinzhou-lollipop.geojson
+```
+
+输出包含顺、逆两个区域环线候选；每条候选都显示干线去程、干线回程、区域内部距离和**仅区域内部**的重复比例。
+
 ## 用真实 FIT 探针算路
 
 另开终端：
