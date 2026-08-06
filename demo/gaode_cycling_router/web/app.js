@@ -77,4 +77,13 @@ async function showProbe() {
 map.on("click", (event) => { setPoints(points.length >= 2 ? [event.lnglat] : [...points, event.lnglat]); clearRoute(); });
 document.querySelector("#route-button").addEventListener("click", calculateRoute);
 document.querySelector("#probe-button").addEventListener("click", showProbe);
-api("/health").then(() => setStatus("高德本地服务已就绪", "ready")).catch(() => setStatus("本地服务不可用", "error"));
+const requestedProbe = new URLSearchParams(window.location.search).get("probe");
+const validRequestedProbe = requestedProbe && /^[a-z0-9][a-z0-9_-]*$/.test(requestedProbe);
+api("/health").then(() => {
+  setStatus("高德本地服务已就绪", "ready");
+  if (validRequestedProbe) {
+    document.querySelector("#probe-name").value = requestedProbe;
+    return showProbe();
+  }
+  return null;
+}).catch(() => setStatus("本地服务不可用", "error"));

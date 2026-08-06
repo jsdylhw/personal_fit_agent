@@ -11,7 +11,7 @@
 ## 启动
 
 1. 在高德开放平台申请 **Web 服务 API Key** 与 **JS API Key**，并为 JS Key 配置本地 Referer 限制。
-2. 复制并填写本地配置（不会提交）：
+2. 推荐直接在仓库根目录 `config.yaml` 填写 `amap.web_service_key`、`amap.js_key`、`amap.security_js_code`（该文件已忽略）。也可复制并填写 Demo 内的本地配置：
 
    ```bash
    cd demo/gaode_cycling_router
@@ -25,7 +25,7 @@
    # 浏览器打开 http://127.0.0.1:8090
    ```
 
-可用 `ROUTE_PROBE_DIR=../osm_cycling_router/data/route-probes` 让此 Demo 读取已有的路线探针。读取时会自动把 WGS‑84 几何转换为 GCJ‑02，因此能正确叠加到高德底图。
+Demo 默认读取自身 `data/` 下已生成的高德探针。可用 `ROUTE_PROBE_DIR=../osm_cycling_router/data/route-probes` 改为读取旧 OSM Demo 的路线探针；读取时会自动把 WGS‑84 几何转换为 GCJ‑02，因此能正确叠加到高德底图。
 
 ## 以高德骑行重组已确认骨架
 
@@ -40,7 +40,7 @@ python -m demo.gaode_cycling_router.compose_segments \
   --output demo/gaode_cycling_router/data/fuzimiao-jiangxinzhou-amap.geojson
 ```
 
-该命令调用现有 `plan_ordered_segment_route`：路段顺序、短接缝核验标记、距离/回头路评分保持不变，只有每个连接段改为高德骑行导航。输出文件可通过设置 `ROUTE_PROBE_DIR=demo/gaode_cycling_router/data` 后在网页中载入。
+该命令调用现有 `plan_ordered_segment_route`：路段顺序、短接缝核验标记、距离/回头路评分保持不变，只有每个连接段改为高德骑行导航。输出文件默认可在网页中直接载入。
 
 ## 安全与范围
 

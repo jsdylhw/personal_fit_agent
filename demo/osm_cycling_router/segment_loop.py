@@ -424,10 +424,13 @@ def candidate_geojson(candidate: LoopCandidate, *, name: str, target_distance_m:
     features: list[dict[str, Any]] = []
     if candidate.entry_connector:
         connector = candidate.entry_connector
+        connector_kind = str(connector.details.get("kind") or (
+            "amap_bicycling_connector" if connector.details.get("provider") == "amap" else "graphhopper_connector"
+        ))
         features.append({
             "type": "Feature",
             "properties": {
-                "kind": "graphhopper_connector",
+                "kind": connector_kind,
                 "name": f"{connector.source.name} → {connector.target.name}",
                 "distance_m": round(connector.distance_m, 1),
                 "ascend_m": round(connector.ascend_m, 1),
@@ -438,7 +441,9 @@ def candidate_geojson(candidate: LoopCandidate, *, name: str, target_distance_m:
         properties = dict(segment.properties)
         properties.update({"kind": "strava_segment", "name": segment.name, "distance_m": round(segment.distance_m, 1), "ascend_m": round(segment.ascend_m, 1)})
         features.append({"type": "Feature", "properties": properties, "geometry": {"type": "LineString", "coordinates": segment.geometry}})
-        connector_kind = str(connector.details.get("kind") or "graphhopper_connector")
+        connector_kind = str(connector.details.get("kind") or (
+            "amap_bicycling_connector" if connector.details.get("provider") == "amap" else "graphhopper_connector"
+        ))
         features.append({
             "type": "Feature",
             "properties": {

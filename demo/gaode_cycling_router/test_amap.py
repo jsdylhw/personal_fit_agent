@@ -12,7 +12,7 @@ class AmapAdapterTests(unittest.TestCase):
 
     def test_rejects_unsuccessful_amap_response(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "invalid key"):
-            _successful_path({"errcode": 10001, "errmsg": "invalid key"})
+            _successful_path({"status": "0", "infocode": "10001", "info": "invalid key"})
 
     def test_composes_via_points_from_pairwise_bicycling_legs(self) -> None:
         class StubRouter(AmapCyclingRouter):
@@ -37,6 +37,10 @@ class AmapAdapterTests(unittest.TestCase):
         self.assertGreater(abs(gcj[0] - wgs[0]), 0.001)
         self.assertAlmostEqual(restored[0], wgs[0], places=6)
         self.assertAlmostEqual(restored[1], wgs[1], places=6)
+
+    def test_router_defaults_to_two_safe_retries_for_transient_network_errors(self) -> None:
+        router = AmapCyclingRouter("test-key")
+        self.assertEqual(router.retries, 2)
 
 
 if __name__ == "__main__":

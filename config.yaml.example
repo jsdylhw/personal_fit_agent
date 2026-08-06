@@ -34,6 +34,14 @@ strava:
   token_store: ".strava_tokens.json"
   timeout_seconds: 120
 
+# Optional: required only by demo/gaode_cycling_router. The Web Service key
+# stays in the local Python process; JS key and security code load the AMap
+# base map in the browser. Restrict the JS key's Referer in the AMap console.
+amap:
+  web_service_key: "replace-with-amap-web-service-key"
+  js_key: "replace-with-amap-js-key"
+  security_js_code: "replace-with-amap-security-js-code"
+
 # Leave blank for local-only Web UI access. Set a long random value before
 # exposing the Web UI through a LAN or reverse proxy.
 web_api_token: ""

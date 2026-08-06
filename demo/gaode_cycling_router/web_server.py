@@ -42,6 +42,38 @@ def load_local_env(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def load_amap_settings(demo_dir: Path) -> dict[str, str]:
+    """Read local .env first, then the repository's ignored ``amap`` block.
+
+    The root config is convenient for this repository's local experiments;
+    `.env` remains useful when running this demo outside the project tree.
+    Environment variables always win over both files.
+    """
+    load_local_env(demo_dir / ".env")
+    config_path = demo_dir.parents[1] / "config.yaml"
+    if config_path.is_file():
+        try:
+            from core.config import load_config
+            configured = load_config(config_path).get("amap") or {}
+        except (ImportError, ValueError):
+            configured = {}
+        if isinstance(configured, dict):
+            mapping = {
+                "AMAP_WEB_SERVICE_KEY": "web_service_key",
+                "AMAP_JS_KEY": "js_key",
+                "AMAP_SECURITY_JS_CODE": "security_js_code",
+            }
+            for environment_name, config_name in mapping.items():
+                value = configured.get(config_name)
+                if value:
+                    os.environ.setdefault(environment_name, str(value))
+    return {
+        "web_service_key": os.getenv("AMAP_WEB_SERVICE_KEY", ""),
+        "js_key": os.getenv("AMAP_JS_KEY", ""),
+        "security_js_code": os.getenv("AMAP_SECURITY_JS_CODE", ""),
+    }
+
+
 def parse_gcj_point(value: str) -> AmapPoint:
     try:
         lon, lat = (float(part.strip()) for part in value.split(",", 1))
@@ -62,8 +94,8 @@ def _convert_geometry_to_gcj02(geometry: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(f"unsupported route-probe geometry: {kind!r}")
 
 
-def load_wgs84_probe_as_gcj02(probe_dir: Path, name: str) -> dict[str, Any]:
-    """Read a trusted local WGS-84 probe and convert it for the AMap canvas."""
+def load_probe_as_gcj02(probe_dir: Path, name: str) -> dict[str, Any]:
+    """Read a trusted local probe and convert WGS-84 input for the AMap canvas."""
     if not ROUTE_PROBE_NAME.fullmatch(name):
         raise ValueError("invalid route probe name")
     path = probe_dir / f"{name}.geojson"
@@ -72,6 +104,11 @@ def load_wgs84_probe_as_gcj02(probe_dir: Path, name: str) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
         raise RuntimeError("route probe is not valid GeoJSON")
+    source_coordinate_system = str((payload.get("metadata") or {}).get("coordinate_system") or "wgs84").lower()
+    if source_coordinate_system == "gcj02":
+        return payload
+    if source_coordinate_system != "wgs84":
+        raise ValueError(f"unsupported route-probe coordinate system: {source_coordinate_system}")
     features = []
     for feature in payload["features"]:
         features.append({**feature, "geometry": _convert_geometry_to_gcj02(dict(feature.get("geometry") or {}))})
@@ -143,7 +180,7 @@ def create_server(
                 elif parsed.path.startswith("/api/route-probes/"):
                     if route_probe_dir is None:
                         raise FileNotFoundError("route probe directory is not configured")
-                    self.send_json(load_wgs84_probe_as_gcj02(route_probe_dir, parsed.path.removeprefix("/api/route-probes/")))
+                    self.send_json(load_probe_as_gcj02(route_probe_dir, parsed.path.removeprefix("/api/route-probes/")))
                 elif parsed.path == "/" or parsed.path.startswith("/static/"):
                     self.serve_static(parsed.path)
                 else:
@@ -162,14 +199,14 @@ def create_server(
 
 def main() -> None:
     demo_dir = Path(__file__).resolve().parent
-    load_local_env(demo_dir / ".env")
+    settings = load_amap_settings(demo_dir)
     parser = argparse.ArgumentParser(description="Serve the AMap cycling-router demo")
     parser.add_argument("--host", default=os.getenv("GAODE_WEB_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("GAODE_WEB_PORT", "8090")))
-    parser.add_argument("--route-probe-dir", type=Path, default=os.getenv("ROUTE_PROBE_DIR") or None)
+    parser.add_argument("--route-probe-dir", type=Path, default=os.getenv("ROUTE_PROBE_DIR") or demo_dir / "data")
     args = parser.parse_args()
     try:
-        router = AmapCyclingRouter(os.getenv("AMAP_WEB_SERVICE_KEY", ""))
+        router = AmapCyclingRouter(settings["web_service_key"])
     except ValueError as exc:
         parser.error(str(exc) + "; copy .env.example to .env and fill it first")
     static_dir = demo_dir / "web"
@@ -179,8 +216,8 @@ def main() -> None:
         port=args.port,
         static_dir=static_dir,
         router=router,
-        js_key=os.getenv("AMAP_JS_KEY", ""),
-        security_js_code=os.getenv("AMAP_SECURITY_JS_CODE", ""),
+        js_key=settings["js_key"],
+        security_js_code=settings["security_js_code"],
         route_probe_dir=args.route_probe_dir,
     ).serve_forever()
 
