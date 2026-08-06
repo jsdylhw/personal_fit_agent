@@ -121,7 +121,7 @@ def plan_lollipop_loop(
     gateway: Point,
     *,
     ring_waypoints: Sequence[Point],
-    profile: str = "car",
+    profile: str = "racingbike",
     fetcher: RouteFetcher = route_points,
 ) -> LollipopPlan:
     """Calculate a reusable approach road and clockwise/counter-clockwise area loops.
@@ -222,7 +222,7 @@ def main() -> None:
     parser.add_argument("--start", type=_point, required=True)
     parser.add_argument("--gateway", type=_point, required=True, help="entry/exit point on the area perimeter")
     parser.add_argument("--via", type=_point, action="append", required=True, help="perimeter points in one direction, repeatable")
-    parser.add_argument("--profile", choices=("car", "bike", "racingbike"), default="car")
+    parser.add_argument("--profile", choices=("car", "bike", "racingbike"), default="racingbike")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--name", default="干线 + 区域环线（实验）")
     args = parser.parse_args()

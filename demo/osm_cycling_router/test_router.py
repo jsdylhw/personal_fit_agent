@@ -11,7 +11,9 @@ from demo.osm_cycling_router.router import Point, SEMICIRCLE_TO_DEGREES, round_t
 from demo.osm_cycling_router.strava_segments import (
     COMPATIBLE_API_BASE_URL,
     DEFAULT_API_BASE_URL,
+    decode_polyline,
     explore_segments,
+    segment_detail_feature,
 )
 
 
@@ -71,6 +73,22 @@ class RouterHelpersTest(unittest.TestCase):
         second_url = open_request.call_args_list[1].args[0].full_url
         self.assertTrue(first_url.startswith(DEFAULT_API_BASE_URL))
         self.assertTrue(second_url.startswith(COMPATIBLE_API_BASE_URL))
+
+    def test_segment_detail_decodes_polyline_to_planner_feature(self):
+        # Google's public encoded-polyline example: (38.5,-120.2) ->
+        # (40.7,-120.95) -> (43.252,-126.453).
+        feature = segment_detail_feature({
+            "id": 42,
+            "name": "闭环样本",
+            "distance": 12_300,
+            "total_elevation_gain": 123,
+            "map": {"polyline": "_p~iF~ps|U_ulLnnqC_mqNvxq`@"},
+        })
+        self.assertEqual(feature["properties"]["kind"], "strava_segment")
+        self.assertEqual(feature["properties"]["id"], 42)
+        self.assertEqual(feature["geometry"]["coordinates"], [
+            [-120.2, 38.5], [-120.95, 40.7], [-126.453, 43.252],
+        ])
 
 
 if __name__ == "__main__":

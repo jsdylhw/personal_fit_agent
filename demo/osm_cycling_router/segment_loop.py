@@ -268,8 +268,8 @@ def plan_segment_loop(
     climbs generally expects their recorded uphill direction.  Scenic loops or
     road-book planning can opt in, letting a segment become a descent instead.
     """
-    if not 2 <= len(segments) <= MAX_SEGMENTS:
-        raise ValueError(f"segment count must be between 2 and {MAX_SEGMENTS}")
+    if not 1 <= len(segments) <= MAX_SEGMENTS:
+        raise ValueError(f"segment count must be between 1 and {MAX_SEGMENTS}")
     if target_distance_m <= 0:
         raise ValueError("target_distance_m must be positive")
     if allow_reverse and len(segments) > MAX_REVERSIBLE_SEGMENTS:

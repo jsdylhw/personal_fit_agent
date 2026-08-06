@@ -145,11 +145,11 @@ python demo/osm_cycling_router/route_candidates.py \
 传入 `--output` 后会同时生成可直接在 Demo 查看的 GeoJSON。运行服务后打开
 `http://127.0.0.1:8080/?probe=jurong-yba4-candidates`；点击左侧每条候选可单独高亮并缩放到该路线。
 
-## 干线 + 区域闭环
+## 干线 + 已验证区域闭环
 
-`lollipop_loop.py` 用于“城市出发、进入一个骑行区域、在区域内绕圈后按相同或近似干线返回”的路线。它把 `A → B` 和 `B → A` 只计算一次，保留在总距离中，但只对 B 区内部的多点闭环计算回头比例；不会把合理的进出山区共用道路误判为差路线。
+`lollipop_loop.py` 是低层的“城市出发、进入一个**已验证**骑行区域、在区域内绕圈后按相同或近似干线返回”的拼接器。它把 `A → B` 和 `B → A` 只计算一次，保留在总距离中，但只对 B 区内部的多点闭环计算回头比例；不会把合理的进出山区共用道路误判为差路线。
 
-区域边界点暂时需要由 OSM 查询或人工审核后按一个方向提供，避免把单个地点名误当成可靠的环线边界：
+它**不会**根据“环江心洲 / 环陵一圈”这类地点名自行推断可骑边界。区域骨架必须先来自已验证的 Strava Segment、完整 OSM 道路关系或人工审核的连续道路；随后才可以按一个方向提供边界点：
 
 ```bash
 python demo/osm_cycling_router/lollipop_loop.py \
@@ -157,9 +157,9 @@ python demo/osm_cycling_router/lollipop_loop.py \
   --gateway "32.0100,118.6958" \
   --via "32.0350,118.6980" --via "32.0320,118.6670" \
   --via "31.9850,118.6650" --via "31.9820,118.6900" \
-  --profile car \
-  --name "夫子庙—江心洲环线（实验）" \
-  --output demo/osm_cycling_router/data/route-probes/fuzimiao-jiangxinzhou-lollipop.geojson
+  --profile racingbike \
+  --name "城市—已验证区域闭环（实验）" \
+  --output demo/osm_cycling_router/data/route-probes/verified-area-lollipop.geojson
 ```
 
 输出包含顺、逆两个区域环线候选；每条候选都显示干线去程、干线回程、区域内部距离和**仅区域内部**的重复比例。
@@ -220,6 +220,20 @@ export STRAVA_ACCESS_TOKEN='...'
 python demo/osm_cycling_router/strava_segments.py \
   --bounds '31.05,121.05,31.25,121.30' \
   --output demo/osm_cycling_router/data/strava-segment-sample.json
+```
+
+当 Explorer 找到疑似完整环线后，先只读取该 Segment 的详情与 polyline，再交给本地规划器连接城市起点；不要用几个手工边界点替代真实骑行骨架：
+
+```bash
+python demo/osm_cycling_router/strava_segments.py \
+  --segment-id 17544798 \
+  --output demo/osm_cycling_router/data/jiangxinzhou-loop.geojson
+
+python demo/osm_cycling_router/segment_loop.py \
+  --input demo/osm_cycling_router/data/jiangxinzhou-loop.geojson \
+  --output demo/osm_cycling_router/data/route-probes/city-jiangxinzhou.geojson \
+  --start "32.0226,118.7836" --start-name "城市起点" \
+  --profile racingbike --target-km 50
 ```
 
 后续排序实验应是：GraphHopper 生成候选路线 → 计算它与本地历史 FIT 及这个 Strava 路段样本的重叠 → 用这些只读信号排序。不得让模型自行编造道路或路段热度。
