@@ -136,10 +136,14 @@ python demo/osm_cycling_router/route_candidates.py \
   --corridor YBA4 \
   --segment-id 1530562 --segment-id 11607745 \
   --start "31.946528,119.163720" --target-km 100 \
-  --profile car --max-routes 3
+  --profile car --max-routes 3 \
+  --output demo/osm_cycling_router/data/route-probes/jurong-yba4-candidates.geojson
 ```
 
 评分暂时只考虑目标距离、连接段长度、几何重叠与覆盖不同走廊；全程高程不在这一版承诺范围内。输出是可解释的规划 JSON，下一阶段再将它渲染为动态地图路线并接入 Agent。
+
+传入 `--output` 后会同时生成可直接在 Demo 查看的 GeoJSON。运行服务后打开
+`http://127.0.0.1:8080/?probe=jurong-yba4-candidates`；点击左侧每条候选可单独高亮并缩放到该路线。
 
 ## 用真实 FIT 探针算路
 

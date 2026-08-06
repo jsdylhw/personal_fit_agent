@@ -232,7 +232,11 @@ async function showRouteProbe(name, loadingText, fallbackName, readyText) {
     renderRouteProbe(probe);
     const meta = probe.metadata || {};
     const distance = meta.total_distance_m || meta.local_distance_m || meta.source_distance_m || 0;
-    summaryNode.textContent = `${meta.name || fallbackName} · ${formatDistance(distance)}${meta.known_segment_ascent_m ? ` · 已知主爬 ${Math.round(meta.known_segment_ascent_m)} m` : meta.source_ascent_m ? ` · 已知爬升 ${Math.round(meta.source_ascent_m)} m` : ""}${meta.closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.closure_gap_m)} m` : meta.local_closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.local_closure_gap_m)} m` : ""}`;
+    const candidateCount = Number(meta.candidate_count || 0);
+    const routeSummary = candidateCount > 1
+      ? `${candidateCount} 条候选 · 目标 ${formatDistance(meta.target_distance_m || distance)}`
+      : formatDistance(distance);
+    summaryNode.textContent = `${meta.name || fallbackName} · ${routeSummary}${meta.known_segment_ascent_m ? ` · 已知主爬 ${Math.round(meta.known_segment_ascent_m)} m` : meta.source_ascent_m ? ` · 已知爬升 ${Math.round(meta.source_ascent_m)} m` : ""}${meta.closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.closure_gap_m)} m` : meta.local_closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.local_closure_gap_m)} m` : ""}`;
     setStatus(readyText, "ready");
   } catch (error) {
     setStatus(error.message, "error");

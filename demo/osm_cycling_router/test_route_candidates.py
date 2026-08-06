@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 
 from demo.osm_cycling_router.road_corridors import RoadCorridor
-from demo.osm_cycling_router.route_candidates import ConnectorCandidate, connector_candidates, plan_candidate_loops
+from demo.osm_cycling_router.route_candidates import (
+    ConnectorCandidate,
+    candidate_routes_geojson,
+    connector_candidates,
+    plan_candidate_loops,
+)
 from demo.osm_cycling_router.router import Point
 from demo.osm_cycling_router.segment_loop import DirectedSegment
 
@@ -45,3 +50,10 @@ class RouteCandidateTests(unittest.TestCase):
         self.assertTrue(all(len(item.connectors) == 3 for item in routes))
         self.assertEqual(routes[0].corridor_count, 0)
         self.assertTrue(any(item.corridor_count == 1 for item in routes))
+
+        geojson = candidate_routes_geojson(
+            routes, name="测试候选", start=Point(30.0, 120.0), target_distance_m=6_000,
+        )
+        self.assertEqual(geojson["metadata"]["candidate_count"], 2)
+        self.assertEqual(geojson["features"][0]["properties"]["kind"], "graphhopper_candidate")
+        self.assertGreaterEqual(len(geojson["features"][0]["geometry"]["coordinates"]), 2)
