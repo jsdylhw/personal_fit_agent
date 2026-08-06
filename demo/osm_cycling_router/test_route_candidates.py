@@ -43,4 +43,5 @@ class RouteCandidateTests(unittest.TestCase):
         routes = plan_candidate_loops(segments, start=Point(30.0, 120.0), target_distance_m=6_000, connector_builder=build, max_routes=2)
         self.assertEqual(len(routes), 2)
         self.assertTrue(all(len(item.connectors) == 3 for item in routes))
+        self.assertEqual(routes[0].corridor_count, 0)
         self.assertTrue(any(item.corridor_count == 1 for item in routes))

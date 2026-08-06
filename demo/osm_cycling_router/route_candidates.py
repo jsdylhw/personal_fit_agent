@@ -215,7 +215,23 @@ def plan_candidate_loops(
     selected: list[CandidateRoute] = []
     seen: set[tuple[tuple[int | None, str], ...]] = set()
     selected_geometries: list[frozenset[tuple[int, int]]] = []
+
+    # A preferred corridor is optional by default. Keep the best all-direct
+    # baseline so the user can compare its detour/retrace cost with scenic
+    # alternatives instead of receiving several variants of the same idea.
+    direct_baseline = next(
+        (item for item in sorted(complete, key=lambda item: item.score) if all(connector.is_direct for connector in item.connectors)),
+        None,
+    )
+    if direct_baseline is not None:
+        selected.append(direct_baseline)
+        selected_geometries.append(_cells(tuple(
+            point for segment in direct_baseline.segments for point in segment.geometry
+        ) + tuple(point for connector in direct_baseline.connectors for point in connector.geometry)))
+
     for route in sorted(complete, key=lambda item: item.score):
+        if route is direct_baseline:
+            continue
         signature = tuple((segment.segment_id, str(segment.properties.get("route_direction", "forward"))) for segment in route.segments)
         connector_signature = tuple((item.corridor_ref or item.corridor_name or "direct") for item in route.connectors)
         key = signature + tuple((None, item) for item in connector_signature)
