@@ -253,6 +253,65 @@ def plan_candidate_loops(
     return selected
 
 
+def _combined_route_geometry(route: CandidateRoute) -> list[list[float]]:
+    """Join connectors and source segments in the exact planned travel order."""
+    coordinates: list[list[float]] = []
+    for index, connector in enumerate(route.connectors):
+        for lon, lat in connector.geometry:
+            point = [lon, lat]
+            if not coordinates or coordinates[-1] != point:
+                coordinates.append(point)
+        if index < len(route.segments):
+            for lon, lat in route.segments[index].geometry:
+                point = [lon, lat]
+                if coordinates[-1] != point:
+                    coordinates.append(point)
+    if len(coordinates) < 2:
+        raise ValueError("candidate route contains insufficient geometry")
+    return coordinates
+
+
+def candidate_routes_geojson(
+    routes: Sequence[CandidateRoute],
+    *,
+    name: str,
+    start: Point,
+    target_distance_m: float,
+) -> dict[str, Any]:
+    """Serialize comparable candidate loops as one browser-ready GeoJSON probe."""
+    palette = ("#667785", "#d64f3b", "#2d7dd2", "#9b59b6", "#e0a62b")
+    features: list[dict[str, Any]] = []
+    for index, route in enumerate(routes, start=1):
+        role = "直连基线" if route.corridor_count == 0 else f"经 {route.corridor_count} 条语义走廊"
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "kind": "graphhopper_candidate",
+                "name": f"候选 {index} · {role}",
+                "color": palette[(index - 1) % len(palette)],
+                "distance_m": round(route.total_distance_m, 1),
+                "connector_distance_m": round(route.connector_distance_m, 1),
+                "overlap_ratio": round(route.overlap_ratio, 4),
+                "corridor_count": route.corridor_count,
+                "segments": route.as_dict()["segments"],
+            },
+            "geometry": {"type": "LineString", "coordinates": _combined_route_geometry(route)},
+        })
+    return {
+        "type": "FeatureCollection",
+        "metadata": {
+            "name": name,
+            "target_distance_m": round(target_distance_m, 1),
+            "total_distance_m": round(routes[0].total_distance_m, 1) if routes else 0,
+            "candidate_count": len(routes),
+            "start_latlng": [start.lat, start.lon],
+            "end_latlng": [start.lat, start.lon],
+            "closure_gap_m": 0,
+        },
+        "features": features,
+    }
+
+
 def _point(value: str) -> Point:
     try:
         lat, lon = (float(item.strip()) for item in value.split(",", 1))
@@ -272,6 +331,8 @@ def main() -> None:
     parser.add_argument("--profile", choices=("car", "bike", "racingbike"), default="car")
     parser.add_argument("--allow-reverse", action="store_true")
     parser.add_argument("--max-routes", type=int, default=3)
+    parser.add_argument("--output", type=Path, help="optional browser-ready GeoJSON output")
+    parser.add_argument("--name", default="多候选主爬闭环（实验）")
     args = parser.parse_args()
     source = json.loads(args.input.read_text(encoding="utf-8"))
     selected_ids = set(args.segment_id or ())
@@ -292,13 +353,21 @@ def main() -> None:
         segments, start=args.start, target_distance_m=args.target_km * 1_000,
         connector_builder=build, allow_reverse=args.allow_reverse, max_routes=args.max_routes,
     )
-    print(json.dumps({
+    output = {
         "schema_version": "route_candidate_plan.v1",
         "start": {"lat": args.start.lat, "lon": args.start.lon},
         "target_distance_m": args.target_km * 1_000,
         "corridors": [item.as_dict() for item in corridors],
         "routes": [item.as_dict() for item in routes],
-    }, ensure_ascii=False, indent=2))
+    }
+    if args.output:
+        geojson = candidate_routes_geojson(
+            routes, name=args.name, start=args.start, target_distance_m=args.target_km * 1_000,
+        )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(geojson, ensure_ascii=False), encoding="utf-8")
+        output["geojson_output"] = str(args.output)
+    print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
