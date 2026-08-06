@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from demo.gaode_cycling_router.amap import AmapCyclingRouter, AmapPoint
-from demo.gaode_cycling_router.planner import plan_ordered_wgs84_segments_with_amap
+from demo.gaode_cycling_router.planner import candidate_preview_feature, plan_ordered_wgs84_segments_with_amap
 from demo.osm_cycling_router.router import Point
 from demo.osm_cycling_router.segment_loop import DirectedSegment, candidate_geojson
 
@@ -38,6 +38,10 @@ class PlannerAdapterTests(unittest.TestCase):
         geojson = candidate_geojson(candidate, name="高德测试", target_distance_m=2_000)
         connector_kinds = [item["properties"]["kind"] for item in geojson["features"] if item["properties"].get("distance_m") == 100.0]
         self.assertEqual(connector_kinds, ["amap_bicycling_connector", "amap_bicycling_connector"])
+        preview = candidate_preview_feature(candidate, index=1, name="测试候选", min_distance_m=1_000, max_distance_m=2_000)
+        self.assertEqual(preview["properties"]["kind"], "amap_bicycling_candidate")
+        self.assertTrue(preview["properties"]["within_requested_distance"])
+        self.assertGreaterEqual(len(preview["geometry"]["coordinates"]), 2)
 
 
 if __name__ == "__main__":

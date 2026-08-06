@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from demo.osm_cycling_router.router import Point
-from demo.osm_cycling_router.segment_loop import ConnectorFetcher, DirectedSegment, LoopCandidate, plan_ordered_segment_route
+from demo.osm_cycling_router.segment_loop import ConnectorFetcher, DirectedSegment, LoopCandidate, haversine_m, plan_ordered_segment_route
 
 from .amap import AmapCyclingRouter, AmapPoint
 from .coordinates import wgs84_to_gcj02
@@ -70,3 +70,56 @@ def plan_ordered_wgs84_segments_with_amap(
         start_name=start_name,
         near_handoff_m=near_handoff_m,
     )
+
+
+def candidate_preview_feature(
+    candidate: LoopCandidate,
+    *,
+    index: int,
+    name: str,
+    min_distance_m: float,
+    max_distance_m: float,
+) -> dict[str, Any]:
+    """Serialize one provider-validated route-book candidate for the AMap UI.
+
+    It combines its individual Strava skeleton and AMap connector legs only
+    for display.  ``within_requested_distance`` is intentionally separate
+    from landmark-evidence validity: a navigable loop is not automatically a
+    verified "环湖" route.
+    """
+    coordinates: list[list[float]] = []
+
+    def append(geometry: Sequence[tuple[float, float]]) -> None:
+        for lon, lat in geometry:
+            point = [lon, lat]
+            if not coordinates or coordinates[-1] != point:
+                coordinates.append(point)
+
+    if candidate.entry_connector:
+        append(candidate.entry_connector.geometry)
+    for segment, connector in zip(candidate.segments, candidate.connectors):
+        append(segment.geometry)
+        append(connector.geometry)
+    if len(coordinates) < 2:
+        raise ValueError("candidate has insufficient display geometry")
+    closure_gap_m = haversine_m(coordinates[0], coordinates[-1])
+    within_distance = min_distance_m <= candidate.total_distance_m <= max_distance_m
+    palette = ("#2679ce", "#e46042", "#8e62c7", "#e0a62b", "#2e9d68")
+    return {
+        "type": "Feature",
+        "properties": {
+            "kind": "amap_bicycling_candidate",
+            "name": f"候选 {index} · {name}",
+            "color": palette[(index - 1) % len(palette)],
+            "distance_m": round(candidate.total_distance_m, 1),
+            "connector_distance_m": round(candidate.connector_distance_m, 1),
+            "retrace_ratio": round(candidate.retrace_ratio, 4),
+            "closure_gap_m": round(closure_gap_m, 1),
+            "within_requested_distance": within_distance,
+            "segment_ids": [segment.segment_id for segment in candidate.segments],
+            "directions": [str(segment.properties.get("route_direction") or "forward") for segment in candidate.segments],
+            "provider": "amap",
+            "mode": "bicycling",
+        },
+        "geometry": {"type": "LineString", "coordinates": coordinates},
+    }
