@@ -9,7 +9,7 @@ from urllib.error import HTTPError
 from urllib.request import ProxyHandler, build_opener
 
 from demo.gaode_cycling_router.amap import AmapPoint
-from demo.gaode_cycling_router.web_server import create_server
+from demo.gaode_cycling_router.web_server import create_server, load_probe_as_gcj02
 
 
 class StubRouter:
@@ -73,6 +73,15 @@ class GaodeWebServerTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as error:
             self.opener.open(f"{self.base_url}/api/route-probes/../sample")
         self.assertEqual(error.exception.code, 400)
+
+    def test_keeps_a_preconverted_gcj02_probe_unchanged(self) -> None:
+        (self.probe_dir / "already-gcj.geojson").write_text(json.dumps({
+            "type": "FeatureCollection", "metadata": {"coordinate_system": "gcj02"}, "features": [{
+                "type": "Feature", "properties": {}, "geometry": {"type": "LineString", "coordinates": [[118.7, 32.0], [118.71, 32.01]]},
+            }],
+        }), encoding="utf-8")
+        payload = load_probe_as_gcj02(self.probe_dir, "already-gcj")
+        self.assertEqual(payload["features"][0]["geometry"]["coordinates"][0], [118.7, 32.0])
 
 
 if __name__ == "__main__":

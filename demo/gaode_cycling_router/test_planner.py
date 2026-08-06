@@ -5,7 +5,7 @@ import unittest
 from demo.gaode_cycling_router.amap import AmapCyclingRouter, AmapPoint
 from demo.gaode_cycling_router.planner import plan_ordered_wgs84_segments_with_amap
 from demo.osm_cycling_router.router import Point
-from demo.osm_cycling_router.segment_loop import DirectedSegment
+from demo.osm_cycling_router.segment_loop import DirectedSegment, candidate_geojson
 
 
 class PlannerAdapterTests(unittest.TestCase):
@@ -35,6 +35,9 @@ class PlannerAdapterTests(unittest.TestCase):
         self.assertEqual(candidate.entry_connector.details["mode"], "bicycling")
         # The adapter changed the WGS-84 source into GCJ-02 before calling AMap.
         self.assertNotAlmostEqual(router.calls[0][1].lon, 118.70, places=4)
+        geojson = candidate_geojson(candidate, name="高德测试", target_distance_m=2_000)
+        connector_kinds = [item["properties"]["kind"] for item in geojson["features"] if item["properties"].get("distance_m") == 100.0]
+        self.assertEqual(connector_kinds, ["amap_bicycling_connector", "amap_bicycling_connector"])
 
 
 if __name__ == "__main__":

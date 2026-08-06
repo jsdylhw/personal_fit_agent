@@ -9,10 +9,12 @@ pairwise bicycle routes and preserves the intermediate point explicitly.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
+from urllib.error import URLError
 from urllib.request import ProxyHandler, build_opener
 
 
@@ -60,10 +62,13 @@ def _path_coordinates(path: dict[str, Any]) -> list[tuple[float, float]]:
 
 
 def _successful_path(payload: dict[str, Any]) -> dict[str, Any]:
-    # v5 returns ``errcode=0`` on success.  Check both code and route so API
-    # permission/configuration errors cannot silently become an empty route.
-    if str(payload.get("errcode", "0")) not in {"0", "10000"}:
-        detail = payload.get("errdetail") or payload.get("errmsg") or "AMap bicycling request failed"
+    # The current v5 endpoint reports ``status=1`` / ``infocode=10000``.
+    # Keep the older ``errcode`` check for a compatible error response shape.
+    status = payload.get("status")
+    infocode = payload.get("infocode")
+    errcode = payload.get("errcode")
+    if (status is not None and str(status) != "1") or (infocode is not None and str(infocode) != "10000") or (errcode is not None and str(errcode) not in {"0", "10000"}):
+        detail = payload.get("errdetail") or payload.get("errmsg") or payload.get("info") or "AMap bicycling request failed"
         raise RuntimeError(str(detail))
     paths = ((payload.get("route") or {}).get("paths") or (payload.get("data") or {}).get("paths") or [])
     if not paths:
@@ -72,19 +77,40 @@ def _successful_path(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class AmapCyclingRouter:
-    def __init__(self, key: str, *, base_url: str = AMAP_BICYCLING_URL, timeout_s: float = 20.0) -> None:
+    def __init__(self, key: str, *, base_url: str = AMAP_BICYCLING_URL, timeout_s: float = 20.0, retries: int = 2) -> None:
         if not key or key.startswith("replace-with-"):
             raise ValueError("AMAP_WEB_SERVICE_KEY is not configured")
         self.key = key
         self.base_url = base_url
         self.timeout_s = timeout_s
+        self.retries = retries
 
     def route(self, origin: AmapPoint, destination: AmapPoint) -> dict[str, Any]:
-        query = urlencode({"key": self.key, "origin": origin.api_value(), "destination": destination.api_value()})
+        query = urlencode({
+            "key": self.key,
+            "origin": origin.api_value(),
+            "destination": destination.api_value(),
+            # v5 only includes per-step geometry when explicitly requested.
+            "show_fields": "cost,navi,polyline",
+        })
         # Respect a local WSL proxy for this external request.  Unlike the
         # GraphHopper adapter, this is intentionally not a localhost request.
-        with build_opener(ProxyHandler()).open(f"{self.base_url}?{query}", timeout=self.timeout_s) as response:
-            payload = json.load(response)
+        # The WSL proxy can occasionally close TLS during a multi-leg plan;
+        # retrying an idempotent GET is safe and avoids discarding a whole loop.
+        request_url = f"{self.base_url}?{query}"
+        last_error: Exception | None = None
+        for attempt in range(self.retries + 1):
+            try:
+                with build_opener(ProxyHandler()).open(request_url, timeout=self.timeout_s) as response:
+                    payload = json.load(response)
+                break
+            except (OSError, TimeoutError, URLError) as exc:
+                last_error = exc
+                if attempt == self.retries:
+                    raise RuntimeError(f"AMap bicycling request failed after {attempt + 1} attempts: {exc.reason if isinstance(exc, URLError) else exc}") from exc
+                time.sleep(0.4 * (attempt + 1))
+        else:  # pragma: no cover - guarded by the final retry branch
+            raise RuntimeError("AMap bicycling request failed") from last_error
         path = _successful_path(payload)
         coordinates = _path_coordinates(path)
         return {

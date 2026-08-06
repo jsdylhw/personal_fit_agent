@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 from demo.osm_cycling_router.router import Point
@@ -13,7 +12,7 @@ from demo.osm_cycling_router.segment_loop import candidate_geojson, segment_from
 
 from .amap import AmapCyclingRouter
 from .planner import plan_ordered_wgs84_segments_with_amap
-from .web_server import load_local_env
+from .web_server import load_amap_settings
 
 
 def parse_wgs84_point(value: str) -> Point:
@@ -26,7 +25,7 @@ def parse_wgs84_point(value: str) -> Point:
 
 def main() -> None:
     demo_dir = Path(__file__).resolve().parent
-    load_local_env(demo_dir / ".env")
+    settings = load_amap_settings(demo_dir)
     parser = argparse.ArgumentParser(description="Use AMap bicycling to compose a fixed Strava/OSM route skeleton")
     parser.add_argument("--input", type=Path, required=True, help="WGS-84 FeatureCollection containing strava_segment features")
     parser.add_argument("--segment-id", type=int, action="append", required=True, help="segment id in intended travel order; repeat this argument")
@@ -49,7 +48,7 @@ def main() -> None:
     if missing:
         parser.error(f"requested segment id(s) are missing: {missing}")
     try:
-        router = AmapCyclingRouter(os.getenv("AMAP_WEB_SERVICE_KEY", ""))
+        router = AmapCyclingRouter(settings["web_service_key"])
     except ValueError as exc:
         parser.error(str(exc) + "; copy .env.example to .env and fill it first")
     candidate = plan_ordered_wgs84_segments_with_amap(
