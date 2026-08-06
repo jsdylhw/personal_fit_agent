@@ -236,6 +236,18 @@ python demo/osm_cycling_router/segment_loop.py \
   --profile racingbike --target-km 50
 ```
 
+若一个真实 Segment 是进出区域的明确约束（例如“经夹江大桥东往西过江，再开始江心洲闭环”），将桥段与闭环段按意图写入同一个 GeoJSON，并传入 `--preserve-input-order`。这样桥段不是可被重排的普通主爬：
+
+```bash
+python demo/osm_cycling_router/segment_loop.py \
+  --input demo/osm_cycling_router/data/jiangxinzhou-bridge-then-loop.geojson \
+  --output demo/osm_cycling_router/data/route-probes/city-jiangxinzhou-via-bridge.geojson \
+  --start "32.0226,118.7836" --start-name "城市起点" \
+  --profile racingbike --target-km 55 --preserve-input-order --near-handoff-m 100
+```
+
+`--near-handoff-m` 只允许衔接两条 Strava 轨迹首尾非常接近的情况；输出会把该短缝渲染为黄色虚线“待核验接缝”，不能当作已经由本地路网验证的道路。
+
 后续排序实验应是：GraphHopper 生成候选路线 → 计算它与本地历史 FIT 及这个 Strava 路段样本的重叠 → 用这些只读信号排序。不得让模型自行编造道路或路段热度。
 
 ## 进入主项目的门槛

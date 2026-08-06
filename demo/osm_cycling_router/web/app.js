@@ -191,14 +191,15 @@ function renderRouteProbe(probe) {
     const isSegment = feature.properties?.kind === "strava_segment";
     const isLocalRebuild = feature.properties?.kind === "local_graphhopper_rebuild";
     const isCandidate = feature.properties?.kind === "graphhopper_candidate";
+    const isHandoffGap = feature.properties?.kind === "strava_handoff_gap";
     const layer = L.geoJSON(feature, {
-      style: { color: feature.properties?.color || (isSegment ? "#d7438d" : "#2d7dd2"), weight: isSegment ? 6 : 4, opacity: .88 },
+      style: { color: feature.properties?.color || (isSegment ? "#d7438d" : isHandoffGap ? "#e0a62b" : "#2d7dd2"), weight: isSegment ? 6 : 4, opacity: .88, dashArray: isHandoffGap ? "7 7" : undefined },
     }).addTo(routeProbeLayer);
     const item = document.createElement("li");
     const title = document.createElement("strong");
-    title.textContent = `${isSegment ? "Strava 路段" : isLocalRebuild ? "本地重建" : isCandidate ? "连接候选" : "连接"} · ${feature.properties?.name || "未命名路段"}`;
+    title.textContent = `${isSegment ? "Strava 路段" : isHandoffGap ? "待核验接缝" : isLocalRebuild ? "本地重建" : isCandidate ? "连接候选" : "连接"} · ${feature.properties?.name || "未命名路段"}`;
     const detail = document.createElement("small");
-    detail.textContent = `${formatDistance(feature.properties?.distance_m || 0)}${feature.properties?.local_distance_m ? ` · 区域 ${formatDistance(feature.properties.local_distance_m)}` : ""}${feature.properties?.local_retrace_ratio != null ? ` · 区域重复 ${(Number(feature.properties.local_retrace_ratio) * 100).toFixed(1)}%` : ""}${feature.properties?.reverse_overlap_m ? ` · 反向重叠 ${formatDistance(feature.properties.reverse_overlap_m)}` : ""}${feature.properties?.ascend_m ? ` · 爬升 ${Math.round(feature.properties.ascend_m)} m` : ""}`;
+    detail.textContent = `${formatDistance(feature.properties?.distance_m || 0)}${feature.properties?.handoff_gap_m ? " · 非路网接缝，需核验" : ""}${feature.properties?.local_distance_m ? ` · 区域 ${formatDistance(feature.properties.local_distance_m)}` : ""}${feature.properties?.local_retrace_ratio != null ? ` · 区域重复 ${(Number(feature.properties.local_retrace_ratio) * 100).toFixed(1)}%` : ""}${feature.properties?.reverse_overlap_m ? ` · 反向重叠 ${formatDistance(feature.properties.reverse_overlap_m)}` : ""}${feature.properties?.ascend_m ? ` · 爬升 ${Math.round(feature.properties.ascend_m)} m` : ""}`;
     item.append(title, detail);
     item.addEventListener("click", () => {
       if (isCandidate) {
