@@ -248,6 +248,7 @@ def _point(value: str) -> Point:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plan multiple local connector candidates around real climb segments")
     parser.add_argument("--input", type=Path, required=True, help="Strava climb FeatureCollection")
+    parser.add_argument("--segment-id", type=int, action="append", help="include only this source segment id, repeatable")
     parser.add_argument("--road-database", type=Path, required=True)
     parser.add_argument("--corridor", action="append", default=[], help="named/ref'ed optional corridor, repeatable")
     parser.add_argument("--start", type=_point, required=True)
@@ -257,7 +258,15 @@ def main() -> None:
     parser.add_argument("--max-routes", type=int, default=3)
     args = parser.parse_args()
     source = json.loads(args.input.read_text(encoding="utf-8"))
-    segments = [segment_from_feature(feature) for feature in source.get("features") or [] if feature.get("properties", {}).get("kind") == "strava_segment"]
+    selected_ids = set(args.segment_id or ())
+    segments = [
+        segment_from_feature(feature)
+        for feature in source.get("features") or []
+        if feature.get("properties", {}).get("kind") == "strava_segment"
+        and (not selected_ids or feature.get("properties", {}).get("id") in selected_ids)
+    ]
+    if not segments:
+        parser.error("no requested source segments were found")
     corridors = [item for query in args.corridor for item in search_road_corridors(args.road_database, query)]
 
     def build(origin: Point, destination: Point) -> list[ConnectorCandidate]:
