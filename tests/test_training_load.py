@@ -10,17 +10,36 @@ def _write_summary(path, *, key: str, tss: float, intensity_factor: float, dista
     path.write_text(
         json.dumps(
             {
+                "schema_version": "llm_fit_file_analysis.v2",
                 "activity_key": key,
+                "activity_metrics": {
+                    "schema_version": "activity_metrics.v2",
+                    "activity_key": key,
+                    "identity": {
+                        "sport_type": "cycling",
+                        "start_time_local": f"2026-05-1{1 if key == 'a1' else 2}T08:00:00",
+                    },
+                    "scale": {"duration_min": duration_min, "distance_km": distance_km},
+                    "power": {"intensity_factor": intensity_factor},
+                    "load": {
+                        "power_stress": {
+                            "available": True,
+                            "method": "cycling_power_tss",
+                            "tss": tss,
+                            "source": "fit_session",
+                        },
+                        "garmin": {"source": "unavailable"},
+                    },
+                },
                 "fit_summary": {
                     "sport_type": "cycling",
                     "start_time_local": f"2026-05-1{1 if key == 'a1' else 2}T08:00:00",
                 },
-                "history_entry": {
+                "analysis_summary": {
+                    "schema_version": "activity_analysis_summary.v1",
                     "summary_label": f"活动 {key}",
                     "main_stimulus": "耐力骑行",
-                    "training_load": f"TSS {tss}",
-                    "duration_min": duration_min,
-                    "distance_km": distance_km,
+                    "load_label": "低负荷" if tss < 50 else "高负荷",
                     "brief": f"NP 210W, IF {intensity_factor}, TSS {tss}",
                 },
             },
@@ -71,3 +90,62 @@ def test_summarize_recent_training_load_reports_missing_summaries():
 
     assert result["error"] == "missing_activity_summary"
     assert result["missing"][0]["activity_key"] == "a1"
+
+
+def test_structured_metrics_take_precedence_over_conflicting_report_text(tmp_path):
+    summary_path = tmp_path / "structured.summary.json"
+    summary_path.write_text(
+        json.dumps({
+            "activity_key": "a1",
+            "activity_metrics": {
+                "schema_version": "activity_metrics.v1",
+                "identity": {"sport_type": "cycling", "start_time_local": "2026-05-11T08:00:00"},
+                "scale": {"duration_min": 60, "distance_km": 30},
+                "power": {"intensity_factor": 0.75},
+                "load": {"tss": 18.8},
+            },
+            "history_entry": {
+                "training_load": "TSS 999, NP 999W, IF 9.99",
+                "duration_min": 1,
+                "distance_km": 1,
+            },
+        }),
+        encoding="utf-8",
+    )
+    context = AgentContext(
+        session_id="structured-load",
+        selected_activities=[{"activity_key": "a1", "summary_path": str(summary_path)}],
+    )
+
+    result = summarize_recent_training_load_tool(context)["result"]
+
+    assert result["totals"] == {"distance_km": 30.0, "duration_min": 60.0, "tss": 18.8}
+    assert result["intensity"]["avg_if"] == 0.75
+    assert result["intensity"]["source_counts"] == {"stored_summary_v1": 1}
+
+
+def test_legacy_report_text_is_not_used_as_a_numeric_data_source(tmp_path):
+    summary_path = tmp_path / "legacy.summary.json"
+    summary_path.write_text(
+        json.dumps({
+            "activity_key": "legacy",
+            "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-11T08:00:00"},
+            "history_entry": {
+                "training_load": "TSS 999, NP 999W, IF 9.99",
+                "duration_min": 60,
+                "distance_km": 30,
+            },
+        }),
+        encoding="utf-8",
+    )
+    context = AgentContext(
+        session_id="legacy-load",
+        selected_activities=[{"activity_key": "legacy", "summary_path": str(summary_path)}],
+    )
+
+    result = summarize_recent_training_load_tool(context)["result"]
+
+    assert result["totals"]["tss"] is None
+    assert result["intensity"]["avg_if"] is None
+    assert result["intensity"]["basis"] == "unavailable"
+    assert result["intensity"]["source_counts"] == {"index_fallback": 1}

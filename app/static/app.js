@@ -151,7 +151,7 @@ function renderSummary(display, file) {
     ["距离", formatKm(display.distance_km)],
     ["时长", formatMin(display.duration_min)],
     ["训练刺激", display.main_stimulus || "-"],
-    ["训练负荷", display.training_load || "-"],
+    ["负荷标签", display.load_label || "-"],
     ["活动标签", display.summary_label || "-"],
     ["口吻", file.strava_summary_tone?.name || "-"],
   ];
@@ -206,7 +206,7 @@ async function analyzeSelected() {
   try {
     const result = await fetchJson("/api/fit-files/analyze", {
       method: "POST",
-      body: JSON.stringify({ path: file.path, history: true, force: true }),
+      body: JSON.stringify({ path: file.path, history: false, force: true }),
     });
     log("分析完成", {
       summary_path: result.summary_path,

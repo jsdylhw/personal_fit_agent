@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from core.config import cfg_get, load_config
+from core.activity_summary import get_analysis_summary, summary_schema_version
 from agent.activity.operations.service import (
     analyze_fit_document,
     check_garmin_connection,
@@ -40,7 +41,7 @@ class DownloadGarminRequest(BaseModel):
 
 class AnalyzeFitRequest(BaseModel):
     path: str
-    history: bool = True
+    history: bool = False
     force: bool = False
 
 
@@ -245,7 +246,8 @@ def _fit_file_info(path: Path) -> dict[str, Any]:
         try:
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             info["fit_summary"] = summary.get("fit_summary")
-            info["history_entry"] = summary.get("history_entry")
+            info["analysis_summary"] = get_analysis_summary(summary)
+            info["summary_schema_version"] = summary_schema_version(summary)
             info["display_summary"] = _display_summary_from_analysis(summary)
             info["strava_summary"] = summary.get("strava_summary")
             info["strava_summary_tone"] = summary.get("strava_summary_tone")
@@ -264,22 +266,22 @@ def _fit_file_info(path: Path) -> dict[str, Any]:
 
 def _display_summary_from_analysis(summary: dict[str, Any]) -> dict[str, Any]:
     fit_summary = summary.get("fit_summary") or {}
-    history_entry = summary.get("history_entry") or {}
+    analysis_summary = get_analysis_summary(summary)
+    activity_metrics = summary.get("activity_metrics") if isinstance(summary.get("activity_metrics"), dict) else {}
+    scale = activity_metrics.get("scale") if isinstance(activity_metrics.get("scale"), dict) else {}
     return {
         "start_time": (
-            history_entry.get("start_time_local")
-            or fit_summary.get("start_time_local")
-            or history_entry.get("start_time")
+            fit_summary.get("start_time_local")
             or fit_summary.get("start_time")
         ),
-        "sport_type": history_entry.get("sport_type") or fit_summary.get("sport_type"),
-        "sub_sport": history_entry.get("sub_sport") or fit_summary.get("sub_sport"),
-        "distance_km": history_entry.get("distance_km") or _meters_to_km(fit_summary.get("distance_m")),
-        "duration_min": history_entry.get("duration_min") or _seconds_to_min(fit_summary.get("duration_s")),
-        "summary_label": history_entry.get("summary_label") or "",
-        "main_stimulus": history_entry.get("main_stimulus") or "",
-        "training_load": history_entry.get("training_load") or "",
-        "brief": history_entry.get("brief") or "",
+        "sport_type": fit_summary.get("sport_type"),
+        "sub_sport": fit_summary.get("sub_sport"),
+        "distance_km": scale.get("distance_km") or _meters_to_km(fit_summary.get("distance_m")),
+        "duration_min": scale.get("duration_min") or _seconds_to_min(fit_summary.get("duration_s")),
+        "summary_label": analysis_summary.get("summary_label") or "",
+        "main_stimulus": analysis_summary.get("main_stimulus") or "",
+        "load_label": analysis_summary.get("load_label") or "",
+        "brief": analysis_summary.get("brief") or "",
     }
 
 
@@ -293,7 +295,7 @@ def _display_summary_from_fit(fit_summary: dict[str, Any] | None) -> dict[str, A
         "duration_min": _seconds_to_min(fit_summary.get("duration_s")),
         "summary_label": "",
         "main_stimulus": "",
-        "training_load": "",
+        "load_label": "",
         "brief": "",
     }
 

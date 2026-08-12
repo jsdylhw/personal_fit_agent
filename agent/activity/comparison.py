@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.context import AgentContext
+from core.activity_summary import build_history_entry, get_analysis_summary, get_tss
 
 
 def compare_selected_activities_tool(
@@ -111,20 +112,34 @@ def _activity_report_from_summary(
     summary: dict[str, Any],
 ) -> dict[str, Any]:
     fit_summary = summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {}
-    history_entry = summary.get("history_entry") if isinstance(summary.get("history_entry"), dict) else {}
+    analysis_summary = get_analysis_summary(summary)
+    history_entry = build_history_entry(summary)
+    metrics = summary.get("activity_metrics") if isinstance(summary.get("activity_metrics"), dict) else {}
+    scale = metrics.get("scale") if isinstance(metrics.get("scale"), dict) else {}
+    power = metrics.get("power") if isinstance(metrics.get("power"), dict) else {}
     return {
         "activity_key": summary.get("activity_key") or activity.get("activity_key"),
         "file_name": activity.get("file_name") or _path_name(str(summary.get("fit_path") or "")),
         "summary_path": str(summary_path),
         "start_time_local": fit_summary.get("start_time_local") or history_entry.get("start_time_local"),
         "sport_type": fit_summary.get("sport_type") or history_entry.get("sport_type"),
-        "duration_min": _number(history_entry.get("duration_min")),
-        "distance_km": _number(history_entry.get("distance_km")),
-        "summary_label": history_entry.get("summary_label"),
-        "main_stimulus": history_entry.get("main_stimulus"),
-        "training_load": history_entry.get("training_load"),
-        "brief": history_entry.get("brief"),
-        "quality_notes": history_entry.get("quality_notes") if isinstance(history_entry.get("quality_notes"), list) else [],
+        "duration_min": _first_number(
+            scale.get("duration_min"),
+            _seconds_to_minutes(fit_summary.get("duration_s")),
+            history_entry.get("duration_min"),
+        ),
+        "distance_km": _first_number(
+            scale.get("distance_km"),
+            _meters_to_km(fit_summary.get("distance_m")),
+            history_entry.get("distance_km"),
+        ),
+        "summary_label": analysis_summary.get("summary_label"),
+        "main_stimulus": analysis_summary.get("main_stimulus"),
+        "load_label": analysis_summary.get("load_label"),
+        "brief": analysis_summary.get("brief"),
+        "quality_notes": analysis_summary.get("quality_notes") if isinstance(analysis_summary.get("quality_notes"), list) else [],
+        "tss": get_tss(metrics),
+        "intensity_factor": _number(power.get("intensity_factor")),
         "fit_summary": fit_summary,
     }
 
@@ -153,8 +168,8 @@ def _build_comparison(reports: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _higher_load_report(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
-    def score(report: dict[str, Any]) -> tuple[float, float]:
-        load_text = str(report.get("training_load") or "")
+    def score(report: dict[str, Any]) -> tuple[float, float, float, float]:
+        load_text = str(report.get("load_label") or "")
         label_score = 0.0
         if "非常轻" in load_text or "极低" in load_text:
             label_score = 1.0
@@ -164,7 +179,12 @@ def _higher_load_report(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
             label_score = max(label_score, 2.0)
         if "高" in load_text:
             label_score = max(label_score, 3.0)
-        return label_score, float(report.get("duration_min") or 0)
+        return (
+            float(report.get("tss") or -1),
+            float(report.get("intensity_factor") or -1),
+            label_score,
+            float(report.get("duration_min") or 0),
+        )
 
     return max(reports, key=score) if reports else None
 
@@ -176,8 +196,10 @@ def _training_judgement(
     if not higher_load:
         return "已有报告不足以判断训练价值。"
     label = higher_load.get("summary_label") or higher_load.get("activity_key")
-    load = higher_load.get("training_load") or "未知负荷"
-    return f"相对更有训练价值的是 {label},主要因为它的时长/距离更高,报告负荷为 {load}。"
+    tss = higher_load.get("tss")
+    load = higher_load.get("load_label") or "未知负荷"
+    basis = f"结构化 TSS 为 {tss}" if tss is not None else f"分析标签为 {load}"
+    return f"相对负荷更高的是 {label}，判断依据是{basis}。"
 
 
 def _format_comparison_answer(comparison: dict[str, Any]) -> str:
@@ -192,7 +214,8 @@ def _format_comparison_answer(comparison: dict[str, Any]) -> str:
             f"{activity.get('summary_label') or '未命名活动'}, "
             f"{activity.get('distance_km')} km / {activity.get('duration_min')} 分钟, "
             f"刺激: {activity.get('main_stimulus') or '未知'}, "
-            f"负荷: {activity.get('training_load') or '未知'}。"
+            f"负荷标签: {activity.get('load_label') or '未知'}"
+            f"，TSS: {activity.get('tss') if activity.get('tss') is not None else '无数据'}。"
         )
     lines.append(comparison.get("training_judgement") or "")
     return "\n".join(line for line in lines if line)
@@ -222,3 +245,21 @@ def _number(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _first_number(*values: Any) -> float | None:
+    for value in values:
+        converted = _number(value)
+        if converted is not None:
+            return converted
+    return None
+
+
+def _seconds_to_minutes(value: Any) -> float | None:
+    seconds = _number(value)
+    return round(seconds / 60, 2) if seconds is not None else None
+
+
+def _meters_to_km(value: Any) -> float | None:
+    meters = _number(value)
+    return round(meters / 1000, 3) if meters is not None else None

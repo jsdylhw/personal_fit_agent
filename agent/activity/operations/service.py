@@ -142,7 +142,7 @@ def _index_fit_paths(
 def analyze_fit_document(
     fit_path: str,
     *,
-    use_history: bool = True,
+    use_history: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
     """生成单个 FIT 的完整分析文档，供 API 等界面调用。"""
@@ -151,7 +151,12 @@ def analyze_fit_document(
     return analyze_fit_file(fit_path, use_history=use_history, force=force)
 
 
-def analyze_fit_file_tool(fit_path: str, *, force: bool = False) -> dict[str, Any]:
+def analyze_fit_file_tool(
+    fit_path: str,
+    *,
+    force: bool = False,
+    use_history: bool = False,
+) -> dict[str, Any]:
     """对指定 FIT 文件运行本地 LLM 分析(hidden tool loop),返回精简摘要。
 
     Args:
@@ -161,7 +166,7 @@ def analyze_fit_file_tool(fit_path: str, *, force: bool = False) -> dict[str, An
     Returns:
         dict: 精简活动元数据 + summary_path/markdown_report,供 main_agent 直接展示报告.
     """
-    result = analyze_fit_document(fit_path, use_history=True, force=force)
+    result = analyze_fit_document(fit_path, use_history=use_history, force=force)
     fit_summary = result.get("fit_summary") or {}
     from core.stats import _meters_to_km, _seconds_to_minutes
 
@@ -175,7 +180,8 @@ def analyze_fit_file_tool(fit_path: str, *, force: bool = False) -> dict[str, An
         "distance_km": _meters_to_km(fit_summary.get("distance_m")),
         "markdown_report": result.get("markdown_report"),
         "strava_summary": result.get("strava_summary"),
-        "history_entry": result.get("history_entry") if isinstance(result.get("history_entry"), dict) else {},
+        "analysis_summary": result.get("analysis_summary") if isinstance(result.get("analysis_summary"), dict) else {},
+        "activity_metrics": result.get("activity_metrics") if isinstance(result.get("activity_metrics"), dict) else {},
         "model": result.get("model"),
         "status": result.get("status"),
     }

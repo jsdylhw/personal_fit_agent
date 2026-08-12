@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from core.activity_summary import get_analysis_summary
+
 
 def aggregate_summaries(activities: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """汇总活动 summary，不重新解析 FIT，也不调用 LLM。"""
@@ -24,15 +26,15 @@ def aggregate_summaries(activities: Iterable[dict[str, Any]]) -> dict[str, Any]:
             })
             continue
         fit_summary = summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {}
-        history = summary.get("history_entry") if isinstance(summary.get("history_entry"), dict) else {}
+        analysis = get_analysis_summary(summary)
         included.append({
             "activity_key": activity.get("activity_key") or summary.get("activity_key"),
             "sport_type": fit_summary.get("sport_type") or activity.get("sport_type"),
             "distance_km": _distance_km(fit_summary, activity),
             "duration_min": _duration_min(fit_summary, activity),
-            "summary_label": history.get("summary_label"),
-            "main_stimulus": history.get("main_stimulus"),
-            "training_load": history.get("training_load"),
+            "summary_label": analysis.get("summary_label"),
+            "main_stimulus": analysis.get("main_stimulus"),
+            "load_label": analysis.get("load_label"),
             "summary_path": str(summary_path),
         })
     return {

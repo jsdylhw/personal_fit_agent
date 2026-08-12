@@ -102,7 +102,10 @@ SUBMIT_ANALYSIS_TOOL = ToolDef(
             },
             "history_entry": {
                 "type": "object",
-                "description": "Compact structured entry for future activity comparisons.",
+                "description": (
+                    "Compact qualitative entry for the separate history cache. Use load_label for a short "
+                    "non-numeric load description; objective TSS/IF/NP values are persisted by local code."
+                ),
             },
         },
         "required": ["markdown_report", "strava_summary", "history_entry"],

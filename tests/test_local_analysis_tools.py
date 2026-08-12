@@ -442,7 +442,7 @@ class TestNormalizeHistoryEntry:
         entry = {}
         result = normalize_history_entry(entry, path=fit_path, parsed=sample_parsed_fit)
         assert result["activity_key"] is not None
-        assert result["schema_version"] == "llm_activity_history_entry.v1"
+        assert result["schema_version"] == "llm_activity_history_entry.v2"
         assert result["sport_type"] == "cycling"
         assert result["start_time"] == "2026-05-14T16:00:00"
         assert result["start_time_local"] == "2026-05-14T16:00:00"
@@ -537,7 +537,9 @@ def test_submit_analysis_ends_child_loop(sample_parsed_fit, tmp_path, monkeypatc
 
     assert result["markdown_report"] == "# 完成报告"
     assert result["history_entry"] == {"summary_label": "恢复骑"}
-    assert [tool["name"] for tool in captured["tools"]][-1] == "submit_analysis"
+    tool_names = [tool["name"] for tool in captured["tools"]]
+    assert tool_names[-1] == "submit_analysis"
+    assert "get_history" not in tool_names
     assert SUBMIT_ANALYSIS_TOOL.input_schema["required"] == ["markdown_report", "strava_summary", "history_entry"]
 
 
@@ -566,6 +568,8 @@ class TestAnalyzeFitFileResultTimes:
 
         assert result["fit_path"] == str(external_fit.resolve())
         assert result["history_entry"]["file_path"] == str(external_fit.resolve())
+        assert result["activity_metrics"]["schema_version"] == "activity_metrics.v2"
+        assert result["activity_metrics"]["load"]["power_stress"]["tss"] == 45.0
 
     def test_result_fit_summary_uses_only_local_time(
         self, sample_parsed_fit, tmp_path, monkeypatch
@@ -603,7 +607,7 @@ class TestAnalyzeFitFileResultTimes:
         assert "start_time" not in result["fit_summary"]
         assert "start_time_utc" not in result["fit_summary"]
         assert "timezone_note" not in result["fit_summary"]
-        history_activity = result["history_before"]["activities"][0]
+        history_activity = result["history_context"]["activities"][0]
         assert history_activity["start_time_local"] == "2026-05-13T08:00:00"
         assert "start_time" not in history_activity
 

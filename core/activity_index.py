@@ -16,6 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 from core.config import ensure_data_dirs
+from core.activity_summary import get_analysis_summary, get_index_load_label, summary_schema_version
 from core.path_utils import project_relative_or_absolute
 from core.stats import _meters_to_km, _round_float, _seconds_to_minutes, prune_empty_values
 from core.time_utils import local_time_without_timezone
@@ -104,6 +105,7 @@ def upsert_activity_from_summary(summary_path: str | Path, *, path: str | Path |
 
     fit_path = Path(str(data.get("fit_path") or "")).expanduser()
     fit_summary = data.get("fit_summary") if isinstance(data.get("fit_summary"), dict) else {}
+    analysis_summary = get_analysis_summary(data)
     entry = _entry_from_fit_summary(
         fit_path.resolve() if fit_path.exists() else fit_path,
         fit_summary,
@@ -117,9 +119,12 @@ def upsert_activity_from_summary(summary_path: str | Path, *, path: str | Path |
         "has_strava_summary": bool(data.get("strava_summary")),
         "strava_activity_id": data.get("strava_activity_id"),
         "status": data.get("status"),
-        "summary_label": (data.get("history_entry") or {}).get("summary_label") if isinstance(data.get("history_entry"), dict) else None,
-        "main_stimulus": (data.get("history_entry") or {}).get("main_stimulus") if isinstance(data.get("history_entry"), dict) else None,
-        "training_load": (data.get("history_entry") or {}).get("training_load") if isinstance(data.get("history_entry"), dict) else None,
+        "summary_schema_version": summary_schema_version(data),
+        "summary_label": analysis_summary.get("summary_label"),
+        "main_stimulus": analysis_summary.get("main_stimulus"),
+        "load_label": analysis_summary.get("load_label"),
+        # Remove a stale V1 field when an existing index row is refreshed.
+        "training_load": None,
     })
     return upsert_activity_entry(entry, path=path)
 
@@ -320,7 +325,8 @@ def _compact_activity(row: dict[str, Any]) -> dict[str, Any]:
         "strava_activity_id": row.get("strava_activity_id"),
         "summary_label": row.get("summary_label"),
         "main_stimulus": row.get("main_stimulus"),
-        "training_load": row.get("training_load"),
+        "load_label": get_index_load_label(row),
+        "summary_schema_version": row.get("summary_schema_version"),
     })
 
 

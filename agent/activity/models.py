@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.activity_summary import get_index_load_label
+
 
 @dataclass(frozen=True)
 class ActivityHandle:
@@ -30,7 +32,7 @@ class ActivityHandle:
     distance_km: float | None = None
     summary_label: str | None = None
     main_stimulus: str | None = None
-    training_load: str | None = None
+    load_label: str | None = None
     has_summary: bool = False
     sub_sport: str | None = None
     source: str | None = None
@@ -53,7 +55,7 @@ class ActivityHandle:
             distance_km=_float_or_none(entry.get("distance_km")),
             summary_label=entry.get("summary_label"),
             main_stimulus=entry.get("main_stimulus"),
-            training_load=entry.get("training_load"),
+            load_label=get_index_load_label(entry),
             has_summary=bool(entry.get("has_summary")),
             has_strava_summary=bool(entry.get("has_strava_summary")),
             source=entry.get("source"),
@@ -75,7 +77,7 @@ class ActivityHandle:
             "distance_km": self.distance_km,
             "summary_label": self.summary_label,
             "main_stimulus": self.main_stimulus,
-            "training_load": self.training_load,
+            "load_label": self.load_label,
             "has_summary": self.has_summary,
             "has_strava_summary": self.has_strava_summary,
             "source": self.source,

@@ -24,6 +24,14 @@ from core.history import query_activity_history, upsert_activity_history
 from core.path_utils import project_relative_or_absolute
 from core.time_utils import local_time_without_timezone
 from agent.tools.fit_analysis import llm_safe_fit_summary, llm_safe_history
+from agent.activity.metrics import build_activity_metrics
+from core.activity_summary import (
+    SUPPORTED_SUMMARY_SCHEMAS,
+    SUMMARY_SCHEMA_V2,
+    analysis_summary_from_history_entry,
+    build_history_entry,
+    get_analysis_summary,
+)
 from fit.parser import parse_fit
 
 STRAVA_SUMMARY_TONES: list[dict[str, str]] = [
@@ -58,6 +66,7 @@ def run_activity_analysis_agent(
     force: bool = False,
     user_request: str = "",
     persist: bool = True,
+    use_history: bool = False,
 ) -> dict[str, Any]:
     """Analyze one FIT file through ActivityAnalysisAgent.
 
@@ -67,7 +76,7 @@ def run_activity_analysis_agent(
     try:
         result = analyze_fit_file(
             fit_path,
-            use_history=True,
+            use_history=use_history,
             force=force,
             user_request=user_request,
             persist=persist,
@@ -101,9 +110,10 @@ def analyze_fit_file(
     # read-only and avoid replacing the cached full report.
     if summary_path.exists() and not force and not user_request.strip():
         result = previous_summary
-        if result.get("schema_version") == "llm_fit_file_analysis.v1":
+        if result.get("schema_version") in SUPPORTED_SUMMARY_SCHEMAS:
             _sanitize_result_times(result)
             result["summary_path"] = str(summary_path)
+            history_entry = build_history_entry(result)
             try:
                 from core.activity_index import upsert_activity_from_summary
 
@@ -111,7 +121,10 @@ def analyze_fit_file(
             except Exception:
                 pass
             if update_history:
-                upsert_activity_history(result["history_entry"])
+                upsert_activity_history(history_entry)
+            # Keep the child-agent return contract compatible without putting
+            # the history-cache row back into a V2 summary file.
+            result["history_entry"] = history_entry
             result["status"] = "skipped_existing_summary"
             return result
 
@@ -137,12 +150,19 @@ def analyze_fit_file(
         parsed=parsed,
     )
 
+    activity_metrics = build_activity_metrics(
+        parsed,
+        activity_key=_activity_key(path),
+        fit_path=project_relative_or_absolute(path),
+    )
     result = {
-        "schema_version": "llm_fit_file_analysis.v1",
+        "schema_version": SUMMARY_SCHEMA_V2,
         "status": "analyzed" if persist else "analyzed_query",
         "activity_key": _activity_key(path),
         "fit_path": project_relative_or_absolute(path),
         "fit_summary": llm_safe_fit_summary(parsed["summary"]),
+        "activity_metrics": activity_metrics,
+        "analysis_summary": analysis_summary_from_history_entry(history_entry),
         "model": model_result.get("model"),
         "session_id": model_result.get("session_id"),
         "log_path": model_result.get("log_path"),
@@ -150,9 +170,9 @@ def analyze_fit_file(
         "strava_summary_tone": model_result.get("strava_summary_tone"),
         "markdown_report": model_result["markdown_report"],
         "strava_summary": model_result["strava_summary"],
-        "history_entry": history_entry,
-        "history_before": llm_safe_history(history_before),
     }
+    if history_before is not None:
+        result["history_context"] = llm_safe_history(history_before)
     result["summary_path"] = str(summary_path)
 
     if persist:
@@ -166,9 +186,11 @@ def analyze_fit_file(
             pass
 
         if update_history:
-            upsert_activity_history(result["history_entry"])
+            upsert_activity_history(history_entry)
 
-    return result
+    # The persisted V2 document remains clean, while callers that still need
+    # to update the separate history cache receive its normalized row.
+    return {**result, "history_entry": history_entry}
 
 
 def analyze_with_llm(
@@ -183,7 +205,12 @@ def analyze_with_llm(
     session_id = new_session_id("fit_analysis")
     strava_summary_tone = choose_strava_summary_tone()
     system_prompt = build_fit_analysis_system_prompt((parsed.get("summary") or {}).get("sport_type"))
-    registry = ToolRegistry(FIT_ANALYSIS_TOOLS)
+    analysis_tools = (
+        FIT_ANALYSIS_TOOLS
+        if history_before is not None
+        else tuple(tool for tool in FIT_ANALYSIS_TOOLS if tool.name != "get_history")
+    )
+    registry = ToolRegistry(analysis_tools)
     handlers = build_tool_handlers(parsed, history_before)
 
     messages: list[dict[str, Any]] = [
@@ -363,7 +390,7 @@ def normalize_history_entry(entry: dict[str, Any], *, path: Path, parsed: dict[s
     """Fill required fields in the child-agent history entry."""
     summary = parsed.get("summary", {})
     normalized = dict(entry)
-    normalized.setdefault("schema_version", "llm_activity_history_entry.v1")
+    normalized.setdefault("schema_version", "llm_activity_history_entry.v2")
     normalized["activity_key"] = _activity_key(path)
     normalized["file_path"] = project_relative_or_absolute(path)
     local_start = local_time_without_timezone(
@@ -396,7 +423,9 @@ def _compact_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
         "distance_km": _meters_to_km(fit_summary.get("distance_m")),
         "markdown_report": result.get("markdown_report"),
         "strava_summary": result.get("strava_summary"),
+        "analysis_summary": get_analysis_summary(result),
         "history_entry": result.get("history_entry") if isinstance(result.get("history_entry"), dict) else {},
+        "activity_metrics": result.get("activity_metrics") if isinstance(result.get("activity_metrics"), dict) else {},
         "model": result.get("model"),
         "status": result.get("status") or "analyzed",
         "agent": "ActivityAnalysisAgent",
@@ -457,6 +486,9 @@ def _sanitize_result_times(result: dict[str, Any]) -> None:
     history_before = result.get("history_before")
     if isinstance(history_before, dict):
         result["history_before"] = llm_safe_history(history_before)
+    history_context = result.get("history_context")
+    if isinstance(history_context, dict):
+        result["history_context"] = llm_safe_history(history_context)
 
 
 def _activity_key(path: Path) -> str:

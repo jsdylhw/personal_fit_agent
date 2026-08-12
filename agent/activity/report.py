@@ -8,6 +8,7 @@ from typing import Any
 from agent.activity.analysis_agent import run_activity_analysis_agent
 from agent.activity.comparison import read_activity_summary
 from agent.context import AgentContext
+from core.activity_summary import build_history_entry, get_analysis_summary
 
 
 def show_selected_activity_report_tool(
@@ -46,13 +47,12 @@ def show_selected_activity_report_tool(
 
     report = str(summary.get("markdown_report") or "").strip()
     if not report:
-        history_entry = summary.get("history_entry") if isinstance(summary.get("history_entry"), dict) else {}
-        report = _fallback_report(history_entry)
+        report = _fallback_report(summary)
 
     if not report:
         return {
             "error": "missing_markdown_report",
-            "message": "Summary exists but does not contain markdown_report or history_entry.",
+            "message": "Summary exists but does not contain markdown_report or analysis_summary.",
             "summary_path": str(summary_path) if summary_path else None,
         }
 
@@ -67,7 +67,7 @@ def show_selected_activity_report_tool(
             "summary_path": str(summary_path) if summary_path else None,
             "source": "existing_summary",
             "fit_summary": summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {},
-            "history_entry": summary.get("history_entry") if isinstance(summary.get("history_entry"), dict) else {},
+            "analysis_summary": get_analysis_summary(summary),
         },
     }
 
@@ -144,7 +144,7 @@ def _answer_targeted_question(
             "status": analysis.get("status"),
             "agent": analysis.get("agent"),
             "analysis_error": analysis.get("analysis_error") if isinstance(analysis.get("analysis_error"), dict) else None,
-            "history_entry": analysis.get("history_entry") if isinstance(analysis.get("history_entry"), dict) else {},
+            "analysis_summary": analysis.get("analysis_summary") if isinstance(analysis.get("analysis_summary"), dict) else {},
         },
     }
 
@@ -197,7 +197,7 @@ def _analyze_missing_summary(
             "status": analysis.get("status"),
             "agent": analysis.get("agent"),
             "analysis_error": analysis.get("analysis_error") if isinstance(analysis.get("analysis_error"), dict) else None,
-            "history_entry": analysis.get("history_entry") if isinstance(analysis.get("history_entry"), dict) else {},
+            "analysis_summary": analysis.get("analysis_summary") if isinstance(analysis.get("analysis_summary"), dict) else {},
         },
     }
 
@@ -215,20 +215,22 @@ def _selected_activity(context: AgentContext) -> dict[str, Any] | None:
     return None
 
 
-def _fallback_report(history_entry: dict[str, Any]) -> str:
-    if not history_entry:
+def _fallback_report(summary: dict[str, Any]) -> str:
+    analysis_summary = get_analysis_summary(summary)
+    if not analysis_summary:
         return ""
+    history_entry = build_history_entry(summary)
     lines = [
-        f"# {history_entry.get('summary_label') or '活动报告'}",
+        f"# {analysis_summary.get('summary_label') or '活动报告'}",
         "",
         f"- 时间: {history_entry.get('start_time_local') or history_entry.get('start_time') or '未知'}",
         f"- 类型: {history_entry.get('sport_type') or '未知'}",
         f"- 距离: {history_entry.get('distance_km') or '未知'} km",
         f"- 时长: {history_entry.get('duration_min') or '未知'} 分钟",
-        f"- 主要刺激: {history_entry.get('main_stimulus') or '未知'}",
-        f"- 训练负荷: {history_entry.get('training_load') or '未知'}",
+        f"- 主要刺激: {analysis_summary.get('main_stimulus') or '未知'}",
+        f"- 负荷标签: {analysis_summary.get('load_label') or '未知'}",
     ]
-    brief = history_entry.get("brief")
+    brief = analysis_summary.get("brief")
     if brief:
         lines.extend(["", str(brief)])
     return "\n".join(lines)

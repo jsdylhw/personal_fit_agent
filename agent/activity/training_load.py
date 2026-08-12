@@ -1,17 +1,19 @@
 """训练负荷汇总工具.
 
-这个模块只做确定性聚合:读取已选活动的 summary,提取 TSS/IF 等负荷线索,
+这个模块只做确定性聚合:读取已选活动的结构化指标，提取 TSS/IF 等负荷线索,
 只输出结构化训练负荷。是否疲劳、怎么安排路线,交给后续 LLM 步骤判断。
 """
 
 from __future__ import annotations
 
-import re
+from collections import Counter
 from datetime import date, datetime
 from typing import Any
 
 from agent.activity.comparison import read_activity_summary
+from agent.activity.history_metrics import load_activity_metrics
 from agent.context import AgentContext
+from core.activity_summary import get_analysis_summary, get_tss
 
 
 def summarize_recent_training_load_tool(
@@ -34,15 +36,21 @@ def summarize_recent_training_load_tool(
     reports: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for activity in activities:
-        _, summary, error = read_activity_summary(activity)
-        if error or summary is None:
+        _, summary, summary_error = read_activity_summary(activity)
+        metrics, metrics_source, metrics_error = load_activity_metrics(activity)
+        if metrics is None:
             missing.append({
                 "activity_key": activity.get("activity_key"),
                 "summary_path": activity.get("summary_path"),
-                "error": error,
+                "error": metrics_error or summary_error,
             })
             continue
-        reports.append(_training_load_activity(activity, summary))
+        reports.append(_training_load_activity(
+            activity,
+            summary or {},
+            activity_metrics=metrics,
+            metrics_source=metrics_source,
+        ))
 
     if not reports:
         return {
@@ -59,37 +67,38 @@ def summarize_recent_training_load_tool(
     }
 
 
-def _training_load_activity(activity: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
+def _training_load_activity(
+    activity: dict[str, Any],
+    summary: dict[str, Any],
+    *,
+    activity_metrics: dict[str, Any],
+    metrics_source: str,
+) -> dict[str, Any]:
     fit_summary = summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {}
-    history_entry = summary.get("history_entry") if isinstance(summary.get("history_entry"), dict) else {}
-    text_blob = "\n".join(
-        str(value or "")
-        for value in (
-            history_entry.get("training_load"),
-            history_entry.get("brief"),
-            summary.get("strava_summary"),
-            summary.get("markdown_report"),
-        )
-    )
-    tss = _extract_tss(text_blob)
-    intensity_factor = _extract_intensity_factor(text_blob)
+    analysis_summary = get_analysis_summary(summary)
+    identity = activity_metrics.get("identity") if isinstance(activity_metrics.get("identity"), dict) else {}
+    scale = activity_metrics.get("scale") if isinstance(activity_metrics.get("scale"), dict) else {}
+    power = activity_metrics.get("power") if isinstance(activity_metrics.get("power"), dict) else {}
+    tss = get_tss(activity_metrics)
+    intensity_factor = _number(power.get("intensity_factor"))
     return {
         "activity_key": summary.get("activity_key") or activity.get("activity_key"),
         "activity_index": activity.get("activity_index"),
-        "summary_label": history_entry.get("summary_label") or activity.get("summary_label"),
+        "summary_label": analysis_summary.get("summary_label") or activity.get("summary_label"),
         "start_time_local": (
-            fit_summary.get("start_time_local")
-            or history_entry.get("start_time_local")
+            identity.get("start_time_local")
+            or fit_summary.get("start_time_local")
             or activity.get("start_time_local")
         ),
-        "sport_type": fit_summary.get("sport_type") or history_entry.get("sport_type") or activity.get("sport_type"),
-        "duration_min": _number(history_entry.get("duration_min"), activity.get("duration_min")),
-        "distance_km": _number(history_entry.get("distance_km"), activity.get("distance_km")),
-        "training_load_text": history_entry.get("training_load"),
-        "main_stimulus": history_entry.get("main_stimulus"),
-        "brief": history_entry.get("brief"),
+        "sport_type": identity.get("sport_type") or fit_summary.get("sport_type") or activity.get("sport_type"),
+        "duration_min": _number(scale.get("duration_min"), activity.get("duration_min")),
+        "distance_km": _number(scale.get("distance_km"), activity.get("distance_km")),
+        "load_label": analysis_summary.get("load_label") or activity.get("load_label"),
+        "main_stimulus": analysis_summary.get("main_stimulus"),
+        "brief": analysis_summary.get("brief"),
         "tss": tss,
         "intensity_factor": intensity_factor,
+        "metrics_source": metrics_source,
         "load_class": _classify_activity_load(tss, intensity_factor),
     }
 
@@ -122,6 +131,9 @@ def _build_training_load_summary(
         },
         "intensity": {
             "basis": _intensity_basis(tss_values, if_values),
+            "source_counts": dict(sorted(Counter(
+                str(item.get("metrics_source") or "unknown") for item in sorted_reports
+            ).items())),
             "hard_activity_count": hard_count,
             "easy_activity_count": easy_count,
             "total_tss": total_tss,
@@ -175,32 +187,7 @@ def _intensity_basis(tss_values: list[float], if_values: list[float]) -> str:
         return "power_tss"
     if if_values:
         return "power_if"
-    return "summary_text"
-
-
-def _extract_tss(text: str) -> float | None:
-    patterns = (
-        r"\bTSS\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?)",
-        r"([0-9]+(?:\.[0-9]+)?)\s*TSS\b",
-    )
-    return _extract_first_number(text, patterns)
-
-
-def _extract_intensity_factor(text: str) -> float | None:
-    patterns = (
-        r"\bIF\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?)",
-        r"IF\s*([0-9]+(?:\.[0-9]+)?)",
-        r"强度因子\s*(?:\(IF\))?\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?)",
-    )
-    return _extract_first_number(text, patterns)
-
-
-def _extract_first_number(text: str, patterns: tuple[str, ...]) -> float | None:
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return _number(match.group(1))
-    return None
+    return "unavailable"
 
 
 def _date_part(value: Any) -> date | None:
