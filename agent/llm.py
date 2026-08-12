@@ -106,16 +106,31 @@ class AnthropicMessagesClient:
         max_retries = max(1, int(self.config.get("max_retries") or 1))
         last_error: BaseException | None = None
 
+        started = time.perf_counter()
         for attempt in range(1, max_retries + 1):
             try:
                 with urlopen(request, timeout=timeout) as response:
-                    return json.loads(response.read().decode("utf-8"))
+                    result = json.loads(response.read().decode("utf-8"))
+                _record_llm_observation(
+                    model=self.model,
+                    started=started,
+                    attempts=attempt,
+                    success=True,
+                    usage=result.get("usage") if isinstance(result, dict) else None,
+                )
+                return result
             except HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
                 if exc.code not in {408, 425, 429} and not 500 <= exc.code <= 599:
-                    raise LLMRequestError(
-                        f"LLM request failed: HTTP {exc.code}; body={body[:1000]}"
-                    ) from exc
+                    message = f"LLM request failed: HTTP {exc.code}; body={body[:1000]}"
+                    _record_llm_observation(
+                        model=self.model,
+                        started=started,
+                        attempts=attempt,
+                        success=False,
+                        error=message,
+                    )
+                    raise LLMRequestError(message) from exc
                 last_error = exc
                 retry_after = _retry_after_seconds(exc)
             except (
@@ -128,10 +143,40 @@ class AnthropicMessagesClient:
             if attempt < max_retries:
                 time.sleep(_retry_delay_seconds(attempt, retry_after=retry_after))
 
-        raise LLMRequestError(
+        message = (
             f"LLM request timed out or failed after {max_retries} attempt(s); "
             f"timeout_seconds={timeout}; error={last_error}"
-        ) from last_error
+        )
+        _record_llm_observation(
+            model=self.model,
+            started=started,
+            attempts=max_retries,
+            success=False,
+            error=message,
+        )
+        raise LLMRequestError(message) from last_error
+
+
+def _record_llm_observation(
+    *,
+    model: str,
+    started: float,
+    attempts: int,
+    success: bool,
+    usage: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    """Emit metrics only when an evaluation trace is active."""
+    from agent.observability import record_llm_call
+
+    record_llm_call(
+        model=model,
+        duration_ms=(time.perf_counter() - started) * 1000,
+        attempts=attempts,
+        success=success,
+        usage=usage,
+        error=error,
+    )
 
 
 def _retry_after_seconds(error: HTTPError) -> float | None:

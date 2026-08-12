@@ -1,0 +1,12 @@
+{"case_id":"chat_friend_memory","mode":"router","tags":["conversation","regression"],"input":"我有一个朋友叫小a","expected":{"intent":"chat"}}
+{"case_id":"targeted_sprint_window","mode":"router","tags":["analysis","fit-detail"],"input":"今天上午这次骑行 100–200 秒有没有连续冲刺？","expected":{"intent":"analyze_single"}}
+{"case_id":"recent_morning_range","mode":"router","tags":["analysis","range"],"input":"分析最近几个上午的活动","expected":{"intent":"analyze_range"}}
+{"case_id":"latest_single_full_report","mode":"router","tags":["analysis","single","regression"],"input":"查看最近一次骑行的完整报告","expected":{"intent":"analyze_single"}}
+{"case_id":"latest_single_run","mode":"router","tags":["analysis","single"],"input":"分析最新一条跑步活动","expected":{"intent":"analyze_single"}}
+{"case_id":"recent_three_range","mode":"router","tags":["analysis","range"],"input":"分析最近三个上午的活动","expected":{"intent":"analyze_range"}}
+{"case_id":"sync_three_and_upload","mode":"router","tags":["workflow","regression","side-effect"],"input":"同步最新的三个活动并上传 Strava","expected":{"intent":"mixed"}}
+{"case_id":"sync_only","mode":"router","tags":["workflow","side-effect"],"input":"从 Garmin 同步最近五个活动","expected":{"intent":"sync"}}
+{"case_id":"local_reupload","mode":"router","tags":["workflow","side-effect"],"input":"重新上传本地最近三个活动到 Strava","expected":{"intent":"upload"}}
+{"case_id":"negated_download_local_upload","mode":"router","tags":["workflow","negation"],"input":"不用下载，重新上传本地最近三个活动","expected":{"intent":"upload"}}
+{"case_id":"training_advice","mode":"router","tags":["coaching"],"input":"根据最近训练给我下一次训练建议","expected":{"intent":"training_advice"}}
+{"case_id":"route_advice","mode":"router","tags":["coaching","route"],"input":"推荐一条青浦两小时的有氧骑行路线","expected":{"intent":"route_advice"}}

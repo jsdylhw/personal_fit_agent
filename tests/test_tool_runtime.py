@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from agent.context import AgentContext
 from agent.main_agent.guard import guard_tool_call
-from agent.main_agent.intent import intent_tool_categories, route_intent
+from agent.main_agent.intent import extract_route_signals, intent_tool_categories, route_intent
 from agent.main_agent.tools import TOOL_HANDLERS
 from agent.tools.agent_tools import MAIN_AGENT_TOOLS
 
@@ -83,11 +83,35 @@ def test_router_does_not_treat_negated_garmin_or_strava_as_requested_side_effect
 
 def test_router_keeps_non_activity_conversation_in_chat_mode():
     assert route_intent("我有一个朋友叫小a").kind.value == "chat"
+    assert route_intent("我有三个朋友").kind.value == "chat"
     assert route_intent("我有个朋友他叫什么").kind.value == "chat"
 
 
 def test_router_still_recognizes_implicit_single_activity_question():
     assert route_intent("这次骑行表现怎么样").kind.value == "analyze_single"
+
+
+def test_router_treats_sync_upload_as_one_mixed_goal():
+    intent = route_intent("同步最新三个活动并上传 Strava")
+
+    assert intent.kind.value == "mixed"
+    assert intent.allow_side_effects is True
+    assert {"operation", "workflow"}.issubset(intent_tool_categories(intent))
+
+
+def test_router_distinguishes_latest_single_activity_from_recent_range():
+    assert route_intent("查看最近一次骑行的完整报告").kind.value == "analyze_single"
+    assert route_intent("分析最新一条跑步活动").kind.value == "analyze_single"
+    assert route_intent("分析最近三个上午的活动").kind.value == "analyze_range"
+    assert route_intent("比较最近几次骑行").kind.value == "compare"
+
+
+def test_route_signals_keep_negated_side_effects_out_of_mixed_intent():
+    signals = extract_route_signals("同步三个活动，不要上传，也不要分析")
+
+    assert signals.wants_sync is True
+    assert signals.wants_upload is False
+    assert signals.wants_analyze is False
 
 
 def test_guard_rejects_registered_tool_outside_the_current_category_allowlist():

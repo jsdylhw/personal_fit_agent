@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -59,66 +60,100 @@ class Intent:
     allow_side_effects: bool = False
 
 
-def route_intent(user_message: str) -> Intent:
-    """根据用户消息判断意图(关键词规则,轻量).
+@dataclass(frozen=True)
+class RouteSignals:
+    """Facts extracted from one user turn before choosing an Intent.
 
-    对于无法明确判断的请求,返回 MIXED + 全工具组.
+    These signals only control the capability surface exposed to the main
+    model.  They do not prescribe a tool sequence or tool arguments.
+    """
+
+    wants_sync: bool = False
+    wants_upload: bool = False
+    wants_analyze: bool = False
+    wants_compare: bool = False
+    wants_route: bool = False
+    wants_training_load: bool = False
+    wants_training_advice: bool = False
+    activity_scope: str = "unknown"  # single / range / unknown
+    has_activity_signal: bool = False
+
+
+def route_intent(user_message: str) -> Intent:
+    """根据可审计的本地信号决定本轮能力范围。
+
+    Main Agent 仍负责选择具体工具和参数；这里不做隐藏规划，也不额外调用
+    一个路由模型。
     """
     text = user_message.lower()
 
     # 闲聊
     greetings = {"你好", "hi", "hello", "hey", "谢谢", "thanks", "早", "晚上好"}
-    if any(g in text for g in greetings) and len(text) < 20:
+    if text.strip(" \t\r\n!！?？,，。") in greetings:
         return Intent(kind=IntentKind.CHAT, tool_groups=INTENT_TOOL_GROUPS[IntentKind.CHAT])
 
-    # 副作用操作 — 检查是否混合意图(同步并分析/上传前分析)
-    wants_sync = _has_positive_action(text, ("下载", "同步", "sync", "garmin"))
-    wants_upload = _has_positive_action(text, ("上传", "strava", "upload"))
-    wants_analyze = any(t in text for t in ("分析", "查看", "报告", "总结", "汇总"))
+    signals = extract_route_signals(text)
 
-    if wants_sync and wants_analyze:
-        groups = {"resolve", "analyze", "operation", "fit_query", "workflow"}
-        return Intent(kind=IntentKind.MIXED, tool_groups=groups, allow_side_effects=True)
+    # 同步后继续分析或上传属于同一个复合目标。此前只覆盖 sync+analyze，
+    # 造成 sync+upload 被后面的 upload 分支吞掉。
+    if signals.wants_sync and (signals.wants_analyze or signals.wants_upload):
+        return Intent(
+            kind=IntentKind.MIXED,
+            tool_groups=INTENT_TOOL_GROUPS[IntentKind.MIXED].copy(),
+            allow_side_effects=True,
+        )
 
-    if wants_sync and not wants_upload:
+    if signals.wants_sync:
         return Intent(kind=IntentKind.SYNC, tool_groups=INTENT_TOOL_GROUPS[IntentKind.SYNC],
                       allow_side_effects=True)
 
-    if wants_upload:
+    if signals.wants_upload:
         return Intent(kind=IntentKind.UPLOAD, tool_groups=INTENT_TOOL_GROUPS[IntentKind.UPLOAD],
                       allow_side_effects=True)
 
     # 分析类
-    wants_compare = any(t in text for t in ("比较", "对比", "差异", "哪次更好", "哪次更"))
-    wants_route = any(t in text for t in ("路线", "骑哪里", "去哪骑", "推荐路线", "route"))
-    wants_training_load = any(t in text for t in ("训练负荷", "tss", "疲劳", "恢复", "ct负荷", "ctl"))
-    wants_training_advice = any(t in text for t in ("训练建议", "训练计划", "下次训练", "周训练"))
-
-    if wants_compare:
+    if signals.wants_compare:
         return Intent(kind=IntentKind.COMPARE, tool_groups=INTENT_TOOL_GROUPS[IntentKind.COMPARE])
-    if wants_route:
+    if signals.wants_route:
         groups = INTENT_TOOL_GROUPS[IntentKind.ROUTE_ADVICE].copy()
         if any(t in text for t in ("最近训练", "训练状态", "训练负荷", "根据最近")):
             groups.add("resolve")
             groups.add("analyze")
         return Intent(kind=IntentKind.ROUTE_ADVICE, tool_groups=groups)
-    if wants_training_advice:
+    if signals.wants_training_advice:
         return Intent(kind=IntentKind.TRAINING_ADVICE, tool_groups=INTENT_TOOL_GROUPS[IntentKind.TRAINING_ADVICE])
-    if wants_training_load:
+    if signals.wants_training_load:
         return Intent(kind=IntentKind.TRAINING_LOAD, tool_groups=INTENT_TOOL_GROUPS[IntentKind.TRAINING_LOAD])
 
-    # 范围分析
-    wants_range = any(t in text for t in ("汇总", "总结", "所有", "全部", "本月", "本周", "最近", "上个月",
-                                           "这周", "这个月", "过去", "历史"))
-    if wants_range:
+    has_analysis_context = signals.has_activity_signal or signals.wants_analyze
+    if signals.activity_scope == "range" and has_analysis_context:
         return Intent(kind=IntentKind.ANALYZE_RANGE, tool_groups=INTENT_TOOL_GROUPS[IntentKind.ANALYZE_RANGE])
 
-    # 单活动分析必须有明确的运动数据线索。不能因为会话中恰好保留了 FIT，
-    # 就把普通对话错误地暴露为分析工具面。
-    if _has_activity_signal(text):
+    # “最近”只表示排序，不再单独代表范围。“最近一次/最新一条”明确是
+    # 单条；没有复数范围信号的活动问题也按单条开放工具。
+    if has_analysis_context:
         return Intent(kind=IntentKind.ANALYZE_SINGLE, tool_groups=INTENT_TOOL_GROUPS[IntentKind.ANALYZE_SINGLE])
 
     return Intent(kind=IntentKind.CHAT, tool_groups=INTENT_TOOL_GROUPS[IntentKind.CHAT])
+
+
+def extract_route_signals(user_message: str) -> RouteSignals:
+    """提取稳定、可单测的路由事实，不选择任何具体工具。"""
+    text = user_message.lower()
+    wants_sync = _has_positive_action(text, ("下载", "同步", "sync", "garmin"))
+    wants_upload = _has_positive_action(text, ("上传", "strava", "upload"))
+    wants_analyze = _has_positive_action(text, ("分析", "查看", "报告", "总结", "汇总"))
+    return RouteSignals(
+        wants_sync=wants_sync,
+        wants_upload=wants_upload,
+        wants_analyze=wants_analyze,
+        wants_compare=any(t in text for t in ("比较", "对比", "差异", "哪次更好", "哪次更")),
+        wants_route=any(t in text for t in ("路线", "骑哪里", "去哪骑", "推荐路线", "route")),
+        wants_training_load=any(t in text for t in ("训练负荷", "tss", "疲劳", "恢复", "ct负荷", "ctl")),
+        wants_training_advice=any(t in text for t in ("训练建议", "训练计划", "下次训练", "周训练")),
+        activity_scope=_activity_scope(text),
+        has_activity_signal=_has_activity_signal(text),
+    )
 
 
 def intent_tool_categories(intent: Intent) -> set[str]:
@@ -155,3 +190,31 @@ def _has_activity_signal(text: str) -> bool:
         "这次", "本次", "这趟", "表现如何", "表现怎么样",
     )
     return any(signal in text for signal in signals)
+
+
+_SINGLE_SCOPE_MARKERS = (
+    "这次", "本次", "这趟", "当前活动", "最后一次", "最新一次", "最近一次",
+    "最后一条", "最新一条", "最近一条", "最后一个", "最新一个", "最近一个",
+)
+_RANGE_SCOPE_MARKERS = (
+    "汇总", "所有", "全部", "本月", "本周", "上个月", "上周", "这周", "这个月",
+    "过去几", "最近几", "近几", "历史", "多次", "多条", "多个",
+)
+_PLURAL_COUNT_PATTERN = re.compile(
+    r"(?:最近|最新|过去|前|近)?\s*(?:[2-9]\d*|[二两三四五六七八九十百]+)\s*(?:个|次|条|场|项|天|周|月)"
+)
+_SINGLE_COUNT_PATTERN = re.compile(
+    r"(?:最近|最新|最后)?(?:的)?\s*(?:1|一)\s*(?:个|次|条|场|项)"
+)
+
+
+def _activity_scope(text: str) -> str:
+    """区分单条与范围；裸“最近”不携带数量含义。"""
+    # “汇总”明确要求集合式处理，即使集合只有 1 条也保持范围语义。
+    if "汇总" in text:
+        return "range"
+    if any(marker in text for marker in _SINGLE_SCOPE_MARKERS) or _SINGLE_COUNT_PATTERN.search(text):
+        return "single"
+    if any(marker in text for marker in _RANGE_SCOPE_MARKERS) or _PLURAL_COUNT_PATTERN.search(text):
+        return "range"
+    return "unknown"

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from agent.chat_logger import new_session_id, write_main_agent_markdown_log
@@ -35,9 +36,10 @@ def agent_loop(
     system: str = "",
     max_tokens: int = 4096,
     max_steps: int = MAX_TOOL_STEPS,
+    client: AnthropicMessagesClient | None = None,
 ) -> int:
     """纯 tool-use loop. 返回 step_count. messages 原地修改."""
-    client = AnthropicMessagesClient()
+    client = client or AnthropicMessagesClient()
     step_count = 0
 
     while True:
@@ -86,11 +88,23 @@ def agent_loop(
 
             handler = handlers.get(block["name"])
             tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+            tool_started = perf_counter()
             try:
                 output = handler(tool_input, hooks.context) if handler else {"error": "unknown_tool", "name": block["name"]}
             except Exception as exc:
                 err = hooks.on_error(block, exc)
                 output = err or {"error": type(exc).__name__, "message": str(exc)}
+
+            from agent.main_agent.tool_result import is_failed_tool_output
+            from agent.observability import record_tool_call
+
+            record_tool_call(
+                name=str(block.get("name") or ""),
+                arguments=tool_input,
+                output=output,
+                duration_ms=(perf_counter() - tool_started) * 1000,
+                success=not is_failed_tool_output(output),
+            )
 
             hooks.post_tool_use(block, output, step_count=step_count)
 
