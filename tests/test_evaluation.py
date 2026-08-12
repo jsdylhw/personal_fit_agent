@@ -25,7 +25,7 @@ def test_router_suite_loads_regression_cases_and_grader_reports_mismatch():
     results = run_suite("evaluation/cases/router.jsonl", mode="router")
     by_id = {result["case"]["case_id"]: result for result in results}
 
-    assert len(results) == 10
+    assert len(results) == 12
     assert by_id["chat_friend_memory"]["grade"]["passed"] is True
     mismatch = run_case(EvalCase.from_dict({
         "case_id": "synthetic-mismatch",
