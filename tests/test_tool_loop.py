@@ -17,25 +17,50 @@ def test_main_prompt_prefers_persistent_workflows():
     assert "确认" not in prompt
 
 
-def test_sync_workflow_executes_without_confirmation(monkeypatch):
+def test_pure_sync_executes_without_starting_analysis_workflow(monkeypatch):
     context = AgentContext(session_id="test-direct-sync")
     monkeypatch.setattr(
-        "agent.activity.workflow_service.sync_and_start_activity_workflow",
-        lambda **kwargs: {"status": "completed", "workflow_id": "run-sync", "execution": {"waiting_for": []}},
+        "agent.activity.operations.garmin.sync_recent",
+        lambda **kwargs: {"status": "completed", "downloaded": 2, "skipped": 1, "failed": 0},
     )
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
         client.return_value.create_messages.side_effect = [
             {"id": "msg-sync", "content": [
-                {"type": "tool_use", "name": "sync_and_run_activity_workflow", "id": "tu-sync", "input": {"count": 3}},
+                {"type": "tool_use", "name": "sync_garmin_activities", "id": "tu-sync", "input": {"count": 3}},
             ], "stop_reason": "tool_use"},
             {"id": "msg-done", "content": [{"type": "text", "text": "同步完成。"}], "stop_reason": "end_turn"},
         ]
         result = run_tool_loop("同步最近三条活动", context=context)
 
     assert result["status"] == "completed"
-    assert result["steps"] == [{"tool": "sync_and_run_activity_workflow", "input": {"count": 3}}]
+    assert result["steps"] == [{"tool": "sync_garmin_activities", "input": {"count": 3}}]
     assert result["answer"].endswith("同步完成。")
-    assert result["answer"].startswith("已处理：本次请求｜同步并处理活动")
+    assert result["answer"].startswith("已处理：本次请求｜同步 Garmin 活动")
+    assert client.return_value.create_messages.call_args_list[1].kwargs["tools"] == []
+
+
+def test_completed_sync_workflow_hides_tools_before_final_response(monkeypatch):
+    context = AgentContext(session_id="terminal-sync-workflow")
+    monkeypatch.setattr(
+        "agent.activity.workflow_service.sync_and_start_activity_workflow",
+        lambda **kwargs: {"status": "completed", "workflow_id": "run-sync", "tasks": []},
+    )
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
+        client.return_value.create_messages.side_effect = [
+            {"id": "msg-sync", "content": [{
+                "type": "tool_use", "name": "sync_and_run_activity_workflow", "id": "tu-sync",
+                "input": {"count": 3, "goals": ["upload_strava"]},
+            }], "stop_reason": "tool_use"},
+            {"id": "msg-final", "content": [{"type": "text", "text": "同步并上传完成。"}], "stop_reason": "end_turn"},
+        ]
+
+        result = run_tool_loop("同步最新三条活动并上传 Strava", context=context)
+
+    assert result["steps"] == [{
+        "tool": "sync_and_run_activity_workflow",
+        "input": {"count": 3, "goals": ["upload_strava"]},
+    }]
+    assert client.return_value.create_messages.call_args_list[1].kwargs["tools"] == []
 
 
 def test_retry_executes_last_failed_workflow_action():

@@ -68,6 +68,23 @@ def test_sync_workflow_handler_returns_service_result_directly(monkeypatch):
     assert result["workflow_id"] == "run-2"
 
 
+def test_pure_sync_handler_does_not_start_activity_workflow(monkeypatch):
+    context = AgentContext(session_id="pure-sync-tool")
+    calls = []
+    monkeypatch.setattr(
+        "agent.activity.operations.garmin.sync_recent",
+        lambda **kwargs: calls.append(kwargs) or {
+            "status": "completed", "downloaded": 2, "skipped": 1, "failed": 0,
+        },
+    )
+
+    result = TOOL_HANDLERS["sync_garmin_activities"]({"count": 3}, context)
+
+    assert calls == [{"count": 3}]
+    assert result == {"status": "completed", "downloaded": 2, "skipped": 1, "failed": 0}
+    assert "workflow_id" not in result
+
+
 def test_workflow_intent_is_available():
     upload_intent = route_intent("重新上传本地的五个活动")
     assert "workflow" in intent_tool_categories(upload_intent)
@@ -99,11 +116,27 @@ def test_router_treats_sync_upload_as_one_mixed_goal():
     assert {"operation", "workflow"}.issubset(intent_tool_categories(intent))
 
 
+def test_sync_intent_exposes_pure_sync_but_not_combined_workflow_category():
+    intent = route_intent("从 Garmin 同步最新三个活动，不需要分析")
+
+    assert intent.kind.value == "sync"
+    assert intent_tool_categories(intent) == {"operation"}
+    categories = {tool.name: tool.category for tool in MAIN_AGENT_TOOLS}
+    assert categories["sync_garmin_activities"] == "operation"
+    assert categories["sync_and_run_activity_workflow"] == "workflow"
+
+
 def test_router_distinguishes_latest_single_activity_from_recent_range():
     assert route_intent("查看最近一次骑行的完整报告").kind.value == "analyze_single"
     assert route_intent("分析最新一条跑步活动").kind.value == "analyze_single"
     assert route_intent("分析最近三个上午的活动").kind.value == "analyze_range"
     assert route_intent("比较最近几次骑行").kind.value == "compare"
+
+
+def test_router_treats_history_periods_and_trends_as_ranges():
+    assert route_intent("分析最近一个月的骑行趋势").kind.value == "analyze_range"
+    assert route_intent("最近一周跑步有进步吗").kind.value == "analyze_range"
+    assert route_intent("查看过去一月的活动变化").kind.value == "analyze_range"
 
 
 def test_route_signals_keep_negated_side_effects_out_of_mixed_intent():
@@ -150,7 +183,39 @@ def test_main_agent_exposes_explicit_detail_query_instead_of_implicit_targeted_a
     names = {tool.name for tool in MAIN_AGENT_TOOLS}
 
     assert "query_activity_detail" in names
+    assert "calculate_history_metrics" in names
+    find_schema = next(tool for tool in MAIN_AGENT_TOOLS if tool.name == "find_activity").input_schema
+    assert find_schema["properties"]["days"]["minimum"] == 1
     assert "user_request" not in next(tool for tool in MAIN_AGENT_TOOLS if tool.name == "analyze_activity").input_schema["properties"]
+
+
+def test_history_metrics_handler_uses_selected_activities(monkeypatch):
+    captured = {}
+
+    def fake_tool(context, *, group_by, name):
+        captured.update({"context": context, "group_by": group_by, "name": name})
+        return {"status": "completed"}
+
+    monkeypatch.setattr("agent.activity.history_metrics.calculate_history_metrics_tool", fake_tool)
+    context = AgentContext(session_id="history", selected_activities=[{"activity_key": "a1"}])
+
+    result = TOOL_HANDLERS["calculate_history_metrics"]({"group_by": "month"}, context)
+
+    assert result == {"status": "completed"}
+    assert captured == {"context": context, "group_by": "month", "name": "calculate_history_metrics"}
+
+
+def test_guard_requires_activity_selection_for_history_metrics():
+    result = guard_tool_call(
+        "calculate_history_metrics",
+        {"group_by": "week"},
+        context=AgentContext(session_id="guard-history"),
+        allowed_categories={"analysis"},
+        has_resolved=False,
+    )
+
+    assert result.allowed is False
+    assert "需要先定位活动" in result.reason
 
 
 def test_find_activity_chooses_single_day_selection_from_date_not_scope(monkeypatch):

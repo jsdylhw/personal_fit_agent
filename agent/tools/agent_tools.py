@@ -66,6 +66,12 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "end_date": {"type": "string", "description": "ISO date"},
                 "range_type": {"type": "string", "enum": ["week", "month", "days"]},
                 "relative_range": {"type": "string", "enum": ["this_week", "this_month", "last_week", "last_month"]},
+                "days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3650,
+                    "description": "最近 N 天（含今天），例如最近一个月可传 30。",
+                },
                 "range": {"type": "string", "description": "可传 all 表示全部历史活动"},
             },
         },
@@ -122,6 +128,26 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         input_schema={"type": "object", "properties": {}},
         category=CATEGORY_ANALYSIS,
     ),
+    ToolDef(
+        name="calculate_history_metrics",
+        description=(
+            "对已定位的多条活动计算确定性的历史指标和时间序列。"
+            "用于周/月趋势、训练量变化、是否进步等问题；读取 activity_metrics，"
+            "旧报告缺少结构化指标时只读解析 FIT，不从 LLM 报告文字提取数值。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "group_by": {
+                    "type": "string",
+                    "enum": ["day", "week", "month"],
+                    "default": "week",
+                    "description": "历史指标的时间分组粒度。",
+                },
+            },
+        },
+        category=CATEGORY_ANALYSIS,
+    ),
     # -- coaching ------------------------------------------------------
     ToolDef(
         name="generate_training_advice",
@@ -148,11 +174,27 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
     ),
     # -- operation -----------------------------------------------------
     ToolDef(
+        name="sync_garmin_activities",
+        description=(
+            "只从 Garmin 下载最近活动并更新本地活动索引，然后结束。"
+            "不会生成 summary、调用分析 Agent、上传 Strava 或创建 ActivityRun。"
+            "用户只说同步/下载时使用此工具。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+            },
+        },
+        category=CATEGORY_OPERATION,
+    ),
+    ToolDef(
         name="sync_and_run_activity_workflow",
         description=(
             "从 Garmin 同步最近活动后，严格只处理本次同步并成功索引的活动。"
             "可组合生成 summary、上传 Strava 和汇总；同步结果会冻结为持久化活动快照。"
-            "用户要求“同步/下载后分析并上传”时使用此工具；不要把同步、分析和上传拆成对话中的多次调用。"
+            "仅在用户明确要求同步后继续分析、汇总或上传时使用；"
+            "纯同步必须使用 sync_garmin_activities。不要把同步、分析和上传拆成对话中的多次调用。"
         ),
         input_schema={
             "type": "object",
@@ -166,7 +208,7 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "force_upload": {"type": "boolean", "default": False},
             },
         },
-        category=CATEGORY_OPERATION,
+        category=CATEGORY_WORKFLOW,
     ),
     # -- persistent activity workflow --------------------------------
     ToolDef(

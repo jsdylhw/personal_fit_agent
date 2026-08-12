@@ -333,6 +333,8 @@ def _with_execution_header(answer: str, *, context: AgentContext, steps: list[di
         "query_activity_detail": "查询 FIT 细节",
         "summarize_activities": "汇总已有报告",
         "compare_activities": "对比活动",
+        "calculate_history_metrics": "计算历史指标",
+        "sync_garmin_activities": "同步 Garmin 活动",
         "sync_and_run_activity_workflow": "同步并处理活动",
         "run_activity_workflow": "处理本地活动",
         "retry_activity_workflow": "重试工作流",
@@ -352,12 +354,14 @@ def _build_system_prompt(intent) -> str:
 {side}
 规则:
 - 当前本地日期是 {local_today}。用户说“今天/昨天”时必须传 date=today/date=yesterday，让本地工具解析；不要猜测或自行改写为其他 ISO 日期。
-- 先用 find_activity 定位活动,再用 analyze_activity / summarize_activities / compare_activities 处理。find_activity 只传日期、范围、数量、时间段、运动类型等事实条件，不传 scope/mode；本地会确定解析方式。
+- 先用 find_activity 定位活动,再用 analyze_activity / summarize_activities / compare_activities / calculate_history_metrics 处理。find_activity 只传日期、范围、数量、时间段、运动类型等事实条件，不传 scope/mode；本地会确定解析方式。
 - 用户按“上午/下午/晚上/夜间”筛选时，在 find_activity 中传 time_of_day=morning/afternoon/evening/night，再进行后续操作。
-- 多条活动的分析请求必须调用 summarize_activities；它优先读取已有 summary，仅对缺失的活动补齐报告。绝不能对列表逐条调用 analyze_activity 或 query_activity_detail。
+- 多条活动的一般报告汇总调用 summarize_activities；它优先读取已有 summary，仅对缺失的活动补齐报告。绝不能对列表逐条调用 analyze_activity 或 query_activity_detail。
+- 用户询问历史趋势、是否进步、周/月变化、训练量变化时，先用 find_activity 定位范围，再调用 calculate_history_metrics，并根据它返回的覆盖率、周期变化和阈值一致性解释；不要让 LLM 从报告文字自行计算。
 - analyze_activity 只用于一条活动的完整报告，已有 summary 时直接返回；只有用户问到明确 FIT 原始细节（如“100-200 秒”“某次冲刺”“第几公里”）时，才对已精确定位的一条活动调用 query_activity_detail。
 - 若用户要处理多条“本地已有”活动（批量生成 summary、上传 Strava 或汇总），调用 run_activity_workflow：一次创建持久化 Run；不要用 find_activity 后逐条编排。
-- 若用户要求从 Garmin 同步/下载多条活动后再分析、上传或汇总，调用 sync_and_run_activity_workflow；它只处理本次同步并已索引的活动，并创建同一个持久化 Run。
+- 用户只要求从 Garmin 同步/下载时，调用 sync_garmin_activities：只下载 FIT 并更新索引，不生成 summary、不分析、不上传。
+- 仅当用户明确要求同步/下载后继续分析、上传或汇总时，调用 sync_and_run_activity_workflow；它只处理本次同步并已索引的活动，并创建同一个持久化 Run。
 - 需要查看或恢复该批量操作时，使用 get_activity_workflow / retry_activity_workflow，并以工具结果中的 workflow_id 为准。
 - 用户要求上传/下载/刷新时，直接调用对应工具；无需额外追问。
 - 完成后用简洁中文回答：若调用了工具，先以“已处理：活动/范围｜操作”说明处理对象和操作；再给 1-2 句结论，以及最多 3 条证据或建议。除非用户要求比较，不要堆叠大表格、重复基础指标、表情或客套开场。

@@ -105,10 +105,14 @@ def _format_tool_args(block: dict[str, Any]) -> str:
         return " · ".join(parts)
     if name == "summarize_activities":
         return "读取已有报告，缺失时补齐后汇总"
+    if name == "calculate_history_metrics":
+        return f"读取结构化指标 · 按 {args.get('group_by') or 'week'} 聚合"
     if name == "analyze_activity":
         return "读取单条完整报告，缺失时生成"
     if name == "query_activity_detail":
         return f"FIT 定向问题：{str(args.get('question') or '').strip() or '未提供'}"
+    if name == "sync_garmin_activities":
+        return f"最近 {args.get('count') or 5} 条 · 仅下载并更新索引"
     if name in {"run_activity_workflow", "sync_and_run_activity_workflow"}:
         goals = ", ".join(str(goal) for goal in args.get("goals") or ["ensure_summary"])
         count = args.get("count") or args.get("limit") or 5
@@ -145,6 +149,17 @@ def _summarize_output(name: str, output: Any) -> str:
             generated = generation.get("generated_count", 0)
             skipped = generation.get("skipped_count", 0)
             return f"已汇总 {payload.get('count', 0)} 条活动（读取已有报告 {skipped} 条，补齐 {generated} 条）"
+        if name == "calculate_history_metrics":
+            coverage = payload.get("coverage") if isinstance(payload.get("coverage"), dict) else {}
+            return (
+                f"已计算 {coverage.get('included_activity_count', 0)} 条活动的历史指标"
+                f"（{payload.get('group_by') or 'week'}）"
+            )
+        if name == "sync_garmin_activities":
+            return (
+                f"同步完成：下载 {int(payload.get('downloaded') or 0)} 条，"
+                f"跳过 {int(payload.get('skipped') or 0)} 条，失败 {int(payload.get('failed') or 0)} 条；未分析"
+            )
         if name in {"run_activity_workflow", "sync_and_run_activity_workflow", "retry_activity_workflow"}:
             workflow_id = output.get("workflow_id") or payload.get("workflow_id")
             status = output.get("status") or payload.get("status") or "completed"
@@ -164,6 +179,8 @@ def _tool_label(name: str) -> str:
         "query_activity_detail": "查询 FIT 细节",
         "summarize_activities": "汇总活动",
         "compare_activities": "对比活动",
+        "calculate_history_metrics": "计算历史指标",
+        "sync_garmin_activities": "同步 Garmin 活动",
         "sync_and_run_activity_workflow": "同步并处理活动",
         "run_activity_workflow": "处理本地活动",
         "get_activity_workflow": "查看工作流",
@@ -196,21 +213,36 @@ def _activity_label(activity: dict[str, Any]) -> str:
 
 
 def _is_terminal_analysis_result(name: str, output: Any) -> bool:
-    """These tools already return the evidence needed for the user-facing answer.
+    """These tools already return the evidence/state needed for the final answer.
 
-    The next model turn may write prose, but must not start another analysis or
-    accidentally turn a read-only detail query into a forced summary refresh.
+    The next model turn may write prose, but must not start another analysis,
+    sync, upload, or workflow operation.
     """
-    if name not in {
+    terminal_tools = {
         "analyze_activity",
         "query_activity_detail",
         "summarize_activities",
         "compare_activities",
         "generate_training_advice",
         "summarize_recent_training_load",
+        "calculate_history_metrics",
         "generate_route_advice",
-    }:
+        "sync_garmin_activities",
+        "sync_and_run_activity_workflow",
+        "run_activity_workflow",
+        "get_activity_workflow",
+        "retry_activity_workflow",
+    }
+    if name not in terminal_tools:
         return False
     if not isinstance(output, dict) or output.get("error") or is_failed_tool_output(output):
         return False
+    if name in {
+        "sync_garmin_activities",
+        "sync_and_run_activity_workflow",
+        "run_activity_workflow",
+        "get_activity_workflow",
+        "retry_activity_workflow",
+    }:
+        return output.get("status") not in {None, "failed", "busy", "not_found"}
     return output.get("status") == "completed"

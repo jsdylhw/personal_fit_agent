@@ -17,6 +17,7 @@ TOOL_DEPENDENCIES: dict[str, set[str]] = {
     "summarize_activities": {"selected_activities"},
     "compare_activities": {"selected_activities"},
     "summarize_recent_training_load": {"selected_activities"},
+    "calculate_history_metrics": {"selected_activities"},
     "generate_training_advice": {"selected_activities"},
 }
 
@@ -57,7 +58,7 @@ def guard_tool_call(
         )
 
     # 参数检查
-    if tool_name == "sync_and_run_activity_workflow":
+    if tool_name in {"sync_garmin_activities", "sync_and_run_activity_workflow"}:
         count = arguments.get("count", 5)
         if isinstance(count, (int, float)) and (count <= 0 or count > 20):
             return GuardResult(allowed=False, reason="count 必须在 1-20 之间")

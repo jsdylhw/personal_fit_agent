@@ -25,7 +25,7 @@ def test_router_suite_loads_regression_cases_and_grader_reports_mismatch():
     results = run_suite("evaluation/cases/router.jsonl", mode="router")
     by_id = {result["case"]["case_id"]: result for result in results}
 
-    assert len(results) == 12
+    assert len(results) == 14
     assert by_id["chat_friend_memory"]["grade"]["passed"] is True
     mismatch = run_case(EvalCase.from_dict({
         "case_id": "synthetic-mismatch",
@@ -90,7 +90,7 @@ def test_live_runner_uses_sandbox_and_captures_tool_trace():
         "mode": "live",
         "expected": {
             "intent": "sync",
-            "required_tools": [{"name": "sync_and_run_activity_workflow", "arguments": {"count": 3}}],
+            "required_tools": [{"name": "sync_garmin_activities", "arguments": {"count": 3}}],
             "completion": {"result_status": "completed"},
         },
     })
@@ -100,7 +100,7 @@ def test_live_runner_uses_sandbox_and_captures_tool_trace():
             self.responses = iter([
                 {
                     "content": [{
-                        "type": "tool_use", "id": "tu-sync", "name": "sync_and_run_activity_workflow", "input": {"count": 3},
+                        "type": "tool_use", "id": "tu-sync", "name": "sync_garmin_activities", "input": {"count": 3},
                     }],
                     "stop_reason": "tool_use",
                 },
@@ -114,8 +114,8 @@ def test_live_runner_uses_sandbox_and_captures_tool_trace():
 
     assert result["grade"]["passed"] is True
     call = result["trace"]["tool_calls"][0]
-    assert call["name"] == "sync_and_run_activity_workflow"
-    assert call["output"]["workflow_id"] == "eval-workflow-1"
+    assert call["name"] == "sync_garmin_activities"
+    assert call["output"]["downloaded"] == 2
 
 
 def test_report_writes_jsonl_summary_and_markdown(tmp_path):

@@ -101,10 +101,27 @@ def summarize_recent_training_load(args: dict[str, Any], context: AgentContext) 
     return summarize_recent_training_load_tool(context, name="summarize_recent_training_load")
 
 
+def calculate_history_metrics(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.activity.history_metrics import calculate_history_metrics_tool
+
+    return calculate_history_metrics_tool(
+        context,
+        group_by=str(args.get("group_by") or "week"),
+        name="calculate_history_metrics",
+    )
+
+
 def generate_route_advice(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     from agent.route.advice import generate_route_advice_tool
 
     return generate_route_advice_tool(context, args=args, name="generate_route_advice")
+
+
+def sync_garmin_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    """Pure Garmin sync: download/index only, with no analysis workflow."""
+    from agent.activity.operations.garmin import sync_recent
+
+    return sync_recent(count=int(args.get("count", 5)))
 
 
 def sync_and_run_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
@@ -166,6 +183,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "analyze_activity": analyze_activity,
     "query_activity_detail": query_activity_detail,
     "summarize_activities": summarize_activities,
+    "sync_garmin_activities": sync_garmin_activities,
     "sync_and_run_activity_workflow": sync_and_run_activity_workflow,
     "run_activity_workflow": run_activity_workflow,
     "get_activity_workflow": get_activity_workflow,
@@ -173,6 +191,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "compare_activities": compare_activities,
     "generate_training_advice": generate_training_advice,
     "summarize_recent_training_load": summarize_recent_training_load,
+    "calculate_history_metrics": calculate_history_metrics,
     "generate_route_advice": generate_route_advice,
 }
 

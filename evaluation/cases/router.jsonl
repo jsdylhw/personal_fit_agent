@@ -10,3 +10,5 @@
 {"case_id":"negated_download_local_upload","mode":"router","tags":["workflow","negation"],"input":"不用下载，重新上传本地最近三个活动","expected":{"intent":"upload"}}
 {"case_id":"training_advice","mode":"router","tags":["coaching"],"input":"根据最近训练给我下一次训练建议","expected":{"intent":"training_advice"}}
 {"case_id":"route_advice","mode":"router","tags":["coaching","route"],"input":"推荐一条青浦两小时的有氧骑行路线","expected":{"intent":"route_advice"}}
+{"case_id":"history_month_trend","mode":"router","tags":["analysis","history","range"],"input":"分析最近一个月的骑行趋势","expected":{"intent":"analyze_range"}}
+{"case_id":"history_week_progress","mode":"router","tags":["analysis","history","range"],"input":"最近一周跑步有进步吗","expected":{"intent":"analyze_range"}}

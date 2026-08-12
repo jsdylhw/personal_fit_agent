@@ -9,6 +9,7 @@ from typing import Any
 from agent.context import AgentContext
 from agent.llm import AnthropicMessagesClient, extract_text
 from agent.activity.operations.service import analyze_fit_file_tool
+from core.activity_summary import get_analysis_summary, get_index_load_label
 
 
 def execute_summarize_activity_range(
@@ -218,20 +219,20 @@ def _read_summary_detail(summary_path: Any) -> dict[str, Any]:
         return {}
     if not isinstance(data, dict):
         return {}
-    history_entry = data.get("history_entry") if isinstance(data.get("history_entry"), dict) else {}
+    analysis_summary = get_analysis_summary(data)
     return {
-        key: history_entry.get(key)
+        key: analysis_summary.get(key)
         for key in (
             "summary_label",
             "brief",
             "main_stimulus",
-            "training_load",
+            "load_label",
             "quality_notes",
             "achievement",
             "limiter",
             "next_session_advice",
         )
-        if history_entry.get(key) is not None
+        if analysis_summary.get(key) is not None
     }
 
 
@@ -248,7 +249,7 @@ def _compact_range_activity(activity: dict[str, Any]) -> dict[str, Any]:
         "has_summary": activity.get("has_summary"),
         "summary_label": activity.get("summary_label"),
         "main_stimulus": activity.get("main_stimulus"),
-        "training_load": activity.get("training_load"),
+        "load_label": get_index_load_label(activity),
     }
 
 

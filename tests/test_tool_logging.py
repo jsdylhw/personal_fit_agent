@@ -6,6 +6,7 @@ def test_tool_logging_uses_business_labels_for_morning_range_summary():
 
     assert _format_tool_args(find_block) == "最近活动 · 3 条 · 上午"
     assert _format_tool_args({"name": "summarize_activities", "input": {}}) == "读取已有报告，缺失时补齐后汇总"
+    assert _format_tool_args({"name": "calculate_history_metrics", "input": {"group_by": "month"}}) == "读取结构化指标 · 按 month 聚合"
 
 
 def test_tool_logging_infers_today_single_activity_scope():
