@@ -33,8 +33,11 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+      - name: Run deterministic agent evaluation
+        run: python -m evaluation.cli run --mode router --output /tmp/personal-fit-agent-eval --fail-under 1.0
+
       - name: Compile Python sources
-        run: python -m compileall -q agent app core fit sinks demo
+        run: python -m compileall -q agent app core evaluation fit sinks demo
 
       - name: Check demo JavaScript syntax
         run: node --check demo/osm_cycling_router/web/app.js

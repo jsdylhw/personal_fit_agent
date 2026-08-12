@@ -16,6 +16,7 @@ data/
 !data/athlete.example.json
 log/
 garmin_cn_fit_files/*.fit
+evaluation/artifacts/
 
 # Scratch/demo outputs
 demo/onelap_downloads/
