@@ -8,12 +8,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.context import AgentContext
+from agent.main_agent.context import AgentContext
 
 # 工具 → 前置依赖(context 中必须存在)
 TOOL_DEPENDENCIES: dict[str, set[str]] = {
     "analyze_activity": {"selected_activities"},
     "query_activity_detail": {"selected_activities"},
+    "find_segments": {"selected_activities"},
+    "inspect_selection": {"selected_activities"},
+    "analyze_selection": {"selected_activities"},
+    "navigate_selection": {"selected_activities"},
     "summarize_activities": {"selected_activities"},
     "compare_activities": {"selected_activities"},
     "summarize_recent_training_load": {"selected_activities"},
@@ -34,11 +38,12 @@ def guard_tool_call(
     *,
     context: AgentContext,
     allowed_categories: set[str],
+    allowed_tool_names: set[str] | None = None,
     has_resolved: bool = False,
 ) -> GuardResult:
     """校验工具调用的前置条件.
 
-    - 工具白名单: 只能调用本轮暴露类别中的已注册 Main Agent 工具
+    - 工具白名单: 只能调用当前 Skill 明确允许的已注册 Main Agent 工具
     - 依赖检查: analyze 需要 selected_activities
     - 参数检查: sync count 范围
     - 不涉及副作用审批
@@ -46,6 +51,8 @@ def guard_tool_call(
     category = _tool_category(tool_name)
     if category is None:
         return GuardResult(allowed=False, reason=f"未知或未注册工具: {tool_name}")
+    if allowed_tool_names is not None and tool_name not in allowed_tool_names:
+        return GuardResult(allowed=False, reason=f"{tool_name} 不属于当前激活 Skill")
     if category not in allowed_categories:
         return GuardResult(allowed=False, reason=f"{tool_name} 不在本轮允许的工具类别中")
 

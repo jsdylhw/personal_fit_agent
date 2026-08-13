@@ -38,6 +38,15 @@ Use for: hard intervals, fast running segments, climbs, surges. This is a locato
         category=CATEGORY_FIT_QUERY,
     ),
     ToolDef(
+        name="detect_sprints",
+        description="""Detect 3-45 second cycling power bursts and return concrete windows with power, heart-rate, cadence and speed evidence. Use for sprint-specific questions; use scan_activity_segments for sustained efforts >=30s.""",
+        input_schema={
+            "type": "object",
+            "properties": {"max_segments": {"type": "integer", "default": 12}},
+        },
+        category=CATEGORY_FIT_QUERY,
+    ),
+    ToolDef(
         name="get_time_intervals",
         description="""Fixed time-window averages. bucket_seconds supports 1-600s. Use start_s/end_s for a focused window. Includes non-zero averages and zero fractions.
 Use for: time-based averages (every 1min, 5min), inspecting a specific time window (e.g., 100-200s hard effort).

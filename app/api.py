@@ -16,16 +16,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from core.config import cfg_get, load_config
-from core.activity_summary import get_analysis_summary, summary_schema_version
-from agent.activity.operations.service import (
+from settings import cfg_get, load_config
+from domain.analysis.artifacts import get_analysis_summary, summary_schema_version
+from operations.activity.service import (
     analyze_fit_document,
     check_garmin_connection,
     sync_garmin_activities_tool,
 )
-from core.garmin_cn import DEFAULT_OUTPUT_DIR
-from core.storage.activity_store import ActivityStore, file_content_key
-from core.strava_upload import upload_activity_to_strava
+from integrations.garmin import DEFAULT_OUTPUT_DIR
+from storage.repositories.activity import ActivityStore, file_content_key
+from operations.activity.strava import upload_activity_to_strava
 from fit.parser import parse_fit
 
 

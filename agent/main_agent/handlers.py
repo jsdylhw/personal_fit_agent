@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agent.context import AgentContext
-from agent.llm import AnthropicMessagesClient, extract_text
-from agent.activity.operations.service import analyze_fit_file_tool
-from core.activity_summary import get_analysis_summary, get_index_load_label
-from core.storage.activity_store import ActivityStore
+from agent.main_agent.context import AgentContext
+from integrations.llm import AnthropicMessagesClient, extract_text
+from operations.activity.service import analyze_fit_file_tool
+from domain.analysis.artifacts import get_analysis_summary, get_index_load_label
+from storage.repositories.activity import ActivityStore
 
 
 def execute_summarize_activity_range(
@@ -138,7 +138,7 @@ def _summary_generation_item(activity: dict[str, Any], *, status: str) -> dict[s
 
 
 def _reload_activities_from_index(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    from core.activity_index import load_activity_index
+    from services.activity.catalog import load_activity_index
 
     index = load_activity_index()
     index_map: dict[str, dict[str, Any]] = {}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.context import AgentContext
+from agent.main_agent.context import AgentContext
 
 
 def remember_failed_action(

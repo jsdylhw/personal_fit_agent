@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Routes"
+  short_description: "Recommend route types and constraints"
+  default_prompt: "Recommend a route type from the rider goal and constraints."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Activity"
+  short_description: "Analyze one cycling or running activity"
+  default_prompt: "Analyze a selected activity using its report or FIT evidence."

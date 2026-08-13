@@ -12,9 +12,9 @@ from typing import Any
 
 import typer
 
-from core.fit_paths import resolve_fit_path
+from fit.paths import resolve_fit_path
 from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
-from core.activity_index import (
+from services.activity.catalog import (
     get_activities_in_range,
     list_activities,
     rebuild_activity_index,
@@ -22,7 +22,7 @@ from core.activity_index import (
     upsert_activity_from_fit,
 )
 from fit.parser import parse_fit
-from core.storage.activity_store import ActivityStore
+from storage.repositories.activity import ActivityStore
 
 app = typer.Typer(help="Personal FIT Agent debug CLI")
 
@@ -127,7 +127,7 @@ def rebuild_v2_reports_command(
     activity_key: list[str] | None = typer.Option(None, "--activity-key", help="只重建指定 activity_key，可重复传入。"),
 ) -> None:
     """提交全量 V2 报告任务，并在 CLI 进程中等待最终结果。"""
-    from agent.activity.report_jobs import get_activity_report_job, submit_activity_report_rebuild
+    from operations.activity.report_batch import get_activity_report_job, submit_activity_report_rebuild
 
     submitted = submit_activity_report_rebuild(scope=scope, activity_keys=activity_key)
     typer.echo(f"report job {submitted.get('job_id')}: {submitted.get('status')}")

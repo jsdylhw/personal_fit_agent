@@ -7,16 +7,16 @@ import json
 
 import typer
 
-from agent.chat_logger import new_session_id
-from agent.context import AgentContext
+from agent.runtime.chat_logger import new_session_id
+from agent.main_agent.context import AgentContext
 from agent.main_agent.loop import run_tool_loop
-from core.fit_paths import resolve_fit_path
-from agent.activity.operations.service import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
-from core.strava_upload import (
+from fit.paths import resolve_fit_path
+from operations.activity.service import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
+from operations.activity.strava import (
     update_strava_description,
     upload_activity_to_strava,
 )
-from sinks.strava import StravaSink
+from integrations.strava import StravaSink
 
 
 app = typer.Typer(help="Personal FIT Agent CLI")
@@ -27,10 +27,19 @@ def chat_command(
     message: str | None = typer.Argument(None, help="单次对话内容。不传则进入交互模式。"),
     fit_path: str | None = typer.Option(None, "--fit", help="可选:当前 FIT 文件路径或 latest."),
     max_tokens: int = typer.Option(4096, "--max-tokens", help="LLM 最大输出 token 数."),
+    workspace: str = typer.Option("default", "--workspace", help="跨进程恢复活动分析焦点的工作区名称。"),
 ) -> None:
     """对话模式 — Main Agent 原生 tool use。不传 message 进入交互模式，q/quit 退出。"""
     if message:
-        result = run_tool_loop(message, fit_path=fit_path, max_tokens=max_tokens, verbose=True)
+        context = AgentContext(
+            session_id=new_session_id("tool_loop"),
+            workspace_id=workspace,
+            current_fit_file=resolve_fit_path(fit_path) if fit_path else None,
+        )
+        from agent.analysis.workspace import AnalysisNavigationService
+
+        AnalysisNavigationService().load_into_context(context)
+        result = run_tool_loop(message, max_tokens=max_tokens, verbose=True, context=context)
         typer.echo("")
         typer.echo(result["answer"])
         return
@@ -39,8 +48,12 @@ def chat_command(
     typer.echo("Personal FIT Agent (chat mode) — 输入 q/quit 退出")
     context = AgentContext(
         session_id=new_session_id("tool_loop"),
+        workspace_id=workspace,
         current_fit_file=resolve_fit_path(fit_path) if fit_path else None,
     )
+    from agent.analysis.workspace import AnalysisNavigationService
+
+    AnalysisNavigationService().load_into_context(context)
     while True:
         try:
             user_input = typer.prompt(">").strip()

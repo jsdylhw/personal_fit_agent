@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Training History"
+  short_description: "Compare activities and training trends"
+  default_prompt: "Analyze structured training history and comparisons."

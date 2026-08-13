@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coach Training"
+  short_description: "Give evidence-based training guidance"
+  default_prompt: "Use structured history to provide training guidance."

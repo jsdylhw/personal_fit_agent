@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from agent.context import AgentContext
+from agent.main_agent.context import AgentContext
 from agent.main_agent.tool_result import remember_failed_action
 
 ToolHandler = Callable[[dict[str, Any], AgentContext], dict[str, Any]]
@@ -19,24 +19,38 @@ def ask_user_clarification(args: dict[str, Any], context: AgentContext) -> dict[
     return {"answer": args.get("question") or "请再描述一下你的需求。"}
 
 
-def find_activity(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.selection import select_activity_mode
+def resolve_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.tools.handlers.activity_selection import resolve_activities as resolve
 
-    selection_mode = select_activity_mode(args)
-    selection_args: dict[str, Any] = {} if selection_mode == "current" else args
+    return resolve(args, context)
 
-    result = _select_activities(selection_mode, selection_args, context)
-    if isinstance(result, dict):
-        result = {
-            **result,
-            "step": "find_activity",
-            "selection_mode": selection_mode,
-        }
-    return result
+
+def find_segments(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.tools.handlers.activity_analysis import find_segments as find
+
+    return find(args, context)
+
+
+def inspect_selection(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.tools.handlers.activity_analysis import inspect_selection as inspect
+
+    return inspect(args, context)
+
+
+def analyze_selection(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.tools.handlers.activity_analysis import analyze_selection as analyze
+
+    return analyze(args, context)
+
+
+def navigate_selection(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.tools.handlers.activity_analysis import navigate_selection as navigate
+
+    return navigate(args, context)
 
 
 def analyze_activity(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.report import show_selected_activity_report_tool
+    from agent.tools.handlers.activity_reporting import show_selected_activity_report_tool
     from agent.main_agent.handlers import empty_activity_selection_answer
 
     last = context.last_tool_result or {}
@@ -64,12 +78,12 @@ def analyze_activity(args: dict[str, Any], context: AgentContext) -> dict[str, A
 
 
 def query_activity_detail(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.report import query_selected_activity_detail_tool
+    from agent.tools.handlers.activity_reporting import query_selected_activity_detail_tool
 
     if len(context.selected_activities) != 1:
         return {
             "error": "single_activity_required",
-            "message": "query_activity_detail 只能查询一条已定位活动；请先用 find_activity 精确定位。",
+            "message": "query_activity_detail 只能查询一条已定位活动；请先用 resolve_activities 精确定位。",
             "selected_count": len(context.selected_activities),
         }
     return query_selected_activity_detail_tool(
@@ -86,7 +100,7 @@ def summarize_activities(args: dict[str, Any], context: AgentContext) -> dict[st
 
 
 def compare_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.comparison import compare_selected_activities_tool
+    from agent.tools.handlers.activity_insights import compare_selected_activities_tool
 
     return compare_selected_activities_tool(context, name="compare_activities")
 
@@ -96,13 +110,13 @@ def generate_training_advice(args: dict[str, Any], context: AgentContext) -> dic
 
 
 def summarize_recent_training_load(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.training_load import summarize_recent_training_load_tool
+    from agent.tools.handlers.activity_insights import summarize_recent_training_load_tool
 
     return summarize_recent_training_load_tool(context, name="summarize_recent_training_load")
 
 
 def calculate_history_metrics(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.history_metrics import calculate_history_metrics_tool
+    from agent.tools.handlers.activity_insights import calculate_history_metrics_tool
 
     return calculate_history_metrics_tool(
         context,
@@ -112,21 +126,21 @@ def calculate_history_metrics(args: dict[str, Any], context: AgentContext) -> di
 
 
 def generate_route_advice(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.route.advice import generate_route_advice_tool
+    from agent.tools.handlers.route import generate_route_advice_tool
 
     return generate_route_advice_tool(context, args=args, name="generate_route_advice")
 
 
 def sync_garmin_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     """Pure Garmin sync: download/index only, with no analysis workflow."""
-    from agent.activity.operations.garmin import sync_recent
+    from operations.activity.sync import sync_recent
 
     return sync_recent(count=int(args.get("count", 5)))
 
 
 def sync_and_run_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     """同步 Garmin，并把本次已索引活动冻结为一个持久化 Run。"""
-    from agent.activity.workflow_service import sync_and_start_activity_workflow
+    from operations.activity.workflow_service import sync_and_start_activity_workflow
 
     result = sync_and_start_activity_workflow(
         count=int(args.get("count", 5)),
@@ -138,7 +152,7 @@ def sync_and_run_activity_workflow(args: dict[str, Any], context: AgentContext) 
 
 
 def run_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.workflow_service import start_local_activity_workflow
+    from operations.activity.workflow_service import start_local_activity_workflow
 
     result = start_local_activity_workflow(
         limit=int(args.get("limit", 5)),
@@ -153,26 +167,26 @@ def run_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[s
 
 def rebuild_activity_reports(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     """Submit a non-blocking, in-process rebuild of current V2 reports."""
-    from agent.activity.report_jobs import submit_activity_report_rebuild
+    from operations.activity.report_batch import submit_activity_report_rebuild
 
     return submit_activity_report_rebuild(scope=str(args.get("scope") or "all"))
 
 
 def get_activity_report_job(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     """Read progress for a bulk report rebuild without starting new work."""
-    from agent.activity.report_jobs import get_activity_report_job as get_job
+    from operations.activity.report_batch import get_activity_report_job as get_job
 
     return get_job(str(args.get("job_id") or ""))
 
 
 def get_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.workflow_service import get_activity_workflow as get_workflow
+    from operations.activity.workflow_service import get_activity_workflow as get_workflow
 
     return get_workflow(str(args.get("workflow_id") or ""))
 
 
 def retry_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    from agent.activity.workflow_service import retry_activity_workflow as retry_workflow
+    from operations.activity.workflow_service import retry_activity_workflow as retry_workflow
 
     task_ids = args.get("task_ids")
     result = retry_workflow(
@@ -182,18 +196,14 @@ def retry_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict
     return result
 
 
-def _select_activities(mode: str, args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
-    # Import the implementation module here so runtime instrumentation and
-    # tests can replace the concrete service without a stale re-export.
-    from agent.activity.selection.service import execute_activity_selection
-
-    return execute_activity_selection(mode, args, context)
-
-
 TOOL_HANDLERS: dict[str, ToolHandler] = {
     "casual_chat": casual_chat,
     "ask_user_clarification": ask_user_clarification,
-    "find_activity": find_activity,
+    "resolve_activities": resolve_activities,
+    "find_segments": find_segments,
+    "inspect_selection": inspect_selection,
+    "analyze_selection": analyze_selection,
+    "navigate_selection": navigate_selection,
     "analyze_activity": analyze_activity,
     "query_activity_detail": query_activity_detail,
     "summarize_activities": summarize_activities,
