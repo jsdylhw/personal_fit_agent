@@ -15,17 +15,16 @@ from agent.runtime.workflow_store import acquire_workflow_lock
 def test_service_runs_and_retries_persisted_upload_run(monkeypatch, tmp_path):
     fit = tmp_path / "a1.fit"
     fit.write_bytes(b"fit")
-    summary = tmp_path / "a1.summary.json"
-    summary.write_text("{}", encoding="utf-8")
     created = create_activity_run_from_activities(
-        [{"activity_key": "a1", "fit_path": str(fit), "summary_path": str(summary)}],
+        [{"activity_key": "a1", "fit_path": str(fit)}],
         request={"source": "test", "goals": [TASK_UPLOAD_STRAVA], "force": False},
         directory=tmp_path,
     )
     run = created["run"]
     workflow_id = run["workflow_id"]
+    monkeypatch.setattr("agent.activity.workflow_handlers._has_existing_report", lambda activity: True)
     monkeypatch.setattr(
-        "agent.activity.workflow_handlers.upload_summary",
+        "agent.activity.workflow_handlers.upload_activity",
         lambda *args, **kwargs: {"status": "failed", "error": "network_error", "message": "offline"},
     )
 
@@ -34,7 +33,7 @@ def test_service_runs_and_retries_persisted_upload_run(monkeypatch, tmp_path):
     assert next(task for task in run["tasks"] if task["kind"] == TASK_UPLOAD_STRAVA)["status"] == "failed"
 
     monkeypatch.setattr(
-        "agent.activity.workflow_handlers.upload_summary",
+        "agent.activity.workflow_handlers.upload_activity",
         lambda *args, **kwargs: {"status": "completed", "outcome": "uploaded", "strava_activity_id": "456"},
     )
     retried = retry_activity_workflow(workflow_id, directory=tmp_path)
@@ -95,8 +94,6 @@ def test_service_does_not_retry_while_another_executor_holds_the_run_lock(tmp_pa
 def test_service_retry_recovers_persisted_running_task_after_lock_is_acquired(monkeypatch, tmp_path):
     fit = tmp_path / "a1.fit"
     fit.write_bytes(b"fit")
-    summary = tmp_path / "a1.summary.json"
-    summary.write_text("{}", encoding="utf-8")
     created = create_activity_run_from_activities(
         [{"activity_key": "a1", "fit_path": str(fit)}],
         request={"source": "test", "goals": ["ensure_summary"], "force": False},
@@ -109,7 +106,7 @@ def test_service_retry_recovers_persisted_running_task_after_lock_is_acquired(mo
     monkeypatch.setattr(
         "agent.activity.workflow_handlers.ensure_summary",
         lambda _path, force: {
-            "status": "completed", "summary_path": str(summary), "result_status": "analyzed",
+            "status": "completed", "report_schema_version": "llm_fit_file_analysis.v2", "result_status": "analyzed",
         },
     )
 

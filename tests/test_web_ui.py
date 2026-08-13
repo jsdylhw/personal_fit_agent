@@ -14,7 +14,7 @@ def test_web_ui_keeps_api_token_in_session_and_uses_it_for_every_fetch_helper_ca
     assert "sessionStorage.getItem(API_TOKEN_STORAGE_KEY)" in source
     assert '"X-API-Token": token' in source
     assert "headers: apiHeaders(headers)" in source
-    assert "fetchJson(`/api/summary?path=${encodeURIComponent(file.summary_path)}`)" in source
+    assert "fetchJson(`/api/summary?activity_key=${encodeURIComponent(file.activity_key)}`)" in source
 
 
 def test_web_ui_waits_for_strava_completion_before_showing_success():

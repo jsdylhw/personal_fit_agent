@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
-
 from agent.activity.history_metrics import calculate_history_metrics_tool
 from agent.context import AgentContext
+from tests.report_store_helpers import store_report
 
 
 def _metrics(
@@ -49,18 +48,16 @@ def _metrics(
     }
 
 
-def _write_summary(path, metrics: dict) -> None:
-    path.write_text(
-        json.dumps({
+def _store_metrics(root, metrics: dict) -> dict:
+    return store_report(root, {
             "schema_version": "llm_fit_file_analysis.v2",
             "activity_key": metrics["activity_key"],
             "activity_metrics": metrics,
-        }),
-        encoding="utf-8",
-    )
+        })
 
 
-def test_history_metrics_groups_by_week_and_uses_weighted_averages(tmp_path):
+def test_history_metrics_groups_by_week_and_uses_weighted_averages(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     first = _metrics(
         key="a1", start="2026-05-04T08:00:00", duration_min=60, distance_km=20,
         tss=30, avg_power_w=100, normalized_power_w=120, intensity_factor=0.5, avg_hr_bpm=130,
@@ -75,9 +72,7 @@ def test_history_metrics_groups_by_week_and_uses_weighted_averages(tmp_path):
     )
     activities = []
     for metrics in (first, second, third):
-        path = tmp_path / f"{metrics['activity_key']}.summary.json"
-        _write_summary(path, metrics)
-        activities.append({"activity_key": metrics["activity_key"], "summary_path": str(path)})
+        activities.append(_store_metrics(tmp_path, metrics))
     context = AgentContext(
         session_id="history-metrics",
         selected_activities=activities,
@@ -89,7 +84,7 @@ def test_history_metrics_groups_by_week_and_uses_weighted_averages(tmp_path):
     assert output["status"] == "completed"
     result = output["result"]
     assert result["schema_version"] == "training_history_metrics.v1"
-    assert result["coverage"]["source_counts"] == {"stored_summary_v2": 3}
+    assert result["coverage"]["source_counts"] == {"stored_report_v2": 3}
     assert result["coverage"]["metric_counts"]["tss"] == 3
     assert result["overall"]["totals"]["duration_min"] == 240.0
     assert result["overall"]["totals"]["distance_km"] == 90.0
@@ -112,20 +107,12 @@ def test_history_metrics_falls_back_to_fit_without_rewriting_old_summary(
 ):
     fit_path = tmp_path / "legacy.fit"
     fit_path.write_bytes(b"fit")
-    summary_path = tmp_path / "legacy.summary.json"
-    original = json.dumps({
-        "activity_key": "legacy",
-        "fit_path": str(fit_path),
-        "fit_summary": {"start_time_local": "2026-05-14T16:00:00", "sport_type": "cycling"},
-        "history_entry": {"training_load": "TSS 999, IF 9.99"},
-    })
-    summary_path.write_text(original, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("agent.activity.history_metrics.parse_fit", lambda path: sample_parsed_fit)
     context = AgentContext(
         session_id="history-fallback",
         selected_activities=[{
             "activity_key": "legacy",
-            "summary_path": str(summary_path),
             "fit_path": str(fit_path),
         }],
     )
@@ -136,7 +123,6 @@ def test_history_metrics_falls_back_to_fit_without_rewriting_old_summary(
     assert result["coverage"]["source_counts"] == {"fit_fallback": 1}
     assert result["overall"]["totals"]["tss"] == 45.0
     assert result["overall"]["weighted_averages"]["intensity_factor"] == 0.75
-    assert summary_path.read_text(encoding="utf-8") == original
 
 
 def test_history_metrics_rejects_unknown_grouping():

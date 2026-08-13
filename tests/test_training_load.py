@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import json
-
 from agent.context import AgentContext
 from agent.activity.training_load import summarize_recent_training_load_tool
+from tests.report_store_helpers import store_report
 
 
 def _write_summary(path, *, key: str, tss: float, intensity_factor: float, distance_km: float, duration_min: float):
-    path.write_text(
-        json.dumps(
-            {
+    return store_report(path, {
                 "schema_version": "llm_fit_file_analysis.v2",
                 "activity_key": key,
                 "activity_metrics": {
@@ -42,23 +39,18 @@ def _write_summary(path, *, key: str, tss: float, intensity_factor: float, dista
                     "load_label": "低负荷" if tss < 50 else "高负荷",
                     "brief": f"NP 210W, IF {intensity_factor}, TSS {tss}",
                 },
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+            })
 
 
-def test_summarize_recent_training_load_outputs_structured_metrics_only(tmp_path):
-    first = tmp_path / "first.summary.json"
-    second = tmp_path / "second.summary.json"
-    _write_summary(first, key="a1", tss=42.5, intensity_factor=0.62, distance_km=30, duration_min=80)
-    _write_summary(second, key="a2", tss=114.0, intensity_factor=0.88, distance_km=43.2, duration_min=111.3)
+def test_summarize_recent_training_load_outputs_structured_metrics_only(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    first = _write_summary(tmp_path, key="a1", tss=42.5, intensity_factor=0.62, distance_km=30, duration_min=80)
+    second = _write_summary(tmp_path, key="a2", tss=114.0, intensity_factor=0.88, distance_km=43.2, duration_min=111.3)
     context = AgentContext(
         session_id="training-load-test",
         selected_activities=[
-            {"activity_key": "a1", "summary_path": str(first)},
-            {"activity_key": "a2", "summary_path": str(second)},
+            first,
+            second,
         ],
         selected_activity_range={"type": "recent_activities", "limit": 2},
     )
@@ -92,60 +84,23 @@ def test_summarize_recent_training_load_reports_missing_summaries():
     assert result["missing"][0]["activity_key"] == "a1"
 
 
-def test_structured_metrics_take_precedence_over_conflicting_report_text(tmp_path):
-    summary_path = tmp_path / "structured.summary.json"
-    summary_path.write_text(
-        json.dumps({
-            "activity_key": "a1",
-            "activity_metrics": {
-                "schema_version": "activity_metrics.v1",
-                "identity": {"sport_type": "cycling", "start_time_local": "2026-05-11T08:00:00"},
-                "scale": {"duration_min": 60, "distance_km": 30},
-                "power": {"intensity_factor": 0.75},
-                "load": {"tss": 18.8},
-            },
-            "history_entry": {
-                "training_load": "TSS 999, NP 999W, IF 9.99",
-                "duration_min": 1,
-                "distance_km": 1,
-            },
-        }),
-        encoding="utf-8",
+def test_structured_metrics_take_precedence_over_conflicting_report_text(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    activity = _write_summary(
+        tmp_path,
+        key="a1",
+        tss=18.8,
+        intensity_factor=0.75,
+        distance_km=30,
+        duration_min=60,
     )
     context = AgentContext(
         session_id="structured-load",
-        selected_activities=[{"activity_key": "a1", "summary_path": str(summary_path)}],
+        selected_activities=[activity],
     )
 
     result = summarize_recent_training_load_tool(context)["result"]
 
     assert result["totals"] == {"distance_km": 30.0, "duration_min": 60.0, "tss": 18.8}
     assert result["intensity"]["avg_if"] == 0.75
-    assert result["intensity"]["source_counts"] == {"stored_summary_v1": 1}
-
-
-def test_legacy_report_text_is_not_used_as_a_numeric_data_source(tmp_path):
-    summary_path = tmp_path / "legacy.summary.json"
-    summary_path.write_text(
-        json.dumps({
-            "activity_key": "legacy",
-            "fit_summary": {"sport_type": "cycling", "start_time_local": "2026-05-11T08:00:00"},
-            "history_entry": {
-                "training_load": "TSS 999, NP 999W, IF 9.99",
-                "duration_min": 60,
-                "distance_km": 30,
-            },
-        }),
-        encoding="utf-8",
-    )
-    context = AgentContext(
-        session_id="legacy-load",
-        selected_activities=[{"activity_key": "legacy", "summary_path": str(summary_path)}],
-    )
-
-    result = summarize_recent_training_load_tool(context)["result"]
-
-    assert result["totals"]["tss"] is None
-    assert result["intensity"]["avg_if"] is None
-    assert result["intensity"]["basis"] == "unavailable"
-    assert result["intensity"]["source_counts"] == {"index_fallback": 1}
+    assert result["intensity"]["source_counts"] == {"stored_report_v2": 1}

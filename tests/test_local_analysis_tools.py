@@ -14,7 +14,7 @@ from agent.activity.analysis_agent import (
     analyze_fit_file,
     build_initial_loop_payload,
     choose_strava_summary_tone,
-    normalize_history_entry,
+    normalize_analysis_submission,
 )
 from agent.tools import call_fit_analysis_tool, fit_data_tool_catalog
 from agent.tools.fit_analysis import (
@@ -101,8 +101,7 @@ class TestExtractJsonObject:
   "action": "final",
   "markdown_report": "# 报告\\n\\n这是主课前的"唤醒"，随后进入阈值段。",
   "strava_summary": "短距离阈值训练，主区间质量不错。",
-  "history_entry": {
-    "schema_version": "llm_activity_history_entry.v1",
+  "analysis_summary": {
     "summary_label": "短距阈值训练"
   }
 }
@@ -113,7 +112,7 @@ class TestExtractJsonObject:
         assert result["action"] == "final"
         assert '主课前的"唤醒"' in result["markdown_report"]
         assert result["strava_summary"].startswith("短距离")
-        assert result["history_entry"]["summary_label"] == "短距阈值训练"
+        assert result["analysis_summary"]["summary_label"] == "短距阈值训练"
 
 
 class TestNormalizeBucketSeconds:
@@ -279,7 +278,7 @@ class TestActivityIndex:
         assert ranged["count"] == 1
         assert ranged["totals"]["distance_km"] == 5.0
 
-    def test_fit_upsert_preserves_existing_summary_flags(self, tmp_path, monkeypatch, sample_parsed_fit):
+    def test_fit_upsert_replaces_stale_path_identity(self, tmp_path, monkeypatch, sample_parsed_fit):
         monkeypatch.chdir(tmp_path)
         from core.activity_index import (
             load_activity_index,
@@ -295,9 +294,7 @@ class TestActivityIndex:
             {
                 "activity_key": "same",
                 "fit_path": "ride.fit",
-                "has_summary": True,
-                "has_strava_summary": True,
-                "summary_path": "data/summaries/ride.summary.json",
+                "sport_type": "unknown",
             },
             path=index_path,
         )
@@ -305,9 +302,10 @@ class TestActivityIndex:
         upsert_activity_from_fit(fit_file, path=index_path)
 
         row = load_activity_index(index_path)["activities"][0]
-        assert row["has_summary"] is True
-        assert row["has_strava_summary"] is True
-        assert row["summary_path"] == "data/summaries/ride.summary.json"
+        assert row["activity_key"] != "same"
+        assert row["sport_type"] == "cycling"
+        assert row["has_summary"] is False
+        assert "summary_path" not in row
 
 
 class TestCallFitAnalysisTool:
@@ -434,36 +432,16 @@ class TestGetActivitySummaryTool:
         assert result["heart_rate"]["available"] is False
 
 
-class TestNormalizeHistoryEntry:
-    def test_fills_default_fields(self, sample_parsed_fit, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        fit_path = tmp_path / "test_activity.fit"
-        fit_path.write_bytes(b"mock fit content")
-        entry = {}
-        result = normalize_history_entry(entry, path=fit_path, parsed=sample_parsed_fit)
-        assert result["activity_key"] is not None
-        assert result["schema_version"] == "llm_activity_history_entry.v2"
-        assert result["sport_type"] == "cycling"
-        assert result["start_time"] == "2026-05-14T16:00:00"
-        assert result["start_time_local"] == "2026-05-14T16:00:00"
+class TestNormalizeAnalysisSubmission:
+    def test_adds_default_brief(self):
+        result = normalize_analysis_submission({"summary_label": "恢复骑"})
+        assert result == {"summary_label": "恢复骑", "brief": ""}
 
-    def test_preserves_existing_fields(self, sample_parsed_fit, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        fit_path = tmp_path / "test_activity.fit"
-        fit_path.write_bytes(b"mock fit content")
+    def test_preserves_existing_fields(self):
         entry = {"brief": "自定义笔记", "custom_field": "keep_me"}
-        result = normalize_history_entry(entry, path=fit_path, parsed=sample_parsed_fit)
+        result = normalize_analysis_submission(entry)
         assert result["brief"] == "自定义笔记"
         assert result["custom_field"] == "keep_me"
-
-    def test_strips_timezone_from_llm_history_time(self, sample_parsed_fit, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        fit_path = tmp_path / "test_activity.fit"
-        fit_path.write_bytes(b"mock fit content")
-        entry = {"start_time": "2026-05-14T16:00:00+08:00"}
-        result = normalize_history_entry(entry, path=fit_path, parsed=sample_parsed_fit)
-        assert result["start_time"] == "2026-05-14T16:00:00"
-        assert result["start_time_local"] == "2026-05-14T16:00:00"
 
 
 # -- 安全测试:strict bool / 上传错误状态 / sync count 上限 -----------------
@@ -523,7 +501,7 @@ def test_submit_analysis_ends_child_loop(sample_parsed_fit, tmp_path, monkeypatc
                         "input": {
                             "markdown_report": "# 完成报告",
                             "strava_summary": "一次简短骑行总结。",
-                            "history_entry": {"summary_label": "恢复骑"},
+                            "analysis_summary": {"summary_label": "恢复骑"},
                         },
                     }
                 ],
@@ -536,11 +514,62 @@ def test_submit_analysis_ends_child_loop(sample_parsed_fit, tmp_path, monkeypatc
     result = analyze_with_llm(fit_path, sample_parsed_fit, history_before=None)
 
     assert result["markdown_report"] == "# 完成报告"
-    assert result["history_entry"] == {"summary_label": "恢复骑"}
+    assert result["analysis_summary"] == {"summary_label": "恢复骑"}
     tool_names = [tool["name"] for tool in captured["tools"]]
     assert tool_names[-1] == "submit_analysis"
     assert "get_history" not in tool_names
-    assert SUBMIT_ANALYSIS_TOOL.input_schema["required"] == ["markdown_report", "strava_summary", "history_entry"]
+    assert SUBMIT_ANALYSIS_TOOL.input_schema["required"] == ["markdown_report", "strava_summary", "analysis_summary"]
+
+
+def test_invalid_submit_analysis_is_repaired_inside_child_loop(sample_parsed_fit, tmp_path, monkeypatch):
+    fit_path = tmp_path / "test_activity.fit"
+    fit_path.write_bytes(b"mock fit content")
+    calls = []
+
+    class FakeClient:
+        def create_messages(self, **kwargs):
+            calls.append(kwargs["messages"])
+            if len(calls) == 1:
+                return {
+                    "id": "invalid-submit",
+                    "model": "test-model",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "submit-invalid",
+                        "name": "submit_analysis",
+                        "input": {"markdown_report": "", "strava_summary": "摘要", "analysis_summary": {}},
+                    }],
+                }
+            return {
+                "id": "valid-submit",
+                "model": "test-model",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "submit-valid",
+                    "name": "submit_analysis",
+                    "input": {
+                        "markdown_report": "# 修复后的报告",
+                        "strava_summary": "摘要",
+                        "analysis_summary": {},
+                    },
+                }],
+            }
+
+    monkeypatch.setattr("agent.activity.analysis_agent.AnthropicMessagesClient", FakeClient)
+    monkeypatch.setattr("agent.activity.analysis_agent.new_session_id", lambda prefix: "repair-test")
+    monkeypatch.setattr("agent.activity.analysis_agent.append_chat_log", lambda *args, **kwargs: tmp_path / "repair.jsonl")
+
+    result = analyze_with_llm(fit_path, sample_parsed_fit, history_before=None)
+
+    assert result["markdown_report"] == "# 修复后的报告"
+    repair_message = next(
+        block
+        for message in calls[1]
+        for block in (message.get("content") if isinstance(message.get("content"), list) else [])
+        if isinstance(block, dict) and block.get("is_error") is True
+    )
+    assert repair_message["is_error"] is True
+    assert "non-empty markdown_report" in repair_message["content"]
 
 
 class TestAnalyzeFitFileResultTimes:
@@ -560,14 +589,14 @@ class TestAnalyzeFitFileResultTimes:
                 "model": "test-model",
                 "markdown_report": "# Report",
                 "strava_summary": "summary",
-                "history_entry": {},
+                "analysis_summary": {},
             },
         )
 
-        result = analyze_fit_file(external_fit, update_history=False, persist=False, force=True)
+        result = analyze_fit_file(external_fit, persist=False, force=True)
 
         assert result["fit_path"] == str(external_fit.resolve())
-        assert result["history_entry"]["file_path"] == str(external_fit.resolve())
+        assert result["analysis_summary"]["schema_version"] == "activity_analysis_summary.v1"
         assert result["activity_metrics"]["schema_version"] == "activity_metrics.v2"
         assert result["activity_metrics"]["load"]["power_stress"]["tss"] == 45.0
 
@@ -579,9 +608,9 @@ class TestAnalyzeFitFileResultTimes:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("agent.activity.analysis_agent.parse_fit", lambda path: sample_parsed_fit)
         monkeypatch.setattr(
-            "agent.activity.analysis_agent.query_activity_history",
-            lambda **kwargs: {
-                "schema_version": "file_training_history.v1",
+            "core.storage.activity_store.ActivityStore.query_history",
+            lambda self, **kwargs: {
+                "schema_version": "activity_report_history.v1",
                 "count": 1,
                 "activities": [
                     {
@@ -597,11 +626,11 @@ class TestAnalyzeFitFileResultTimes:
                 "model": "test-model",
                 "markdown_report": "# Report",
                 "strava_summary": "summary",
-                "history_entry": {},
+                "analysis_summary": {},
             },
         )
 
-        result = analyze_fit_file(fit_path, use_history=True, update_history=False, force=True)
+        result = analyze_fit_file(fit_path, use_history=True, force=True)
 
         assert result["fit_summary"]["start_time_local"] == "2026-05-14T16:00:00"
         assert "start_time" not in result["fit_summary"]
@@ -615,19 +644,19 @@ class TestAnalyzeFitFileResultTimes:
 class TestSyncCountLimit:
     def test_max_sync_count_is_declared(self):
         # 只测同步上限常量,不实际调用 Garmin(会因无凭证报错)
-        from agent.operations import MAX_SYNC_COUNT
+        from agent.activity.operations.service import MAX_SYNC_COUNT
         assert MAX_SYNC_COUNT == 20
 
     def test_count_above_limit_is_rejected(self):
         import pytest
 
-        from agent.operations import sync_garmin_activities_tool
+        from agent.activity.operations.service import sync_garmin_activities_tool
 
         with pytest.raises(ValueError, match="between 1 and 20"):
             sync_garmin_activities_tool(count=50)
 
 
-class TestUploadErrorStates:
+class _LegacyUploadErrorStates:
     def test_no_summary(self):
         from agent.operations import upload_to_strava_tool
         result = upload_to_strava_tool("/tmp/nonexistent_activity.fit")

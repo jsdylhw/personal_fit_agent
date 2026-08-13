@@ -72,15 +72,17 @@ def test_analyze_fit_file_persists_activity_metrics_json(sample_parsed_fit, tmp_
             "model": "test-model",
             "markdown_report": "# report",
             "strava_summary": "summary",
-            "history_entry": {},
+            "analysis_summary": {},
         },
     )
 
-    result = analyze_fit_file(fit_path, update_history=False, force=True, persist=True)
+    result = analyze_fit_file(fit_path, force=True, persist=True)
 
-    saved = json.loads(Path(result["summary_path"]).read_text(encoding="utf-8"))
+    from core.storage.activity_store import ActivityStore
+
+    saved = ActivityStore().get_report(result["activity_key"])
     assert saved["schema_version"] == "llm_fit_file_analysis.v2"
-    assert "history_entry" not in saved
+    assert "analysis_summary" in saved
     assert "history_before" not in saved
     assert saved["activity_metrics"]["load"]["power_stress"]["tss"] == 45.0
     assert saved["activity_metrics"]["load"]["garmin"]["training_load_peak"] == 120.0

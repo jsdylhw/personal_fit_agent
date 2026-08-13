@@ -133,6 +133,16 @@ def test_router_distinguishes_latest_single_activity_from_recent_range():
     assert route_intent("比较最近几次骑行").kind.value == "compare"
 
 
+def test_rebuild_all_reports_exposes_background_report_tools():
+    intent = route_intent("重新分析所有活动，生成 V2 总结")
+
+    assert intent.kind.value == "analyze_range"
+    categories = intent_tool_categories(intent)
+    assert "workflow" in categories
+    exposed = {tool.name for tool in MAIN_AGENT_TOOLS if tool.category in categories}
+    assert {"rebuild_activity_reports", "get_activity_report_job"}.issubset(exposed)
+
+
 def test_router_treats_history_periods_and_trends_as_ranges():
     assert route_intent("分析最近一个月的骑行趋势").kind.value == "analyze_range"
     assert route_intent("最近一周跑步有进步吗").kind.value == "analyze_range"

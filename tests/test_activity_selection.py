@@ -4,18 +4,16 @@ from datetime import date
 
 from agent.activity.selection import execute_activity_selection, select_activity_mode
 from agent.context import AgentContext
-from core.activity_index import save_activity_index
+from core.activity_index import replace_activity_entries
 
 
 def _write_index(path):
-    save_activity_index(
-        {
-            "activities": [
+    replace_activity_entries(
+            [
                 {
                     "activity_key": "a1",
                     "file_name": "morning.fit",
                     "fit_path": "/tmp/morning.fit",
-                    "summary_path": "/tmp/morning.summary.json",
                     "sport_type": "cycling",
                     "start_time_local": "2026-05-18T08:00:00",
                     "date_local": "2026-05-18",
@@ -27,7 +25,6 @@ def _write_index(path):
                     "activity_key": "a2",
                     "file_name": "evening.fit",
                     "fit_path": "/tmp/evening.fit",
-                    "summary_path": "/tmp/evening.summary.json",
                     "sport_type": "cycling",
                     "start_time_local": "2026-05-18T20:00:00",
                     "date_local": "2026-05-18",
@@ -46,8 +43,7 @@ def _write_index(path):
                     "distance_m": 3000,
                     "has_summary": False,
                 },
-            ]
-        },
+            ],
         path=path,
     )
 
@@ -230,7 +226,6 @@ def test_resolve_activity_by_date_updates_current_activity(tmp_path):
     assert result["result"]["matched_count"] == 2
     assert context.current_activity_key == "a2"
     assert str(context.current_fit_file) == "/tmp/evening.fit"
-    assert str(context.current_summary_path) == "/tmp/evening.summary.json"
     assert [activity["activity_key"] for activity in context.selected_activities] == ["a2"]
 
 

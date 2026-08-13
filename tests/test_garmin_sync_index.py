@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent.operations import sync_garmin_activities_tool
+from agent.activity.operations.service import sync_garmin_activities_tool
 from core.activity_index import list_activities
 
 
