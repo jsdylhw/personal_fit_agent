@@ -1,0 +1,8 @@
+{"case_id":"skill_chat_fallback","mode":"skill","tags":["conversation"],"input":"我有一个朋友叫小a","expected":{"skill_id":null,"intent":"chat"}}
+{"case_id":"skill_single_detail","mode":"skill","tags":["analysis","single"],"input":"今天上午这次骑行 100–200 秒有没有连续冲刺？","expected":{"skill_id":"analyze-activity","intent":"analyze_single"}}
+{"case_id":"skill_history_trend","mode":"skill","tags":["history","range"],"input":"分析最近一个月的骑行趋势","expected":{"skill_id":"analyze-training-history","intent":"analyze_range"}}
+{"case_id":"skill_sync_only","mode":"skill","tags":["sync"],"input":"从 Garmin 同步最近五个活动","expected":{"skill_id":"sync-garmin-activities","intent":"sync"}}
+{"case_id":"skill_local_publish","mode":"skill","tags":["strava"],"input":"重新上传本地最近三个活动到 Strava","expected":{"skill_id":"publish-to-strava","intent":"upload"}}
+{"case_id":"skill_combined_workflow","mode":"skill","tags":["workflow"],"input":"同步最新的三个活动，分析并上传 Strava","expected":{"skill_id":"run-activity-workflow","intent":"mixed"}}
+{"case_id":"skill_training_coach","mode":"skill","tags":["coaching"],"input":"根据最近训练给我下一次训练建议","expected":{"skill_id":"coach-training","intent":"training_advice"}}
+{"case_id":"skill_route_plan","mode":"skill","tags":["route"],"input":"推荐一条青浦两小时的有氧骑行路线","expected":{"skill_id":"plan-routes","intent":"route_advice"}}

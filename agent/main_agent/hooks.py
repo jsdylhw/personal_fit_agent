@@ -10,15 +10,29 @@ from agent.main_agent.tool_result import is_failed_tool_output
 class ToolLoopHooks:
     """Fixed hook order for the tool loop."""
 
-    def __init__(self, context, allowed_cats, has_resolved_ref, steps_taken, *, verbose=False):
+    def __init__(
+        self,
+        context,
+        allowed_cats,
+        has_resolved_ref,
+        steps_taken,
+        *,
+        allowed_tool_names=None,
+        verbose=False,
+    ):
         self.context = context
         self.allowed_cats = allowed_cats
         self.has_resolved_ref = has_resolved_ref
         self.steps_taken = steps_taken
+        self.allowed_tool_names = set(allowed_tool_names) if allowed_tool_names is not None else None
         self.verbose = verbose
         self.final_response_only = False
 
     def before_llm_call(self) -> dict[str, str] | None:
+        reference = getattr(self.context, "pending_skill_reference", None)
+        if reference:
+            self.context.pending_skill_reference = None
+            return {"role": "user", "content": reference}
         return None
 
     def on_tool_round(self) -> None:
@@ -48,12 +62,32 @@ class ToolLoopHooks:
             self.context.last_failed_action = {"tool": name, "input": block.get("input", {}) or {}}
         elif name == (self.context.last_failed_action or {}).get("tool"):
             self.context.last_failed_action = None
-        if name == "find_activity" or name.startswith("resolve_"):
+        if name == "resolve_activities":
             self.has_resolved_ref["value"] = True
+            if self.context.active_skill_id == "analyze-activity":
+                self._append_activity_sport_reference()
         if _is_terminal_analysis_result(name, output):
             self.final_response_only = True
         if self.verbose:
             self._log_post_tool(block, output, step_count=step_count)
+
+    def _append_activity_sport_reference(self) -> None:
+        """Load sport guidance from trusted selected records after resolution."""
+        from agent.skills import get_skill, load_sport_references
+
+        skill = get_skill(self.context.active_skill_id)
+        if skill is None:
+            return
+        sport_types = [
+            str(activity.get("sport_type") or "")
+            for activity in self.context.selected_activities
+            if isinstance(activity, dict)
+        ]
+        reference_sections = load_sport_references(skill, sport_types=sport_types)
+        if reference_sections:
+            self.context.pending_skill_reference = (
+                "[结构化活动类型参考]\n" + "\n\n".join(reference_sections)
+            )
 
     def _guard_tool_call(self, block: dict[str, Any]) -> dict[str, Any] | None:
         from agent.main_agent.guard import guard_tool_call
@@ -63,6 +97,7 @@ class ToolLoopHooks:
             block.get("input", {}),
             context=self.context,
             allowed_categories=self.allowed_cats,
+            allowed_tool_names=self.allowed_tool_names,
             has_resolved=self.has_resolved_ref["value"],
         )
         if not guard.allowed:
@@ -90,10 +125,14 @@ def _format_tool_args(block: dict[str, Any]) -> str:
 
     name = str(block.get("name") or "")
     args = block.get("input") if isinstance(block.get("input"), dict) else {}
-    if name == "find_activity":
-        scope = _inferred_find_scope(args)
-        labels = {"recent": "最近活动", "activity": "指定活动", "range": "日期范围", "current": "当前活动"}
-        parts = [labels.get(scope, scope)]
+    if name == "resolve_activities":
+        kind = str(args.get("kind") or "")
+        labels = {
+            "recent": "最近活动", "date": "指定日期", "range": "日期范围",
+            "current": "当前活动", "all": "全部活动", "key": "活动 ID",
+            "index": "活动序号", "name": "活动名称",
+        }
+        parts = [labels.get(kind, kind or "未指定范围")]
         if args.get("limit"):
             parts.append(f"{args['limit']} 条")
         if args.get("time_of_day"):
@@ -105,16 +144,34 @@ def _format_tool_args(block: dict[str, Any]) -> str:
         return " · ".join(parts)
     if name == "summarize_activities":
         return "读取已有报告，缺失时补齐后汇总"
+    if name == "find_segments":
+        ordinal = f" · 第 {args['ordinal']} 个" if args.get("ordinal") else ""
+        return f"{args.get('segment_type') or 'effort'}{ordinal}"
+    if name == "inspect_selection":
+        return "轻量检查当前活动/集合/片段焦点"
+    if name == "analyze_selection":
+        return f"{args.get('objective') or 'inspect_activity'} · {args.get('depth') or 'inspect'}"
+    if name == "navigate_selection":
+        ordinal = f" · 第 {args['ordinal']} 个" if args.get("ordinal") else ""
+        return f"{args.get('action') or 'current'}{ordinal}"
+    if name == "calculate_history_metrics":
+        return f"读取结构化指标 · 按 {args.get('group_by') or 'week'} 聚合"
     if name == "analyze_activity":
         return "读取单条完整报告，缺失时生成"
     if name == "query_activity_detail":
         return f"FIT 定向问题：{str(args.get('question') or '').strip() or '未提供'}"
+    if name == "sync_garmin_activities":
+        return f"最近 {args.get('count') or 5} 条 · 仅下载并更新索引"
     if name in {"run_activity_workflow", "sync_and_run_activity_workflow"}:
         goals = ", ".join(str(goal) for goal in args.get("goals") or ["ensure_summary"])
         count = args.get("count") or args.get("limit") or 5
         return f"{count} 条活动 · {goals}"
     if name in {"get_activity_workflow", "retry_activity_workflow"}:
         return f"工作流 {args.get('workflow_id') or '未提供'}"
+    if name == "rebuild_activity_reports":
+        return f"后台重建 V2 报告 · {args.get('scope') or 'all'}"
+    if name == "get_activity_report_job":
+        return f"报告任务 {args.get('job_id') or '未提供'}"
     return ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items()) or "no args"
 
 
@@ -124,11 +181,8 @@ def _summarize_output(name: str, output: Any) -> str:
         payload = nested or output
         if output.get("error"):
             return f"未完成：{output.get('message') or output.get('error')}"
-        if name == "find_activity":
+        if name == "resolve_activities":
             activities = payload.get("activities") if isinstance(payload.get("activities"), list) else []
-            activity = payload.get("activity") if isinstance(payload.get("activity"), dict) else None
-            if activity:
-                return f"已定位：{_activity_label(activity)}"
             labels = "；".join(_activity_label(item) for item in activities[:3] if isinstance(item, dict))
             return f"找到 {payload.get('count', len(activities))} 条活动" + (f"：{labels}" if labels else "")
         if name in {"analyze_activity", "query_activity_detail"}:
@@ -145,10 +199,35 @@ def _summarize_output(name: str, output: Any) -> str:
             generated = generation.get("generated_count", 0)
             skipped = generation.get("skipped_count", 0)
             return f"已汇总 {payload.get('count', 0)} 条活动（读取已有报告 {skipped} 条，补齐 {generated} 条）"
+        if name == "find_segments":
+            return f"已定位 {payload.get('count', 0)} 个 {payload.get('segment_type') or '片段'}"
+        if name in {"inspect_selection", "analyze_selection"}:
+            analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
+            target = payload.get("target") if isinstance(payload.get("target"), dict) else {}
+            return f"已分析 {len(target.get('activity_ids') or [])} 条活动（{analysis.get('status') or output.get('status') or 'completed'}）"
+        if name == "navigate_selection":
+            focus = payload.get("current_focus") if isinstance(payload.get("current_focus"), dict) else {}
+            return f"当前焦点：{focus.get('type') or 'none'}"
+        if name == "calculate_history_metrics":
+            coverage = payload.get("coverage") if isinstance(payload.get("coverage"), dict) else {}
+            return (
+                f"已计算 {coverage.get('included_activity_count', 0)} 条活动的历史指标"
+                f"（{payload.get('group_by') or 'week'}）"
+            )
+        if name == "sync_garmin_activities":
+            return (
+                f"同步完成：下载 {int(payload.get('downloaded') or 0)} 条，"
+                f"跳过 {int(payload.get('skipped') or 0)} 条，失败 {int(payload.get('failed') or 0)} 条；未分析"
+            )
         if name in {"run_activity_workflow", "sync_and_run_activity_workflow", "retry_activity_workflow"}:
             workflow_id = output.get("workflow_id") or payload.get("workflow_id")
             status = output.get("status") or payload.get("status") or "completed"
             return f"工作流 {workflow_id or ''}：{status}".rstrip("：")
+        if name in {"rebuild_activity_reports", "get_activity_report_job"}:
+            return (
+                f"报告任务 {payload.get('job_id') or ''}：{payload.get('status') or 'unknown'}"
+                f"（{int(payload.get('completed') or 0)}/{int(payload.get('total') or 0)}）"
+            )
         if "status" in output:
             return f"完成：{output.get('status')}"
         analysis_error = nested.get("analysis_error") if isinstance(nested.get("analysis_error"), dict) else None
@@ -159,15 +238,23 @@ def _summarize_output(name: str, output: Any) -> str:
 
 def _tool_label(name: str) -> str:
     return {
-        "find_activity": "定位活动",
+        "resolve_activities": "定位活动",
+        "find_segments": "定位活动片段",
+        "inspect_selection": "初步检查",
+        "analyze_selection": "分析当前焦点",
+        "navigate_selection": "切换分析焦点",
         "analyze_activity": "查看活动报告",
         "query_activity_detail": "查询 FIT 细节",
         "summarize_activities": "汇总活动",
         "compare_activities": "对比活动",
+        "calculate_history_metrics": "计算历史指标",
+        "sync_garmin_activities": "同步 Garmin 活动",
         "sync_and_run_activity_workflow": "同步并处理活动",
         "run_activity_workflow": "处理本地活动",
         "get_activity_workflow": "查看工作流",
         "retry_activity_workflow": "重试工作流",
+        "rebuild_activity_reports": "重建 V2 报告",
+        "get_activity_report_job": "查看报告任务",
     }.get(name, name)
 
 
@@ -179,16 +266,6 @@ def _date_label(value: Any) -> str:
     return {"today": "今天", "yesterday": "昨天"}.get(str(value).lower(), str(value))
 
 
-def _inferred_find_scope(args: dict[str, Any]) -> str:
-    if args.get("start_date") or args.get("end_date") or args.get("relative_range") or args.get("range_type"):
-        return "range"
-    if args.get("activity_key") or args.get("activity_index") or args.get("date") or args.get("date_local") or args.get("name"):
-        return "activity"
-    if args.get("current") is True:
-        return "current"
-    return "recent"
-
-
 def _activity_label(activity: dict[str, Any]) -> str:
     started = str(activity.get("start_time_local") or activity.get("date_local") or "未知时间")
     name = str(activity.get("summary_label") or activity.get("file_name") or activity.get("activity_key") or "活动")
@@ -196,21 +273,42 @@ def _activity_label(activity: dict[str, Any]) -> str:
 
 
 def _is_terminal_analysis_result(name: str, output: Any) -> bool:
-    """These tools already return the evidence needed for the user-facing answer.
+    """These tools already return the evidence/state needed for the final answer.
 
-    The next model turn may write prose, but must not start another analysis or
-    accidentally turn a read-only detail query into a forced summary refresh.
+    The next model turn may write prose, but must not start another analysis,
+    sync, upload, or workflow operation.
     """
-    if name not in {
+    terminal_tools = {
         "analyze_activity",
         "query_activity_detail",
         "summarize_activities",
         "compare_activities",
         "generate_training_advice",
         "summarize_recent_training_load",
+        "calculate_history_metrics",
+        "inspect_selection",
+        "analyze_selection",
         "generate_route_advice",
-    }:
+        "sync_garmin_activities",
+        "sync_and_run_activity_workflow",
+        "run_activity_workflow",
+        "get_activity_workflow",
+        "retry_activity_workflow",
+        "rebuild_activity_reports",
+        "get_activity_report_job",
+    }
+    if name not in terminal_tools:
         return False
     if not isinstance(output, dict) or output.get("error") or is_failed_tool_output(output):
         return False
+    if name in {
+        "sync_garmin_activities",
+        "sync_and_run_activity_workflow",
+        "run_activity_workflow",
+        "get_activity_workflow",
+        "retry_activity_workflow",
+        "rebuild_activity_reports",
+        "get_activity_report_job",
+    }:
+        return output.get("status") not in {None, "failed", "busy", "not_found"}
     return output.get("status") == "completed"

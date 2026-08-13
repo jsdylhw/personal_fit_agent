@@ -1,7 +1,6 @@
 """活动索引查询工具:ToolDef 定义.
 
-这些工具对应 core/activity_index.py
-中的 list_activities / resolve_activity / get_activities_in_range.
+这些 ToolDef 对应 services.activity.catalog 中的确定性活动查询能力。
 """
 
 from __future__ import annotations

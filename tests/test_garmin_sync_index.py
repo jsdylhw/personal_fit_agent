@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent.operations import sync_garmin_activities_tool
-from core.activity_index import list_activities
+from operations.activity.service import sync_garmin_activities_tool
+from services.activity.catalog import list_activities
 
 
 def test_sync_garmin_indexes_downloaded_fit(monkeypatch, tmp_path):
@@ -25,12 +25,12 @@ def test_sync_garmin_indexes_downloaded_fit(monkeypatch, tmp_path):
         def download_original(self, activity_id):
             return b"fake-fit"
 
-    monkeypatch.setattr("core.config.load_config", lambda: {"output_dir": "fits"})
-    monkeypatch.setattr("core.config.cfg_get", lambda config, key, default=None: config.get(key, default))
-    monkeypatch.setattr("core.garmin_cn.build_downloader", lambda config: FakeDownloader())
-    monkeypatch.setattr("core.garmin_cn.existing_fit_paths", lambda output_dir, item: [])
+    monkeypatch.setattr("settings.load_config", lambda: {"output_dir": "fits"})
+    monkeypatch.setattr("settings.cfg_get", lambda config, key, default=None: config.get(key, default))
+    monkeypatch.setattr("integrations.garmin.build_downloader", lambda config: FakeDownloader())
+    monkeypatch.setattr("integrations.garmin.existing_fit_paths", lambda output_dir, item: [])
     monkeypatch.setattr(
-        "core.activity_index.parse_fit",
+        "services.activity.catalog.parse_fit",
         lambda path: {
             "summary": {
                 "sport_type": "running",
@@ -78,12 +78,12 @@ def test_sync_garmin_indexes_existing_fit(monkeypatch, tmp_path):
         def download_original(self, activity_id):
             raise AssertionError("existing FIT should not be downloaded")
 
-    monkeypatch.setattr("core.config.load_config", lambda: {"output_dir": str(fit_dir)})
-    monkeypatch.setattr("core.config.cfg_get", lambda config, key, default=None: config.get(key, default))
-    monkeypatch.setattr("core.garmin_cn.build_downloader", lambda config: FakeDownloader())
-    monkeypatch.setattr("core.garmin_cn.existing_fit_paths", lambda output_dir, item: [fit_path])
+    monkeypatch.setattr("settings.load_config", lambda: {"output_dir": str(fit_dir)})
+    monkeypatch.setattr("settings.cfg_get", lambda config, key, default=None: config.get(key, default))
+    monkeypatch.setattr("integrations.garmin.build_downloader", lambda config: FakeDownloader())
+    monkeypatch.setattr("integrations.garmin.existing_fit_paths", lambda output_dir, item: [fit_path])
     monkeypatch.setattr(
-        "core.activity_index.parse_fit",
+        "services.activity.catalog.parse_fit",
         lambda path: {
             "summary": {
                 "sport_type": "running",
@@ -121,12 +121,12 @@ def test_sync_garmin_continues_after_one_activity_download_fails(monkeypatch, tm
                 raise ConnectionError("temporary Garmin failure")
             return b"fake-fit"
 
-    monkeypatch.setattr("core.config.load_config", lambda: {"output_dir": "fits"})
-    monkeypatch.setattr("core.config.cfg_get", lambda config, key, default=None: config.get(key, default))
-    monkeypatch.setattr("core.garmin_cn.build_downloader", lambda config: FakeDownloader())
-    monkeypatch.setattr("core.garmin_cn.existing_fit_paths", lambda output_dir, item: [])
+    monkeypatch.setattr("settings.load_config", lambda: {"output_dir": "fits"})
+    monkeypatch.setattr("settings.cfg_get", lambda config, key, default=None: config.get(key, default))
+    monkeypatch.setattr("integrations.garmin.build_downloader", lambda config: FakeDownloader())
+    monkeypatch.setattr("integrations.garmin.existing_fit_paths", lambda output_dir, item: [])
     monkeypatch.setattr(
-        "core.activity_index.parse_fit",
+        "services.activity.catalog.parse_fit",
         lambda path: {"summary": {"sport_type": "cycling", "start_time_local": "2026-05-26T09:00:00"}},
     )
 

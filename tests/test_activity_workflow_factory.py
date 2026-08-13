@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from agent.activity.workflow_factory import (
+from operations.activity.workflow_factory import (
     TASK_AGGREGATE_REPORT,
     TASK_ENSURE_SUMMARY,
     TASK_UPLOAD_STRAVA,
     create_local_activity_run,
 )
-from agent.runtime.workflow_store import load_workflow
+from storage.repositories.workflow import load_workflow
 
 
 def _activities():
@@ -19,7 +19,7 @@ def _activities():
 def test_local_factory_snapshots_targets_and_creates_dependencies(monkeypatch, tmp_path):
     source_activities = _activities()
     monkeypatch.setattr(
-        "agent.activity.workflow_factory.resolve_recent",
+        "operations.activity.workflow_factory.resolve_recent",
         lambda **kwargs: {
             "status": "completed",
             "selection": {"kind": "recent", "limit": 2, "order": "latest", "sport_type": None},
@@ -50,7 +50,7 @@ def test_local_factory_snapshots_targets_and_creates_dependencies(monkeypatch, t
 
 def test_local_factory_does_not_create_a_run_when_no_activity(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "agent.activity.workflow_factory.resolve_recent",
+        "operations.activity.workflow_factory.resolve_recent",
         lambda **kwargs: {"status": "completed", "selection": {"kind": "recent"}, "activities": []},
     )
 
@@ -62,7 +62,7 @@ def test_local_factory_does_not_create_a_run_when_no_activity(monkeypatch, tmp_p
 
 def test_local_factory_propagates_resolution_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "agent.activity.workflow_factory.resolve_recent",
+        "operations.activity.workflow_factory.resolve_recent",
         lambda **kwargs: {"status": "failed", "error": "invalid_limit", "message": "bad limit"},
     )
 
@@ -78,7 +78,7 @@ def test_local_factory_propagates_resolution_failure(monkeypatch, tmp_path):
 
 def test_local_factory_keeps_generator_goals_when_building_request(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "agent.activity.workflow_factory.resolve_recent",
+        "operations.activity.workflow_factory.resolve_recent",
         lambda **kwargs: {"status": "completed", "activities": [{"activity_key": "a1", "fit_path": "a1.fit"}]},
     )
 

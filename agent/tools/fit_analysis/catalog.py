@@ -38,6 +38,15 @@ Use for: hard intervals, fast running segments, climbs, surges. This is a locato
         category=CATEGORY_FIT_QUERY,
     ),
     ToolDef(
+        name="detect_sprints",
+        description="""Detect 3-45 second cycling power bursts and return concrete windows with power, heart-rate, cadence and speed evidence. Use for sprint-specific questions; use scan_activity_segments for sustained efforts >=30s.""",
+        input_schema={
+            "type": "object",
+            "properties": {"max_segments": {"type": "integer", "default": 12}},
+        },
+        category=CATEGORY_FIT_QUERY,
+    ),
+    ToolDef(
         name="get_time_intervals",
         description="""Fixed time-window averages. bucket_seconds supports 1-600s. Use start_s/end_s for a focused window. Includes non-zero averages and zero fractions.
 Use for: time-based averages (every 1min, 5min), inspecting a specific time window (e.g., 100-200s hard effort).
@@ -94,18 +103,26 @@ SUBMIT_ANALYSIS_TOOL = ToolDef(
         "properties": {
             "markdown_report": {
                 "type": "string",
-                "description": "Complete Chinese Markdown activity report that explicitly answers user_request when present.",
+                "minLength": 1,
+                "description": (
+                    "Complete but concise Chinese Markdown activity report, under 1800 Chinese characters, "
+                    "that explicitly answers user_request when present. Never submit an empty string."
+                ),
             },
             "strava_summary": {
                 "type": "string",
+                "minLength": 1,
                 "description": "About 200 Chinese characters for Strava, following strava_summary_style.",
             },
-            "history_entry": {
+            "analysis_summary": {
                 "type": "object",
-                "description": "Compact structured entry for future activity comparisons.",
+                "description": (
+                    "Compact qualitative judgement for this report. Use load_label for a short non-numeric "
+                    "description; objective TSS/IF/NP values are persisted by local code."
+                ),
             },
         },
-        "required": ["markdown_report", "strava_summary", "history_entry"],
+        "required": ["markdown_report", "strava_summary", "analysis_summary"],
     },
     category=CATEGORY_ANALYSIS,
 )

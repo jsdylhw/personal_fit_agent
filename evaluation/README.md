@@ -1,17 +1,18 @@
 # Agent Evaluation
 
-这套评测把 Main Agent 的路由、真实模型工具选择、任务结果、回答约束、耗时和 Token 用量写成可重复比较的报告。
+这套评测把 Main Agent 的 Skill 选择、工具选择、任务结果、回答约束、耗时和 Token 用量写成可重复比较的报告。
 
-## 两种模式
+## 三种模式
 
-- `router`：只运行本地 Intent Router，不调用模型，不产生外部副作用，适合每次提交和 CI。
-- `live`：调用 `config.yaml` 中配置的真实模型，但把所有工具替换为评测 Sandbox。不会同步 Garmin、写 Strava 或修改活动数据。
+- `router`：只运行旧 Intent Router，不调用模型；用于迁移期间的兼容回归，主聊天链路已不再依赖它。
+- `skill`：只评测第一阶段的 Skill 选择，不暴露或执行领域工具。
+- `live`：先选择 Skill，再只暴露该 Skill 的工具；所有 handler 替换为评测 Sandbox，不会同步 Garmin、写 Strava 或修改活动数据。
 
 ## 运行
 
 ```bash
 python -m evaluation.cli list-cases
-python -m evaluation.cli run
+python -m evaluation.cli run --cases evaluation/cases/skills.jsonl --mode skill
 python -m evaluation.cli run --cases evaluation/cases/live.jsonl --mode live --repeats 3
 ```
 
@@ -45,6 +46,6 @@ python -m evaluation.cli run \
 - `completion`：检查 Agent 结果和指定工具结果。
 - `answer_assertions`：检查关键事实必须出现或禁止出现。
 
-真实模型评测具有波动性；建议 `--repeats 3`，离线路由评测保持单次即可。
+Skill 和真实模型评测具有波动性；建议重要回归使用 `--repeats 3`。
 
-GitHub Actions 会运行无模型、无副作用的 Router 套件，并要求当前回归集保持 `100%`。真实模型套件需要本地 `config.yaml`，不在普通 PR 中自动运行。
+Skill 与 live 套件需要本地 `config.yaml`。所有领域工具都在 Sandbox 或未暴露状态下运行，不产生 Garmin、SQLite 或 Strava 副作用。

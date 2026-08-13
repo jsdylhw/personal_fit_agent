@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from core.athlete import (
+from domain.athlete import (
     enrich_training_metadata,
     get_ftp,
     get_max_hr,

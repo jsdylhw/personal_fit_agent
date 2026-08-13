@@ -14,6 +14,11 @@ agent:
   model: "your-model"
   max_tokens: 4096
   temperature: 0.3
+  # Optional DeepSeek Anthropic-compatible reasoning controls.
+  # Use thinking: "disabled" for maximum speed, or keep it enabled with low
+  # effort for a better latency/analysis-quality balance.
+  thinking: "enabled"
+  reasoning_effort: "low"
   anthropic_version: "2023-06-01"
   timeout_seconds: 300
   max_retries: 2

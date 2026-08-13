@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
 
-from agent.context import AgentContext
+from agent.main_agent.context import AgentContext
 from agent.tools.agent_tools import MAIN_AGENT_TOOLS
 from evaluation.schema import EvalCase
 
@@ -27,7 +27,7 @@ class EvaluationSandbox:
             output = self._configured_output(name)
             if output is None:
                 output = _default_output(name, arguments)
-            if name == "find_activity" and not output.get("error"):
+            if name == "resolve_activities" and not output.get("error"):
                 activities = _activities_from_output(output)
                 context.selected_activities = activities
                 if activities and activities[0].get("fit_path"):
@@ -59,12 +59,18 @@ def _default_output(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         "distance_km": 9.25,
         "duration_min": 23.6,
     }
-    if name == "find_activity":
+    if name == "resolve_activities":
         limit = max(1, int(arguments.get("limit") or 1))
         activities = [{**activity, "activity_key": f"eval-activity-{index + 1}"} for index in range(limit)]
-        if limit == 1:
-            return {"status": "completed", "result": {"count": 1, "activity": activities[0]}}
-        return {"status": "completed", "result": {"count": limit, "activities": activities}}
+        return {
+            "status": "completed",
+            "result": {
+                "schema_version": "activity_selection.v2",
+                "request": dict(arguments),
+                "count": limit,
+                "activities": activities,
+            },
+        }
     if name == "query_activity_detail":
         return {
             "status": "completed",
@@ -81,6 +87,14 @@ def _default_output(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         }
     if name == "compare_activities":
         return {"status": "completed", "answer": "已完成活动对比。", "result": {"count": 2}}
+    if name == "sync_garmin_activities":
+        return {
+            "status": "completed",
+            "downloaded": 2,
+            "skipped": 1,
+            "failed": 0,
+            "activities": [],
+        }
     if name in {"sync_and_run_activity_workflow", "run_activity_workflow", "retry_activity_workflow"}:
         goals = list(arguments.get("goals") or ["ensure_summary"])
         return {
@@ -97,6 +111,22 @@ def _default_output(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return {"status": "completed", "answer": str(arguments.get("question") or "请补充活动范围。")}
     if name == "summarize_recent_training_load":
         return {"status": "completed", "answer": "最近训练负荷稳定。", "result": {"tss": 42.0}}
+    if name == "calculate_history_metrics":
+        return {
+            "status": "completed",
+            "result": {
+                "schema_version": "training_history_metrics.v1",
+                "group_by": arguments.get("group_by") or "week",
+                "coverage": {"included_activity_count": 8, "missing_activity_count": 0},
+                "comparison": {
+                    "previous_period": "2026-W29",
+                    "current_period": "2026-W30",
+                    "changes": {
+                        "distance_km": {"previous": 60, "current": 72, "percent_change": 20.0},
+                    },
+                },
+            },
+        }
     if name == "generate_training_advice":
         return {"status": "completed", "answer": "建议安排轻松恢复骑。"}
     if name == "generate_route_advice":

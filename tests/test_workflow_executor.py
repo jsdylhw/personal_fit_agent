@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from agent.activity.workflow_executor import execute_activity_run
-from agent.activity.workflow_factory import (
+from operations.activity.workflow_executor import execute_activity_run
+from operations.activity.workflow_factory import (
     TASK_ENSURE_SUMMARY,
     TASK_UPLOAD_STRAVA,
     create_activity_run_from_activities,
 )
-from agent.runtime.executor import TaskExecution, TaskHandler, execute_ready_tasks
-from agent.runtime.workflow_models import cancel_workflow, create_task, create_workflow, transition_task
-from agent.runtime.workflow_store import acquire_workflow_lock
+from operations.runtime.executor import TaskExecution, TaskHandler, execute_ready_tasks
+from operations.runtime.models import cancel_workflow, create_task, create_workflow, transition_task
+from storage.repositories.workflow import acquire_workflow_lock
 
 
 def test_runtime_executor_runs_ready_task():
@@ -99,7 +99,6 @@ def test_activity_executor_does_not_recover_running_task_held_by_another_process
 def test_activity_summary_task_persists_result(monkeypatch, tmp_path):
     fit = tmp_path / "a1.fit"
     fit.write_bytes(b"fit")
-    summary = tmp_path / "a1.summary.json"
     result = create_activity_run_from_activities(
         [{"activity_key": "a1", "fit_path": str(fit)}],
         request={"source": "local", "goals": [TASK_ENSURE_SUMMARY], "force": False},
@@ -107,33 +106,31 @@ def test_activity_summary_task_persists_result(monkeypatch, tmp_path):
     )
     run = result["run"]
     monkeypatch.setattr(
-        "agent.activity.workflow_handlers.ensure_summary",
+        "operations.activity.workflow_handlers.ensure_summary",
         lambda fit_path, force: {
-            "status": "completed", "summary_path": str(summary), "result_status": "analyzed",
+            "status": "completed", "report_schema_version": "llm_fit_file_analysis.v2", "result_status": "analyzed",
         },
     )
 
-    summary.write_text("{}", encoding="utf-8")
     completed = execute_activity_run(run, directory=tmp_path)
     assert completed["workflow"]["status"] == "completed"
     assert run["tasks"][0]["status"] == "completed"
-    assert run["activities"][0]["summary_path"] == str(summary)
+    assert run["tasks"][0]["report_schema_version"] == "llm_fit_file_analysis.v2"
 
 
 def test_activity_upload_task_updates_activity_snapshot(monkeypatch, tmp_path):
     fit = tmp_path / "a1.fit"
     fit.write_bytes(b"fit")
-    summary = tmp_path / "a1.summary.json"
-    summary.write_text("{}", encoding="utf-8")
     created = create_activity_run_from_activities(
-        [{"activity_key": "a1", "fit_path": str(fit), "summary_path": str(summary)}],
+        [{"activity_key": "a1", "fit_path": str(fit)}],
         request={"source": "test", "goals": [TASK_UPLOAD_STRAVA], "force": False},
         directory=tmp_path,
     )
     run = created["run"]
     calls = []
+    monkeypatch.setattr("operations.activity.workflow_handlers._has_existing_report", lambda activity: True)
     monkeypatch.setattr(
-        "agent.activity.workflow_handlers.upload_summary",
+        "operations.activity.workflow_handlers.upload_activity",
         lambda fit_path, force: calls.append((fit_path, force)) or {
             "status": "completed", "outcome": "uploaded", "strava_activity_id": "123",
         },
@@ -148,20 +145,18 @@ def test_activity_upload_task_updates_activity_snapshot(monkeypatch, tmp_path):
     assert calls == [(str(fit), False)]
 
 
-def test_activity_upload_task_skips_known_remote_activity(tmp_path):
-    summary = tmp_path / "a1.summary.json"
-    summary.write_text("{}", encoding="utf-8")
+def test_activity_upload_task_skips_known_remote_activity(tmp_path, monkeypatch):
     created = create_activity_run_from_activities(
         [{
             "activity_key": "a1",
             "fit_path": str(tmp_path / "a1.fit"),
-            "summary_path": str(summary),
             "strava_activity_id": "123",
         }],
         request={"source": "test", "goals": [TASK_UPLOAD_STRAVA], "force": False},
         directory=tmp_path,
     )
     run = created["run"]
+    monkeypatch.setattr("operations.activity.workflow_handlers._has_existing_report", lambda activity: True)
 
     result = execute_activity_run(run, directory=tmp_path)
 

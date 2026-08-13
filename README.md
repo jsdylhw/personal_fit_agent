@@ -48,6 +48,7 @@ python -m app.cli chat
 今天上午这次骑行 100–200 秒有没有连续冲刺？
 汇总最近一周训练负荷，并建议下次训练
 同步最新五个活动，分析后上传到 Strava
+重新分析所有活动，生成 V2 报告
 ```
 
 也可直接分析一个本地文件：
@@ -55,6 +56,24 @@ python -m app.cli chat
 ```bash
 python -m app.cli analyze-file "garmin_cn_fit_files/path/to/activity.fit"
 ```
+
+## 本地活动数据库
+
+`data/personal-fit-agent.db` 是活动与报告的唯一运行时存储：`activities` 一条记录对应一个真实 FIT，`activity_reports` 只接受 `llm_fit_file_analysis.v2` 与 `activity_metrics.v2`。活动选择、历史上下文、Web 报告读取和 Strava 上传均按 `activity_key` 查询数据库，不会回读旧索引、JSONL 历史或 summary JSON。
+
+可检查当前数据库状态：
+
+```bash
+python -m app.debug_cli storage-status
+```
+
+聊天中的“重新分析所有活动”会提交内存后台任务并立即返回任务 ID；也可在调试 CLI 中等待全量 V2 重建完成：
+
+```bash
+python -m app.debug_cli rebuild-v2-reports --scope all
+```
+
+如需给外部程序查看 JSON，使用 `ActivityStore.export_report(activity_key, path)` 显式导出；导出文件不是缓存，也不参与后续状态判断。
 
 ## 本地路线实验
 
@@ -69,10 +88,10 @@ docker compose up --build
 
 ## Agent 评测
 
-项目提供离线路由回归和真实模型工具选择评测。真实模型模式使用无副作用 Sandbox，不会访问 Garmin 或写入 Strava：
+项目提供 Skill 选择和真实模型工具选择评测。真实模型工具模式使用无副作用 Sandbox，不会访问 Garmin 或写入 Strava：
 
 ```bash
-python -m evaluation.cli run
+python -m evaluation.cli run --cases evaluation/cases/skills.jsonl --mode skill
 python -m evaluation.cli run --cases evaluation/cases/live.jsonl --mode live --repeats 3
 ```
 

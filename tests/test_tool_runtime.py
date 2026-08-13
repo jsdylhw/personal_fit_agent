@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.context import AgentContext
+from agent.main_agent.context import AgentContext
 from agent.main_agent.guard import guard_tool_call
 from agent.main_agent.intent import extract_route_signals, intent_tool_categories, route_intent
 from agent.main_agent.tools import TOOL_HANDLERS
@@ -10,30 +10,25 @@ from agent.tools.agent_tools import MAIN_AGENT_TOOLS
 def test_tool_handler_executes_selection_directly(monkeypatch):
     called = {}
 
-    def fake_selection(mode, args, context):
-        called["mode"] = mode
+    def fake_selection(args, context):
         called["arguments"] = args
-        return {"selection_mode": mode, "status": "completed"}
+        return {"step": "resolve_activities", "status": "completed"}
 
-    monkeypatch.setattr("agent.activity.selection.service.execute_activity_selection", fake_selection)
+    monkeypatch.setattr("agent.tools.handlers.activity_selection.resolve_activities", fake_selection)
 
-    result = TOOL_HANDLERS["find_activity"](
-        {"limit": 1},
+    result = TOOL_HANDLERS["resolve_activities"](
+        {"kind": "recent", "limit": 1},
         AgentContext(session_id="direct-tool"),
     )
 
-    assert result == {
-        "step": "find_activity",
-        "status": "completed",
-        "selection_mode": "recent",
-    }
-    assert called == {"mode": "recent", "arguments": {"limit": 1}}
+    assert result == {"step": "resolve_activities", "status": "completed"}
+    assert called == {"arguments": {"kind": "recent", "limit": 1}}
 
 
 def test_workflow_handler_returns_service_result_directly(monkeypatch):
     context = AgentContext(session_id="workflow-tool")
     monkeypatch.setattr(
-        "agent.activity.workflow_service.start_local_activity_workflow",
+        "operations.activity.workflow_service.start_local_activity_workflow",
         lambda **kwargs: {
             "status": "completed",
             "workflow_id": "run-1",
@@ -53,7 +48,7 @@ def test_workflow_handler_returns_service_result_directly(monkeypatch):
 def test_sync_workflow_handler_returns_service_result_directly(monkeypatch):
     context = AgentContext(session_id="sync-workflow-tool")
     monkeypatch.setattr(
-        "agent.activity.workflow_service.sync_and_start_activity_workflow",
+        "operations.activity.workflow_service.sync_and_start_activity_workflow",
         lambda **kwargs: {
             "status": "completed", "workflow_id": "run-2",
             "execution": {"waiting_for": []},
@@ -66,6 +61,23 @@ def test_sync_workflow_handler_returns_service_result_directly(monkeypatch):
 
     assert result["status"] == "completed"
     assert result["workflow_id"] == "run-2"
+
+
+def test_pure_sync_handler_does_not_start_activity_workflow(monkeypatch):
+    context = AgentContext(session_id="pure-sync-tool")
+    calls = []
+    monkeypatch.setattr(
+        "operations.activity.sync.sync_recent",
+        lambda **kwargs: calls.append(kwargs) or {
+            "status": "completed", "downloaded": 2, "skipped": 1, "failed": 0,
+        },
+    )
+
+    result = TOOL_HANDLERS["sync_garmin_activities"]({"count": 3}, context)
+
+    assert calls == [{"count": 3}]
+    assert result == {"status": "completed", "downloaded": 2, "skipped": 1, "failed": 0}
+    assert "workflow_id" not in result
 
 
 def test_workflow_intent_is_available():
@@ -99,11 +111,37 @@ def test_router_treats_sync_upload_as_one_mixed_goal():
     assert {"operation", "workflow"}.issubset(intent_tool_categories(intent))
 
 
+def test_sync_intent_exposes_pure_sync_but_not_combined_workflow_category():
+    intent = route_intent("从 Garmin 同步最新三个活动，不需要分析")
+
+    assert intent.kind.value == "sync"
+    assert intent_tool_categories(intent) == {"operation"}
+    categories = {tool.name: tool.category for tool in MAIN_AGENT_TOOLS}
+    assert categories["sync_garmin_activities"] == "operation"
+    assert categories["sync_and_run_activity_workflow"] == "workflow"
+
+
 def test_router_distinguishes_latest_single_activity_from_recent_range():
     assert route_intent("查看最近一次骑行的完整报告").kind.value == "analyze_single"
     assert route_intent("分析最新一条跑步活动").kind.value == "analyze_single"
     assert route_intent("分析最近三个上午的活动").kind.value == "analyze_range"
     assert route_intent("比较最近几次骑行").kind.value == "compare"
+
+
+def test_rebuild_all_reports_exposes_background_report_tools():
+    intent = route_intent("重新分析所有活动，生成 V2 总结")
+
+    assert intent.kind.value == "analyze_range"
+    categories = intent_tool_categories(intent)
+    assert "workflow" in categories
+    exposed = {tool.name for tool in MAIN_AGENT_TOOLS if tool.category in categories}
+    assert {"rebuild_activity_reports", "get_activity_report_job"}.issubset(exposed)
+
+
+def test_router_treats_history_periods_and_trends_as_ranges():
+    assert route_intent("分析最近一个月的骑行趋势").kind.value == "analyze_range"
+    assert route_intent("最近一周跑步有进步吗").kind.value == "analyze_range"
+    assert route_intent("查看过去一月的活动变化").kind.value == "analyze_range"
 
 
 def test_route_signals_keep_negated_side_effects_out_of_mixed_intent():
@@ -150,21 +188,46 @@ def test_main_agent_exposes_explicit_detail_query_instead_of_implicit_targeted_a
     names = {tool.name for tool in MAIN_AGENT_TOOLS}
 
     assert "query_activity_detail" in names
+    assert "calculate_history_metrics" in names
+    resolver_schema = next(tool for tool in MAIN_AGENT_TOOLS if tool.name == "resolve_activities").input_schema
+    assert resolver_schema["properties"]["days"]["minimum"] == 1
+    assert resolver_schema["required"] == ["kind"]
     assert "user_request" not in next(tool for tool in MAIN_AGENT_TOOLS if tool.name == "analyze_activity").input_schema["properties"]
 
 
-def test_find_activity_chooses_single_day_selection_from_date_not_scope(monkeypatch):
-    called = {}
+def test_history_metrics_handler_uses_selected_activities(monkeypatch):
+    captured = {}
 
-    def fake_selection(mode, args, context):
-        called["mode"] = mode
-        return {"selection_mode": mode, "status": "completed"}
+    def fake_tool(context, *, group_by, name):
+        captured.update({"context": context, "group_by": group_by, "name": name})
+        return {"status": "completed"}
 
-    monkeypatch.setattr("agent.activity.selection.service.execute_activity_selection", fake_selection)
+    monkeypatch.setattr("agent.tools.handlers.activity_insights.calculate_history_metrics_tool", fake_tool)
+    context = AgentContext(session_id="history", selected_activities=[{"activity_key": "a1"}])
 
-    TOOL_HANDLERS["find_activity"](
-        {"date": "today", "time_of_day": "morning"},
-        AgentContext(session_id="today-range"),
+    result = TOOL_HANDLERS["calculate_history_metrics"]({"group_by": "month"}, context)
+
+    assert result == {"status": "completed"}
+    assert captured == {"context": context, "group_by": "month", "name": "calculate_history_metrics"}
+
+
+def test_guard_requires_activity_selection_for_history_metrics():
+    result = guard_tool_call(
+        "calculate_history_metrics",
+        {"group_by": "week"},
+        context=AgentContext(session_id="guard-history"),
+        allowed_categories={"analysis"},
+        has_resolved=False,
     )
 
-    assert called["mode"] == "single"
+    assert result.allowed is False
+    assert "需要先定位活动" in result.reason
+
+
+def test_resolve_activities_rejects_mixed_kinds_instead_of_guessing():
+    result = TOOL_HANDLERS["resolve_activities"](
+        {"kind": "recent", "date": "today", "limit": 1},
+        AgentContext(session_id="ambiguous-selection"),
+    )
+
+    assert result["error"] == "invalid_activity_selection"

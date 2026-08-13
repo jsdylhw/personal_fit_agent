@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.context import AgentContext
+from agent.main_agent.context import AgentContext
 from agent.main_agent.tool_result import is_failed_tool_output, remember_failed_action
 
 

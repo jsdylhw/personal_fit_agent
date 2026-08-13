@@ -3,23 +3,23 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-from agent.context import AgentContext
-from agent.llm import AnthropicMessagesClient
+from agent.main_agent.context import AgentContext
+from integrations.llm import AnthropicMessagesClient
 from agent.main_agent.hooks import ToolLoopHooks
 from agent.main_agent.loop import agent_loop
-from agent.observability import capture_agent_trace, record_tool_call
+from observability import capture_agent_trace, record_tool_call
 
 
 def test_trace_aggregates_nested_usage_and_tool_events():
     with capture_agent_trace(metadata={"case_id": "trace"}) as trace:
         record_tool_call(
-            name="find_activity",
+            name="resolve_activities",
             arguments={"limit": 1},
             output={"status": "completed"},
             duration_ms=2.5,
             success=True,
         )
-        from agent.observability import record_llm_call
+        from observability import record_llm_call
 
         record_llm_call(
             model="test-model",
@@ -38,11 +38,11 @@ def test_trace_aggregates_nested_usage_and_tool_events():
         "cache_read_input_tokens": 50,
         "total_tokens": 200,
     }
-    assert payload["tool_calls"][0]["name"] == "find_activity"
+    assert payload["tool_calls"][0]["name"] == "resolve_activities"
     assert payload["elapsed_ms"] >= 0
 
 
-@patch("agent.llm.urlopen")
+@patch("integrations.llm.urlopen")
 def test_llm_client_records_api_usage_only_inside_active_trace(mock_urlopen):
     response = MagicMock()
     response.read.return_value = json.dumps({

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.garmin_cn import activity_base_name, existing_fit_paths, safe_filename, save_original_as_fit
+from integrations.garmin import activity_base_name, existing_fit_paths, safe_filename, save_original_as_fit
 
 
 def test_safe_filename_removes_path_unsafe_characters():

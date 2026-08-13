@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent.llm import AnthropicMessagesClient, extract_text
+from integrations.llm import AnthropicMessagesClient, extract_text
 
 
 class TestExtractText:
@@ -80,7 +80,7 @@ class TestAnthropicMessagesClient:
             {"base_url": "https://api.test.com/anthropic", "api_key": "sk-test", "model": "test-model"}
         )
 
-    @patch("agent.llm.urlopen")
+    @patch("integrations.llm.urlopen")
     def test_create_messages_http(self, mock_urlopen, client):
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps({
@@ -95,7 +95,7 @@ class TestAnthropicMessagesClient:
         )
         assert result["id"] == "msg_123"
 
-    @patch("agent.llm.urlopen")
+    @patch("integrations.llm.urlopen")
     def test_create_message_single(self, mock_urlopen, client):
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps({
@@ -110,8 +110,54 @@ class TestAnthropicMessagesClient:
         )
         assert result["id"] == "msg_single"
 
-    @patch("agent.llm.time.sleep")
-    @patch("agent.llm.urlopen")
+    @patch("integrations.llm.urlopen")
+    def test_sends_enabled_low_reasoning_controls(self, mock_urlopen):
+        client = AnthropicMessagesClient({
+            "base_url": "https://api.test.com/anthropic",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "thinking": "enabled",
+            "reasoning_effort": "low",
+        })
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "id": "msg_reasoning",
+            "content": [{"type": "text", "text": "ok"}],
+        }).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        client.create_message(user="Hello")
+
+        request = mock_urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        assert payload["thinking"] == {"type": "enabled"}
+        assert payload["output_config"] == {"effort": "low"}
+
+    @patch("integrations.llm.urlopen")
+    def test_disabled_thinking_omits_effort(self, mock_urlopen):
+        client = AnthropicMessagesClient({
+            "base_url": "https://api.test.com/anthropic",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "thinking": "disabled",
+            "reasoning_effort": "low",
+        })
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "id": "msg_no_reasoning",
+            "content": [{"type": "text", "text": "ok"}],
+        }).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        client.create_message(user="Hello")
+
+        request = mock_urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        assert payload["thinking"] == {"type": "disabled"}
+        assert "output_config" not in payload
+
+    @patch("integrations.llm.time.sleep")
+    @patch("integrations.llm.urlopen")
     def test_retries_incomplete_read(self, mock_urlopen, mock_sleep):
         client = AnthropicMessagesClient(
             {
@@ -136,8 +182,8 @@ class TestAnthropicMessagesClient:
         assert mock_urlopen.call_count == 2
         mock_sleep.assert_called_once()
 
-    @patch("agent.llm.time.sleep")
-    @patch("agent.llm.urlopen")
+    @patch("integrations.llm.time.sleep")
+    @patch("integrations.llm.urlopen")
     def test_retries_remote_disconnect(self, mock_urlopen, mock_sleep):
         client = AnthropicMessagesClient(
             {

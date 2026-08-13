@@ -309,5 +309,5 @@ def _enrich_with_athlete_profile(
     metadata: dict[str, Any], *, sport_type: str | None = None,
 ) -> dict[str, Any]:
     """用 data/athlete.json 补全 FIT 中缺失的 FTP/心率/区间设定."""
-    from core.athlete import enrich_training_metadata
+    from domain.athlete import enrich_training_metadata
     return enrich_training_metadata(metadata, sport_type=sport_type)

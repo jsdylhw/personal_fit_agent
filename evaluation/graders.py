@@ -20,11 +20,13 @@ def grade_case(
 ) -> dict[str, Any]:
     failures: list[str] = []
     intent_score = _grade_intent(case.expected.get("intent"), result.get("intent"), failures)
+    skill_score = _grade_skill(case.expected, result.get("skill_id"), failures)
     tool_score = _grade_tools(case.expected, trace.get("tool_calls") or [], failures)
     completion_score = _grade_completion(case.expected.get("completion"), result, trace, failures)
     answer_score = _grade_answer(case.expected.get("answer_assertions"), str(result.get("answer") or ""), failures)
     scores = {
         "intent_accuracy": intent_score,
+        "skill_selection": skill_score,
         "tool_selection": tool_score,
         "task_completion": completion_score,
         "answer_consistency": answer_score,
@@ -55,6 +57,16 @@ def _grade_intent(expected: Any, actual: Any, failures: list[str]) -> float | No
     if str(actual) in allowed:
         return 1.0
     failures.append(f"intent expected {sorted(allowed)}, got {actual!r}")
+    return 0.0
+
+
+def _grade_skill(expected_fields: dict[str, Any], actual: Any, failures: list[str]) -> float | None:
+    if "skill_id" not in expected_fields:
+        return None
+    expected = expected_fields.get("skill_id")
+    if expected == actual:
+        return 1.0
+    failures.append(f"skill expected {expected!r}, got {actual!r}")
     return 0.0
 
 

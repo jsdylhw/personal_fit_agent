@@ -198,13 +198,16 @@ _SINGLE_SCOPE_MARKERS = (
 )
 _RANGE_SCOPE_MARKERS = (
     "汇总", "所有", "全部", "本月", "本周", "上个月", "上周", "这周", "这个月",
-    "过去几", "最近几", "近几", "历史", "多次", "多条", "多个",
+    "过去几", "最近几", "近几", "历史", "多次", "多条", "多个", "趋势", "变化", "进步",
 )
 _PLURAL_COUNT_PATTERN = re.compile(
     r"(?:最近|最新|过去|前|近)?\s*(?:[2-9]\d*|[二两三四五六七八九十百]+)\s*(?:个|次|条|场|项|天|周|月)"
 )
 _SINGLE_COUNT_PATTERN = re.compile(
     r"(?:最近|最新|最后)?(?:的)?\s*(?:1|一)\s*(?:个|次|条|场|项)"
+)
+_RELATIVE_DURATION_RANGE_PATTERN = re.compile(
+    r"(?:最近|过去|近|前)\s*(?:1|一|半)?\s*(?:个)?\s*(?:天|周|月|季度|年)"
 )
 
 
@@ -213,8 +216,15 @@ def _activity_scope(text: str) -> str:
     # “汇总”明确要求集合式处理，即使集合只有 1 条也保持范围语义。
     if "汇总" in text:
         return "range"
+    # “最近一个月”包含“最近一个”，不能让单条数量正则先截断。
+    if _RELATIVE_DURATION_RANGE_PATTERN.search(text):
+        return "range"
     if any(marker in text for marker in _SINGLE_SCOPE_MARKERS) or _SINGLE_COUNT_PATTERN.search(text):
         return "single"
-    if any(marker in text for marker in _RANGE_SCOPE_MARKERS) or _PLURAL_COUNT_PATTERN.search(text):
+    if (
+        any(marker in text for marker in _RANGE_SCOPE_MARKERS)
+        or _PLURAL_COUNT_PATTERN.search(text)
+        or _RELATIVE_DURATION_RANGE_PATTERN.search(text)
+    ):
         return "range"
     return "unknown"

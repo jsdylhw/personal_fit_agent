@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
-from agent.context import AgentContext
-from agent.llm import AnthropicMessagesClient, extract_text
-from agent.activity.operations.service import analyze_fit_file_tool
+from agent.main_agent.context import AgentContext
+from integrations.llm import AnthropicMessagesClient, extract_text
+from operations.activity.service import analyze_fit_file_tool
+from domain.analysis.artifacts import get_analysis_summary, get_index_load_label
+from storage.repositories.activity import ActivityStore
 
 
 def execute_summarize_activity_range(
@@ -101,8 +102,9 @@ def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force:
         fit_path = activity.get("fit_path")
         if not fit_path:
             continue
-        summary_path = activity.get("summary_path")
-        if summary_path and Path(str(summary_path)).expanduser().exists() and not force:
+        activity_key = str(activity.get("activity_key") or "")
+        report = ActivityStore().get_report_for_activity(activity) if activity_key else None
+        if report is not None and not force:
             skipped.append(_summary_generation_item(activity, status="skipped_existing_summary"))
             continue
         try:
@@ -130,13 +132,13 @@ def _summary_generation_item(activity: dict[str, Any], *, status: str) -> dict[s
         "activity_index": activity.get("activity_index"),
         "activity_key": activity.get("activity_key"),
         "fit_path": activity.get("fit_path"),
-        "summary_path": activity.get("summary_path"),
+        "report_schema_version": activity.get("summary_schema_version"),
         "status": status,
     }
 
 
 def _reload_activities_from_index(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    from core.activity_index import load_activity_index
+    from services.activity.catalog import load_activity_index
 
     index = load_activity_index()
     index_map: dict[str, dict[str, Any]] = {}
@@ -205,33 +207,31 @@ def _latest_user_message(context: AgentContext) -> str:
 
 def _activity_for_range_llm(activity: dict[str, Any]) -> dict[str, Any]:
     item = _compact_range_activity(activity)
-    summary_path = activity.get("summary_path")
-    if summary_path:
-        item["summary_detail"] = _read_summary_detail(summary_path)
+    detail = _read_summary_detail(activity)
+    if detail:
+        item["summary_detail"] = detail
     return item
 
 
-def _read_summary_detail(summary_path: Any) -> dict[str, Any]:
-    try:
-        data = json.loads(Path(str(summary_path)).expanduser().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+def _read_summary_detail(activity: dict[str, Any]) -> dict[str, Any]:
+    activity_key = str(activity.get("activity_key") or "")
+    data = ActivityStore().get_report_for_activity(activity) if activity_key else None
     if not isinstance(data, dict):
         return {}
-    history_entry = data.get("history_entry") if isinstance(data.get("history_entry"), dict) else {}
+    analysis_summary = get_analysis_summary(data)
     return {
-        key: history_entry.get(key)
+        key: analysis_summary.get(key)
         for key in (
             "summary_label",
             "brief",
             "main_stimulus",
-            "training_load",
+            "load_label",
             "quality_notes",
             "achievement",
             "limiter",
             "next_session_advice",
         )
-        if history_entry.get(key) is not None
+        if analysis_summary.get(key) is not None
     }
 
 
@@ -248,7 +248,7 @@ def _compact_range_activity(activity: dict[str, Any]) -> dict[str, Any]:
         "has_summary": activity.get("has_summary"),
         "summary_label": activity.get("summary_label"),
         "main_stimulus": activity.get("main_stimulus"),
-        "training_load": activity.get("training_load"),
+        "load_label": get_index_load_label(activity),
     }
 
 

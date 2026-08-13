@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.stats import prune_empty_values
+from fit.analysis.stats import prune_empty_values
 
 from .catalog import FIT_DATA_TOOLS
-from .data import (
+from fit.analysis.data import (
     get_activity_overview_tool,
     get_activity_summary_tool,
+    detect_sprints_tool,
     get_distance_intervals_tool,
     get_running_efficiency_tool,
     get_time_intervals_tool,
@@ -46,6 +47,9 @@ def build_tool_handlers(
             max_segments=int(max_segments),
         )
 
+    def _sprints(max_segments=12):
+        return detect_sprints_tool(parsed, max_segments=int(max_segments))
+
     def _time_intervals(bucket_seconds=60, start_s=None, end_s=None):
         return get_time_intervals_tool(
             parsed,
@@ -77,6 +81,7 @@ def build_tool_handlers(
         "get_activity_overview": _overview,
         "get_activity_summary": _summary,
         "scan_activity_segments": _segments,
+        "detect_sprints": _sprints,
         "get_time_intervals": _time_intervals,
         "get_distance_intervals": _distance_intervals,
         "get_running_efficiency": _running_efficiency,
