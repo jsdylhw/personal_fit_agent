@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.config import (
+from settings import (
     _extract_top_level_yaml_block,
     cfg_bool,
     cfg_get,
@@ -64,6 +64,20 @@ class TestGetAgentConfig:
         assert result["temperature"] == 0.3
         assert result["max_retries"] == 2
         assert result["timeout_seconds"] == 300
+        assert result["thinking"] is None
+        assert result["reasoning_effort"] is None
+
+    def test_normalizes_reasoning_controls(self):
+        result = get_agent_config({
+            "agent": {"thinking": "ENABLED", "reasoning_effort": "LOW"},
+        })
+
+        assert result["thinking"] == "enabled"
+        assert result["reasoning_effort"] == "low"
+
+    def test_rejects_unknown_reasoning_effort(self):
+        with pytest.raises(ValueError, match="agent.reasoning_effort"):
+            get_agent_config({"agent": {"reasoning_effort": "medium"}})
 
 
 class TestExtractTopLevelYamlBlock:

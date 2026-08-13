@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent.context import AgentContext
-from agent.activity.training_load import summarize_recent_training_load_tool
+from agent.main_agent.context import AgentContext
+from agent.tools.handlers.activity_insights import summarize_recent_training_load_tool
 from tests.report_store_helpers import store_report
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.runtime.workflow_models import (
+from operations.runtime.models import (
     WorkflowStateError,
     cancel_workflow,
     create_task,
@@ -13,7 +13,7 @@ from agent.runtime.workflow_models import (
     transition_task,
     workflow_overview,
 )
-from agent.runtime.workflow_store import load_workflow, save_workflow, workflow_path
+from storage.repositories.workflow import load_workflow, save_workflow, workflow_path
 
 
 def _run():

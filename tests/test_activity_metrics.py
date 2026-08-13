@@ -4,8 +4,8 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
-from agent.activity.analysis_agent import analyze_fit_file
-from agent.activity.metrics import build_activity_metrics
+from agent.analysis.agent import analyze_fit_file
+from fit.analysis.metrics import build_activity_metrics
 
 
 def test_build_activity_metrics_exposes_machine_readable_cycling_load(sample_parsed_fit):
@@ -65,9 +65,9 @@ def test_analyze_fit_file_persists_activity_metrics_json(sample_parsed_fit, tmp_
     monkeypatch.chdir(tmp_path)
     fit_path = tmp_path / "ride.fit"
     fit_path.write_bytes(b"fit")
-    monkeypatch.setattr("agent.activity.analysis_agent.parse_fit", lambda path: sample_parsed_fit)
+    monkeypatch.setattr("agent.analysis.agent.parse_fit", lambda path: sample_parsed_fit)
     monkeypatch.setattr(
-        "agent.activity.analysis_agent.analyze_with_llm",
+        "agent.analysis.agent.analyze_with_llm",
         lambda path, parsed, history_before, user_request: {
             "model": "test-model",
             "markdown_report": "# report",
@@ -78,7 +78,7 @@ def test_analyze_fit_file_persists_activity_metrics_json(sample_parsed_fit, tmp_
 
     result = analyze_fit_file(fit_path, force=True, persist=True)
 
-    from core.storage.activity_store import ActivityStore
+    from storage.repositories.activity import ActivityStore
 
     saved = ActivityStore().get_report(result["activity_key"])
     assert saved["schema_version"] == "llm_fit_file_analysis.v2"

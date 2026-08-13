@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent.activity.comparison import compare_selected_activities_tool
-from agent.context import AgentContext
+from agent.tools.handlers.activity_insights import compare_selected_activities_tool
+from agent.main_agent.context import AgentContext
 from tests.report_store_helpers import store_report
 
 

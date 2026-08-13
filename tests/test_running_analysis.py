@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from agent.prompts import build_fit_analysis_system_prompt
-from agent.tools.fit_analysis.data import (
+from agent.analysis.prompts import build_fit_analysis_system_prompt
+from fit.analysis.data import (
     get_activity_overview_tool,
     get_activity_summary_tool,
     get_distance_intervals_tool,
     get_running_efficiency_tool,
 )
-from agent.tools.fit_analysis.scan import scan_activity_segments
-from core.athlete import enrich_training_metadata
+from fit.analysis.segments import scan_activity_segments
+from domain.athlete import enrich_training_metadata
 
 
 def _running_parsed() -> dict:

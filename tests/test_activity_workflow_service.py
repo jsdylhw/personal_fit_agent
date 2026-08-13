@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from agent.activity.workflow_executor import execute_activity_run
-from agent.activity.workflow_factory import TASK_UPLOAD_STRAVA, create_activity_run_from_activities
-from agent.activity.workflow_service import (
+from operations.activity.workflow_executor import execute_activity_run
+from operations.activity.workflow_factory import TASK_UPLOAD_STRAVA, create_activity_run_from_activities
+from operations.activity.workflow_service import (
     get_activity_workflow,
     retry_activity_workflow,
     sync_and_start_activity_workflow,
 )
-from agent.runtime.workflow_models import cancel_workflow
-from agent.runtime.workflow_store import save_workflow
-from agent.runtime.workflow_store import acquire_workflow_lock
+from operations.runtime.models import cancel_workflow
+from storage.repositories.workflow import save_workflow
+from storage.repositories.workflow import acquire_workflow_lock
 
 
 def test_service_runs_and_retries_persisted_upload_run(monkeypatch, tmp_path):
@@ -22,9 +22,9 @@ def test_service_runs_and_retries_persisted_upload_run(monkeypatch, tmp_path):
     )
     run = created["run"]
     workflow_id = run["workflow_id"]
-    monkeypatch.setattr("agent.activity.workflow_handlers._has_existing_report", lambda activity: True)
+    monkeypatch.setattr("operations.activity.workflow_handlers._has_existing_report", lambda activity: True)
     monkeypatch.setattr(
-        "agent.activity.workflow_handlers.upload_activity",
+        "operations.activity.workflow_handlers.upload_activity",
         lambda *args, **kwargs: {"status": "failed", "error": "network_error", "message": "offline"},
     )
 
@@ -33,7 +33,7 @@ def test_service_runs_and_retries_persisted_upload_run(monkeypatch, tmp_path):
     assert next(task for task in run["tasks"] if task["kind"] == TASK_UPLOAD_STRAVA)["status"] == "failed"
 
     monkeypatch.setattr(
-        "agent.activity.workflow_handlers.upload_activity",
+        "operations.activity.workflow_handlers.upload_activity",
         lambda *args, **kwargs: {"status": "completed", "outcome": "uploaded", "strava_activity_id": "456"},
     )
     retried = retry_activity_workflow(workflow_id, directory=tmp_path)
@@ -80,7 +80,7 @@ def test_service_does_not_retry_while_another_executor_holds_the_run_lock(tmp_pa
         directory=tmp_path,
     )
     run = created["run"]
-    from agent.runtime.workflow_models import transition_task
+    from operations.runtime.models import transition_task
     transition_task(run, "a1:ensure_summary", "failed", error="temporary")
     save_workflow(run, directory=tmp_path)
 
@@ -100,11 +100,11 @@ def test_service_retry_recovers_persisted_running_task_after_lock_is_acquired(mo
         directory=tmp_path,
     )
     run = created["run"]
-    from agent.runtime.workflow_models import transition_task
+    from operations.runtime.models import transition_task
     transition_task(run, "a1:ensure_summary", "running")
     save_workflow(run, directory=tmp_path)
     monkeypatch.setattr(
-        "agent.activity.workflow_handlers.ensure_summary",
+        "operations.activity.workflow_handlers.ensure_summary",
         lambda _path, force: {
             "status": "completed", "report_schema_version": "llm_fit_file_analysis.v2", "result_status": "analyzed",
         },
@@ -122,7 +122,7 @@ def test_service_retry_recovers_persisted_running_task_after_lock_is_acquired(mo
 
 def test_sync_service_freezes_exact_indexed_items_and_persists_sync_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "agent.activity.workflow_service.sync_recent",
+        "operations.activity.workflow_service.sync_recent",
         lambda count: {
             "status": "partial", "downloaded": 1, "skipped": 1, "failed": 1,
             "failed_items": [{"id": "remote-failed"}],
@@ -133,7 +133,7 @@ def test_sync_service_freezes_exact_indexed_items_and_persists_sync_metadata(mon
         },
     )
     monkeypatch.setattr(
-        "agent.activity.workflow_service.execute_activity_run",
+        "operations.activity.workflow_service.execute_activity_run",
         lambda run, **kwargs: {"workflow": {"status": "completed"}, "waiting_for": []},
     )
 
@@ -143,7 +143,7 @@ def test_sync_service_freezes_exact_indexed_items_and_persists_sync_metadata(mon
 
     assert result["created"] is True
     assert [item["activity_key"] for item in result["activities"]] == ["a1", "a2"]
-    from agent.runtime.workflow_store import load_workflow
+    from storage.repositories.workflow import load_workflow
     run = load_workflow(result["workflow_id"], directory=tmp_path)
     assert run["request"]["source"] == "garmin_sync"
     assert run["request"]["selection"]["activity_keys"] == ["a1", "a2"]

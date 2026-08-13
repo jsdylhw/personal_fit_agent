@@ -32,7 +32,9 @@ def write_report(results: list[dict[str, Any]], *, output_dir: str | Path) -> di
 
 def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     grades = [result.get("grade") or {} for result in results]
-    metric_names = ("intent_accuracy", "tool_selection", "task_completion", "answer_consistency")
+    metric_names = (
+        "intent_accuracy", "skill_selection", "tool_selection", "task_completion", "answer_consistency",
+    )
     metrics: dict[str, float | None] = {}
     metric_coverage: dict[str, int] = {}
     for name in metric_names:

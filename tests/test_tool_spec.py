@@ -99,9 +99,9 @@ class TestToolRegistry:
 # -- AnthropicMessagesClient tools parameter -----------------------------
 
 class TestClientToolsParam:
-    @patch("agent.llm.urlopen")
+    @patch("integrations.llm.urlopen")
     def test_create_message_sends_tools(self, mock_urlopen):
-        from agent.llm import AnthropicMessagesClient
+        from integrations.llm import AnthropicMessagesClient
 
         client = AnthropicMessagesClient({
             "base_url": "https://api.test.com/anthropic",
@@ -123,9 +123,9 @@ class TestClientToolsParam:
         assert "tools" in sent
         assert sent["tools"] == tools
 
-    @patch("agent.llm.urlopen")
+    @patch("integrations.llm.urlopen")
     def test_create_message_without_tools_omits_key(self, mock_urlopen):
-        from agent.llm import AnthropicMessagesClient
+        from integrations.llm import AnthropicMessagesClient
 
         client = AnthropicMessagesClient({
             "base_url": "https://api.test.com/anthropic",
@@ -144,9 +144,9 @@ class TestClientToolsParam:
         sent = json.loads(call_args.data.decode("utf-8"))
         assert "tools" not in sent
 
-    @patch("agent.llm.urlopen")
+    @patch("integrations.llm.urlopen")
     def test_create_messages_sends_tools(self, mock_urlopen):
-        from agent.llm import AnthropicMessagesClient
+        from integrations.llm import AnthropicMessagesClient
 
         client = AnthropicMessagesClient({
             "base_url": "https://api.test.com/anthropic",
@@ -172,7 +172,7 @@ class TestClientToolsParam:
 
 class TestExtractToolUse:
     def test_extracts_tool_use_blocks(self):
-        from agent.llm import extract_tool_use_blocks
+        from integrations.llm import extract_tool_use_blocks
 
         message = {
             "content": [
@@ -187,13 +187,13 @@ class TestExtractToolUse:
         assert blocks[0]["input"] == {"key": "val"}
 
     def test_no_tool_use_returns_empty(self):
-        from agent.llm import extract_tool_use_blocks
+        from integrations.llm import extract_tool_use_blocks
 
         message = {"content": [{"type": "text", "text": "Just text."}]}
         assert extract_tool_use_blocks(message) == []
 
     def test_build_tool_result_block(self):
-        from agent.llm import build_tool_result_block
+        from integrations.llm import build_tool_result_block
 
         block = build_tool_result_block("tu_1", '{"result": "ok"}')
         assert block["type"] == "tool_result"

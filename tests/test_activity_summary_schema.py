@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.activity_summary import (
+from domain.analysis.artifacts import (
     SUMMARY_SCHEMA_V2,
     build_history_view,
     get_analysis_summary,

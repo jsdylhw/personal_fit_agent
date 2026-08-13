@@ -107,6 +107,15 @@ def test_live_runner_uses_sandbox_and_captures_tool_trace():
                 {"content": [{"type": "text", "text": "同步完成"}], "stop_reason": "end_turn"},
             ])
 
+        def create_message(self, **kwargs):
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": '{"skill_id":"sync-garmin-activities","confidence":0.99,"reason":"pure sync"}',
+                }],
+                "stop_reason": "end_turn",
+            }
+
         def create_messages(self, **kwargs):
             return next(self.responses)
 
@@ -132,3 +141,13 @@ def test_report_writes_jsonl_summary_and_markdown(tmp_path):
     assert "Tool selection" not in report  # metric names stay machine-stable
     assert "intent_accuracy" in report
     assert summarize_results(results)["pass_rate"] == 1.0
+
+
+def test_skill_cases_are_versioned_evaluation_inputs():
+    cases = load_cases("evaluation/cases/skills.jsonl")
+
+    assert len(cases) == 8
+    assert all(case.mode == "skill" for case in cases)
+    assert {case.expected.get("skill_id") for case in cases} >= {
+        None, "analyze-activity", "run-activity-workflow", "sync-garmin-activities",
+    }

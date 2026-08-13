@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from agent.activity.workflow_executor import execute_activity_run
-from agent.activity.workflow_factory import (
+from operations.activity.workflow_executor import execute_activity_run
+from operations.activity.workflow_factory import (
     TASK_ENSURE_SUMMARY,
     TASK_UPLOAD_STRAVA,
     create_activity_run_from_activities,
 )
-from agent.runtime.executor import TaskExecution, TaskHandler, execute_ready_tasks
-from agent.runtime.workflow_models import cancel_workflow, create_task, create_workflow, transition_task
-from agent.runtime.workflow_store import acquire_workflow_lock
+from operations.runtime.executor import TaskExecution, TaskHandler, execute_ready_tasks
+from operations.runtime.models import cancel_workflow, create_task, create_workflow, transition_task
+from storage.repositories.workflow import acquire_workflow_lock
 
 
 def test_runtime_executor_runs_ready_task():
@@ -106,7 +106,7 @@ def test_activity_summary_task_persists_result(monkeypatch, tmp_path):
     )
     run = result["run"]
     monkeypatch.setattr(
-        "agent.activity.workflow_handlers.ensure_summary",
+        "operations.activity.workflow_handlers.ensure_summary",
         lambda fit_path, force: {
             "status": "completed", "report_schema_version": "llm_fit_file_analysis.v2", "result_status": "analyzed",
         },
@@ -128,9 +128,9 @@ def test_activity_upload_task_updates_activity_snapshot(monkeypatch, tmp_path):
     )
     run = created["run"]
     calls = []
-    monkeypatch.setattr("agent.activity.workflow_handlers._has_existing_report", lambda activity: True)
+    monkeypatch.setattr("operations.activity.workflow_handlers._has_existing_report", lambda activity: True)
     monkeypatch.setattr(
-        "agent.activity.workflow_handlers.upload_activity",
+        "operations.activity.workflow_handlers.upload_activity",
         lambda fit_path, force: calls.append((fit_path, force)) or {
             "status": "completed", "outcome": "uploaded", "strava_activity_id": "123",
         },
@@ -156,7 +156,7 @@ def test_activity_upload_task_skips_known_remote_activity(tmp_path, monkeypatch)
         directory=tmp_path,
     )
     run = created["run"]
-    monkeypatch.setattr("agent.activity.workflow_handlers._has_existing_report", lambda activity: True)
+    monkeypatch.setattr("operations.activity.workflow_handlers._has_existing_report", lambda activity: True)
 
     result = execute_activity_run(run, directory=tmp_path)
 

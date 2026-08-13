@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterable
 
-from agent.context import AgentContext
-from agent.llm import AnthropicMessagesClient, extract_text
+from agent.main_agent.context import AgentContext
+from integrations.llm import AnthropicMessagesClient, extract_text
 from agent.main_agent.hooks import ToolLoopHooks
-from agent.main_agent.intent import intent_tool_categories, route_intent
-from agent.main_agent.loop import MAX_TOOL_STEPS, _build_system_prompt, agent_loop
-from agent.observability import capture_agent_trace
+from agent.main_agent.intent import Intent, IntentKind, route_intent
+from agent.main_agent.loop import MAX_TOOL_STEPS, _build_system_prompt, _intent_for_skill, agent_loop
+from observability import capture_agent_trace
+from agent.skills import load_skill_instructions
+from agent.skills.policy import validate_skill_selection
+from agent.skills.selector import select_skill
 from agent.tools import MAIN_AGENT_TOOLS, render_anthropic_tools
 from evaluation.graders import grade_case
 from evaluation.sandbox import EvaluationSandbox
@@ -32,6 +35,16 @@ def run_case(
             result = {
                 "status": "completed",
                 "intent": intent.kind.value,
+                "answer": "",
+                "steps": [],
+            }
+        elif case.mode == "skill":
+            selection = select_skill(case.input, client=client or AnthropicMessagesClient())
+            skill = validate_skill_selection(selection)
+            result = {
+                "status": "completed",
+                "intent": _intent_for_skill(skill).kind.value if skill else "chat",
+                "skill_id": skill.skill_id if skill else None,
                 "answer": "",
                 "steps": [],
             }
@@ -77,7 +90,7 @@ def run_suite(
     results: list[dict[str, Any]] = []
     for case in selected:
         for repeat in range(1, repeats + 1):
-            client = client_factory() if case.mode == "live" and client_factory else None
+            client = client_factory() if case.mode in {"router", "skill", "live"} and client_factory else None
             results.append(run_case(
                 case,
                 repeat=repeat,
@@ -91,12 +104,18 @@ def run_suite(
 
 
 def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) -> dict[str, Any]:
-    intent = route_intent(case.input)
-    allowed_categories = intent_tool_categories(intent)
+    client = client or AnthropicMessagesClient()
+    selection = select_skill(case.input, client=client)
+    skill = validate_skill_selection(selection)
+    intent = _intent_for_skill(skill) if skill else Intent(IntentKind.CHAT)
+    allowed_tool_names = set(skill.tool_names) if skill else set()
+    allowed_categories = {
+        tool.category for tool in MAIN_AGENT_TOOLS if tool.name in allowed_tool_names
+    }
     tools = [
         render_anthropic_tools([tool])[0]
         for tool in MAIN_AGENT_TOOLS
-        if tool.category in allowed_categories
+        if tool.name in allowed_tool_names
     ]
     context = AgentContext(
         session_id=f"eval-{case.case_id}",
@@ -105,7 +124,14 @@ def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) ->
     )
     messages = list(context.messages)
     steps: list[dict[str, Any]] = []
-    hooks = ToolLoopHooks(context, allowed_categories, {"value": False}, steps, verbose=False)
+    hooks = ToolLoopHooks(
+        context,
+        allowed_categories,
+        {"value": False},
+        steps,
+        allowed_tool_names=allowed_tool_names,
+        verbose=False,
+    )
     sandbox = EvaluationSandbox(case)
     try:
         step_count = agent_loop(
@@ -113,7 +139,10 @@ def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) ->
             tools=tools,
             handlers=sandbox.handlers(),
             hooks=hooks,
-            system=_build_system_prompt(intent),
+            system=_build_system_prompt(
+                intent,
+                skill_instructions=load_skill_instructions(skill) if skill else "",
+            ),
             max_steps=MAX_TOOL_STEPS,
             client=client,
         )
@@ -130,7 +159,8 @@ def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) ->
                 answer = text
     result: dict[str, Any] = {
         "status": status,
-        "intent": intent.kind.value,
+        "intent": intent.kind.value if hasattr(intent.kind, "value") else str(intent.kind),
+        "skill_id": skill.skill_id if skill else None,
         "answer": answer,
         "steps": steps,
     }

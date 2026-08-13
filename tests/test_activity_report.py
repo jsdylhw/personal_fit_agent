@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from agent.activity.report import (
+from agent.tools.handlers.activity_reporting import (
     query_selected_activity_detail_tool,
     show_selected_activity_report_tool,
 )
-from agent.context import AgentContext
+from agent.main_agent.context import AgentContext
+from storage.repositories.activity import ActivityStore
 from tests.report_store_helpers import store_report
 
 
@@ -38,7 +39,7 @@ def test_detail_query_uses_read_only_child_agent(tmp_path, monkeypatch):
             "agent": "ActivityAnalysisAgent",
         }
 
-    monkeypatch.setattr("agent.activity.report.run_activity_analysis_agent", fake_analyze)
+    monkeypatch.setattr("agent.tools.handlers.activity_reporting.run_activity_analysis_agent", fake_analyze)
     context = AgentContext(session_id="query-test", selected_activities=[activity])
 
     result = query_selected_activity_detail_tool(context, question="检查 100-200 秒是否有短冲刺")
@@ -48,9 +49,38 @@ def test_detail_query_uses_read_only_child_agent(tmp_path, monkeypatch):
     assert result["result"]["source"] == "targeted_query"
 
 
+def test_detail_query_does_not_generate_full_report_when_missing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    fit = tmp_path / "a1.fit"
+    fit.write_bytes(b"fit")
+    calls = []
+
+    def fake_analyze(fit_path: str, **kwargs):
+        calls.append(kwargs)
+        return {
+            "activity_key": "a1",
+            "fit_path": fit_path,
+            "markdown_report": "# 定向回答",
+            "status": "analyzed_query",
+            "agent": "ActivityAnalysisAgent",
+        }
+
+    monkeypatch.setattr("agent.tools.handlers.activity_reporting.run_activity_analysis_agent", fake_analyze)
+    context = AgentContext(
+        session_id="focused-without-report",
+        selected_activities=[{"activity_key": "a1", "fit_path": str(fit)}],
+    )
+
+    result = query_selected_activity_detail_tool(context, question="看心率漂移")
+
+    assert result["answer"] == "# 定向回答"
+    assert calls == [{"user_request": "看心率漂移", "persist": False}]
+    assert ActivityStore().get_report("a1") is None
+
+
 def test_show_report_generates_when_database_report_is_missing(monkeypatch):
     monkeypatch.setattr(
-        "agent.activity.report.run_activity_analysis_agent",
+        "agent.tools.handlers.activity_reporting.run_activity_analysis_agent",
         lambda fit_path, **kwargs: {
             "activity_key": "a1",
             "fit_path": fit_path,
@@ -86,7 +116,7 @@ def test_force_refreshes_existing_database_report(tmp_path, monkeypatch):
             "agent": "ActivityAnalysisAgent",
         }
 
-    monkeypatch.setattr("agent.activity.report.run_activity_analysis_agent", fake_analyze)
+    monkeypatch.setattr("agent.tools.handlers.activity_reporting.run_activity_analysis_agent", fake_analyze)
     context = AgentContext(session_id="refresh-test", selected_activities=[activity])
 
     result = show_selected_activity_report_tool(

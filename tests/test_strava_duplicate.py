@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from core.storage.activity_store import ActivityStore
-from core.strava_upload import _parse_duplicate_activity_id, upload_activity_to_strava
+from storage.repositories.activity import ActivityStore
+from operations.activity.strava import _parse_duplicate_activity_id, upload_activity_to_strava
 
 
 def _stored_activity(tmp_path, *, strava_activity_id: str | None = None) -> tuple[ActivityStore, str]:
@@ -43,7 +43,7 @@ def test_extracts_activity_id_from_duplicate_error():
 def test_duplicate_is_persisted_to_database(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     store, key = _stored_activity(tmp_path)
-    with patch("core.strava_upload.StravaSink") as sink_class:
+    with patch("operations.activity.strava.StravaSink") as sink_class:
         sink = sink_class.return_value
         sink.upload_fit.return_value = {"id": 12345}
         sink.wait_for_upload.return_value = {
@@ -60,7 +60,7 @@ def test_duplicate_is_persisted_to_database(tmp_path, monkeypatch):
 def test_force_with_known_id_updates_without_upload(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _, key = _stored_activity(tmp_path, strava_activity_id="18619000064")
-    with patch("core.strava_upload.StravaSink") as sink_class:
+    with patch("operations.activity.strava.StravaSink") as sink_class:
         sink = sink_class.return_value
         sink.update_description.return_value = {"id": 18619000064}
         result = upload_activity_to_strava(key, force=True)
@@ -73,7 +73,7 @@ def test_force_with_known_id_updates_without_upload(tmp_path, monkeypatch):
 def test_normal_upload_persists_remote_id(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     store, key = _stored_activity(tmp_path)
-    with patch("core.strava_upload.StravaSink") as sink_class:
+    with patch("operations.activity.strava.StravaSink") as sink_class:
         sink = sink_class.return_value
         sink.upload_fit.return_value = {"id": 12345}
         sink.wait_for_upload.return_value = {"activity_id": 98765, "status": "ready"}

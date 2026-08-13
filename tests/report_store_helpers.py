@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from core.storage.activity_store import ActivityStore
+from storage.repositories.activity import ActivityStore
 
 
 def store_report(root: Path, document: dict[str, Any]) -> dict[str, Any]:

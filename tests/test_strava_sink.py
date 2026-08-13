@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sinks.strava import StravaSink, _missing_activity_write
+from integrations.strava import StravaSink, _missing_activity_write
 
 
 def _make_sink(config_overrides: dict | None = None) -> StravaSink:
@@ -50,7 +50,7 @@ class TestStravaSinkInit:
         })
         assert sink.access_token == "direct_token_123"
 
-    @patch("sinks.strava.requests.post")
+    @patch("integrations.strava.requests.post")
     def test_refreshes_with_client_credentials(self, mock_post, tmp_path):
         mock_response = MagicMock()
         mock_response.json.return_value = {"access_token": "refreshed_token"}
@@ -73,7 +73,7 @@ class TestStravaSinkInit:
         with pytest.raises(RuntimeError, match="access_token"):
             StravaSink(config)
 
-    @patch("sinks.strava.requests.post")
+    @patch("integrations.strava.requests.post")
     def test_persists_rotated_refresh_token(self, mock_post, tmp_path):
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -103,7 +103,7 @@ class TestStravaSinkInit:
         }
         assert token_store.stat().st_mode & 0o777 == 0o600
 
-    @patch("sinks.strava.requests.post")
+    @patch("integrations.strava.requests.post")
     def test_reuses_unexpired_persisted_access_token(self, mock_post, tmp_path):
         token_store = tmp_path / "strava_tokens.json"
         token_store.write_text(
@@ -128,7 +128,7 @@ class TestStravaSinkInit:
         assert sink.access_token == "cached_token"
         mock_post.assert_not_called()
 
-    @patch("sinks.strava.requests.post")
+    @patch("integrations.strava.requests.post")
     def test_uses_still_valid_cached_token_when_refresh_network_fails(self, mock_post, tmp_path):
         token_store = tmp_path / "strava_tokens.json"
         token_store.write_text(
@@ -184,7 +184,7 @@ class TestStravaSinkBuildAuthorizeUrl:
 
 
 class TestStravaSinkUpload:
-    @patch("sinks.strava.requests.post")
+    @patch("integrations.strava.requests.post")
     def test_upload_fit_file(self, mock_post, tmp_path):
         mock_response = MagicMock()
         mock_response.json.return_value = {"id": 12345, "status": "pending"}
@@ -214,7 +214,7 @@ class TestStravaSinkUpload:
 
 
 class TestStravaSinkUpdateDescription:
-    @patch("sinks.strava.requests.put")
+    @patch("integrations.strava.requests.put")
     def test_update_description(self, mock_put):
         mock_response = MagicMock()
         mock_response.json.return_value = {"id": 98765, "description": "new desc"}
@@ -229,7 +229,7 @@ class TestStravaSinkUpdateDescription:
 
 
 class TestStravaSinkGetUpload:
-    @patch("sinks.strava.requests.get")
+    @patch("integrations.strava.requests.get")
     def test_get_upload_status(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = {"id": 12345, "activity_id": 98765, "status": "ready"}
@@ -244,7 +244,7 @@ class TestStravaSinkGetUpload:
 
 
 class TestStravaSinkApiError:
-    @patch("sinks.strava.requests.get")
+    @patch("integrations.strava.requests.get")
     def test_http_error(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = {"message": "Not Found"}
@@ -256,7 +256,7 @@ class TestStravaSinkApiError:
         with pytest.raises(RuntimeError, match="HTTP 404"):
             sink.get_upload(99999)
 
-    @patch("sinks.strava.requests.get")
+    @patch("integrations.strava.requests.get")
     def test_missing_activity_write_error(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = {

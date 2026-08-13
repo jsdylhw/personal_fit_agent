@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent.activity.history_metrics import calculate_history_metrics_tool
-from agent.context import AgentContext
+from agent.tools.handlers.activity_insights import calculate_history_metrics_tool
+from agent.main_agent.context import AgentContext
 from tests.report_store_helpers import store_report
 
 
@@ -108,7 +108,7 @@ def test_history_metrics_falls_back_to_fit_without_rewriting_old_summary(
     fit_path = tmp_path / "legacy.fit"
     fit_path.write_bytes(b"fit")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("agent.activity.history_metrics.parse_fit", lambda path: sample_parsed_fit)
+    monkeypatch.setattr("services.activity.history.parse_fit", lambda path: sample_parsed_fit)
     context = AgentContext(
         session_id="history-fallback",
         selected_activities=[{

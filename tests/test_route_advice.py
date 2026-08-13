@@ -5,8 +5,9 @@ from unittest.mock import patch
 
 import pytest
 
-from agent.context import AgentContext
-from agent.route.advice import _list_arg, _num_arg, generate_route_advice_tool
+from agent.main_agent.context import AgentContext
+from services.route.advice import _list_arg, _num_arg
+from agent.tools.handlers.route import generate_route_advice_tool
 
 
 def _mock_advice_json(answer: str, *, strategy: dict | None = None, constraints: list | None = None, needs_clarification: bool = False) -> str:
@@ -61,7 +62,7 @@ def test_list_arg(value, expected):
 def test_generate_route_advice_basic():
     context = AgentContext(session_id="test_route_advice")
 
-    with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
+    with patch("agent.tools.handlers.route.AnthropicMessagesClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.create_message.return_value = {
             "content": [{"type": "text", "text": _mock_advice_json("## 今天适合骑吗\n适合。\n\n## 建议骑行类型\n有氧耐力，Z2为主。\n\n## 路线方向建议\n平路绕圈。\n\n## 注意事项\n补水、防晒。")}],
@@ -85,7 +86,7 @@ def test_generate_route_advice_with_preferences():
     """tool_use 传入 terrain/scenery/preferences 参数,应保留在 route_request 中."""
     context = AgentContext(session_id="test_prefs")
 
-    with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
+    with patch("agent.tools.handlers.route.AnthropicMessagesClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.create_message.return_value = {
             "content": [{"type": "text", "text": _mock_advice_json("## 今天适合骑吗\n适合。")}],
@@ -111,7 +112,7 @@ def test_generate_route_advice_missing_answer_fallback():
     """LLM 返回 JSON 但缺 answer 时,应兜底而不返回空字符串."""
     context = AgentContext(session_id="test_fallback")
 
-    with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
+    with patch("agent.tools.handlers.route.AnthropicMessagesClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.create_message.return_value = {
             "content": [{"type": "text", "text": json.dumps({"strategy": {}, "constraints": [], "needs_clarification": False}, ensure_ascii=False)}],
@@ -137,7 +138,7 @@ def test_generate_route_advice_with_training_load():
         },
     )
 
-    with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
+    with patch("agent.tools.handlers.route.AnthropicMessagesClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.create_message.return_value = {
             "content": [{"type": "text", "text": _mock_advice_json(
@@ -160,7 +161,7 @@ def test_generate_route_advice_with_training_load():
 def test_generate_route_advice_empty_llm_response():
     context = AgentContext(session_id="test_empty")
 
-    with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
+    with patch("agent.tools.handlers.route.AnthropicMessagesClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.create_message.return_value = {"content": [{"type": "text", "text": ""}]}
         result = generate_route_advice_tool(context, args={"location": "上海"})
@@ -172,7 +173,7 @@ def test_generate_route_advice_empty_llm_response():
 def test_generate_route_advice_needs_clarification():
     context = AgentContext(session_id="test_clarify")
 
-    with patch("agent.route.advice.AnthropicMessagesClient") as MockClient:
+    with patch("agent.tools.handlers.route.AnthropicMessagesClient") as MockClient:
         mock_client = MockClient.return_value
         mock_client.create_message.return_value = {
             "content": [{"type": "text", "text": _mock_advice_json(

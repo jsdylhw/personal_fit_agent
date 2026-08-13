@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.storage.activity_store import ActivityStore, entry_from_fit_summary
+from storage.repositories.activity import ActivityStore, entry_from_fit_summary
 
 
 def _v2_report(activity_key: str, fit_path: str) -> dict:

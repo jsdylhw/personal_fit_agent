@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import time
 
-from agent.activity.report_jobs import get_activity_report_job, submit_activity_report_rebuild
-from core.storage.activity_store import ActivityStore, entry_from_fit_summary
+from operations.activity.report_batch import get_activity_report_job, submit_activity_report_rebuild
+from storage.repositories.activity import ActivityStore, entry_from_fit_summary
 
 
 def test_bulk_report_rebuild_runs_in_background_and_persists_v2(monkeypatch, tmp_path):
@@ -36,7 +36,7 @@ def test_bulk_report_rebuild_runs_in_background_and_persists_v2(monkeypatch, tmp
         store.save_report(report)
         return report
 
-    monkeypatch.setattr("agent.activity.analysis_agent.analyze_fit_file", fake_analyze)
+    monkeypatch.setattr("agent.analysis.agent.analyze_fit_file", fake_analyze)
     submitted = submit_activity_report_rebuild(scope="all")
 
     deadline = time.monotonic() + 5
@@ -77,7 +77,7 @@ def test_bulk_report_rebuild_can_target_failed_activity_keys(monkeypatch, tmp_pa
         store.save_report(report)
         return report
 
-    monkeypatch.setattr("agent.activity.analysis_agent.analyze_fit_file", fake_analyze)
+    monkeypatch.setattr("agent.analysis.agent.analyze_fit_file", fake_analyze)
     submitted = submit_activity_report_rebuild(
         scope="all",
         activity_keys=[fits[1]["activity_key"]],

@@ -30,7 +30,7 @@ class EvalCase:
         mode = str(payload.get("mode") or "router").strip().lower()
         if not case_id or not user_input:
             raise EvalCaseError(f"case_id and input are required: {source}")
-        if mode not in {"router", "live"}:
+        if mode not in {"router", "skill", "live"}:
             raise EvalCaseError(f"unsupported mode {mode!r}: {source}")
         expected = payload.get("expected") or {}
         tool_outputs = payload.get("tool_outputs") or {}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.storage.activity_store import entry_from_fit_summary
+from storage.repositories.activity import entry_from_fit_summary
 
 
 def test_fit_path_is_project_relative_inside_workspace(tmp_path, monkeypatch):

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from agent.activity.operations.aggregate import aggregate_summaries
-from agent.activity.workflow_executor import execute_activity_run
-from agent.activity.workflow_factory import TASK_AGGREGATE_REPORT, TASK_ENSURE_SUMMARY, create_activity_run_from_activities
+from operations.activity.aggregate import aggregate_summaries
+from operations.activity.workflow_executor import execute_activity_run
+from operations.activity.workflow_factory import TASK_AGGREGATE_REPORT, TASK_ENSURE_SUMMARY, create_activity_run_from_activities
 
 
 def _store_summary(root, *, activity_key, distance_m, duration_s):
