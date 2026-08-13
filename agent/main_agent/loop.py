@@ -338,6 +338,8 @@ def _with_execution_header(answer: str, *, context: AgentContext, steps: list[di
         "sync_and_run_activity_workflow": "同步并处理活动",
         "run_activity_workflow": "处理本地活动",
         "retry_activity_workflow": "重试工作流",
+        "rebuild_activity_reports": "后台重建 V2 报告",
+        "get_activity_report_job": "查看报告任务",
     }
     operations = [labels.get(str(step.get("tool") or ""), str(step.get("tool") or "")) for step in steps]
     compact_operations = []
@@ -360,6 +362,7 @@ def _build_system_prompt(intent) -> str:
 - 用户询问历史趋势、是否进步、周/月变化、训练量变化时，先用 find_activity 定位范围，再调用 calculate_history_metrics，并根据它返回的覆盖率、周期变化和阈值一致性解释；不要让 LLM 从报告文字自行计算。
 - analyze_activity 只用于一条活动的完整报告，已有 summary 时直接返回；只有用户问到明确 FIT 原始细节（如“100-200 秒”“某次冲刺”“第几公里”）时，才对已精确定位的一条活动调用 query_activity_detail。
 - 若用户要处理多条“本地已有”活动（批量生成 summary、上传 Strava 或汇总），调用 run_activity_workflow：一次创建持久化 Run；不要用 find_activity 后逐条编排。
+- 用户明确要求“重新分析全部/所有活动”时调用 rebuild_activity_reports；它在内存线程中逐条强制写入 V2 报告并立即返回 job_id，不要为此创建持久化 ActivityRun。用户询问进度时调用 get_activity_report_job。
 - 用户只要求从 Garmin 同步/下载时，调用 sync_garmin_activities：只下载 FIT 并更新索引，不生成 summary、不分析、不上传。
 - 仅当用户明确要求同步/下载后继续分析、上传或汇总时，调用 sync_and_run_activity_workflow；它只处理本次同步并已索引的活动，并创建同一个持久化 Run。
 - 需要查看或恢复该批量操作时，使用 get_activity_workflow / retry_activity_workflow，并以工具结果中的 workflow_id 为准。
@@ -380,6 +383,12 @@ def _build_state_preamble(context):
         status = str(workflow.get("status") or "unknown")
         if workflow_id:
             parts.append(f"最近工作流: {workflow_id}（{status}；仅用于衔接刚才的批量操作）")
+    report_job = _last_report_job(context)
+    if report_job:
+        parts.append(
+            f"最近报告任务: {report_job.get('job_id')}（{report_job.get('status')}；"
+            f"{report_job.get('completed', 0)}/{report_job.get('total', 0)}）"
+        )
     if not parts:
         return ""
     return "\n".join(["[本轮状态]", *parts])
@@ -397,6 +406,15 @@ def _last_workflow_result(context: AgentContext) -> dict[str, Any] | None:
         return None
     result = last.get("result")
     return result if isinstance(result, dict) and result.get("workflow_id") else None
+
+
+def _last_report_job(context: AgentContext) -> dict[str, Any] | None:
+    """Expose the latest in-memory rebuild identifier for a follow-up query."""
+    last = context.last_tool_result or {}
+    if last.get("step_name") not in {"rebuild_activity_reports", "get_activity_report_job"}:
+        return None
+    result = last.get("result")
+    return result if isinstance(result, dict) and result.get("job_id") else None
 
 
 def _completed_workflow_fallback(context: AgentContext) -> str | None:

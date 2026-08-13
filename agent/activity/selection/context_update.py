@@ -14,7 +14,6 @@ def activity_from_context(context: AgentContext) -> ActivityHandle | None:
         return ActivityHandle(
             activity_key=context.current_activity_key or "",
             fit_path=str(context.current_fit_file) if context.current_fit_file else None,
-            summary_path=str(context.current_summary_path) if context.current_summary_path else None,
         )
     return None
 

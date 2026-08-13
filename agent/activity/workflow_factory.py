@@ -106,13 +106,16 @@ def create_activity_run_from_activities(
         tasks=tasks,
     )
     target_directory = Path(directory) if directory is not None else DEFAULT_ACTIVITY_RUN_DIRECTORY
+    # workflow_overview refreshes status/updated_at, so compute it before the
+    # snapshot is persisted to keep the returned object equal to disk state.
+    overview = workflow_overview(run)
     path = save_workflow(run, directory=target_directory)
     return {
         "schema_version": "activity_run_factory.v1",
         "status": "created",
         "run": run,
         "run_path": str(path),
-        "overview": workflow_overview(run),
+        "overview": overview,
     }
 
 

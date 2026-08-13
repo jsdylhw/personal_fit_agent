@@ -209,7 +209,7 @@ async function analyzeSelected() {
       body: JSON.stringify({ path: file.path, history: false, force: true }),
     });
     log("分析完成", {
-      summary_path: result.summary_path,
+      activity_key: result.activity_key,
       tone: result.strava_summary_tone,
     });
     await refreshFiles();
@@ -224,13 +224,13 @@ async function analyzeSelected() {
 
 async function viewReport() {
   const file = selectedFile();
-  if (!file || !file.summary_path) {
+  if (!file || !file.has_summary) {
     els.reportText.textContent = "还没有 summary，请先分析。";
     return;
   }
   setStatus("读取报告");
   try {
-    const summary = await fetchJson(`/api/summary?path=${encodeURIComponent(file.summary_path)}`);
+    const summary = await fetchJson(`/api/summary?activity_key=${encodeURIComponent(file.activity_key)}`);
     els.reportText.textContent = summary.markdown_report || "(报告为空)";
     setStatus("准备就绪");
   } catch (error) {
@@ -241,7 +241,7 @@ async function viewReport() {
 
 async function uploadStrava() {
   const file = selectedFile();
-  if (!file || !file.summary_path) {
+  if (!file || !file.has_summary) {
     log("上传失败", { error: "还没有 summary，请先分析。" });
     return;
   }
@@ -249,7 +249,7 @@ async function uploadStrava() {
   try {
     const result = await fetchJson("/api/strava/upload", {
       method: "POST",
-      body: JSON.stringify({ summary_path: file.summary_path, wait: true }),
+      body: JSON.stringify({ activity_key: file.activity_key, wait: true }),
     });
     const uploadStatus = result.upload_status || {};
     const completed = ["duplicate", "description_updated"].includes(result.status)

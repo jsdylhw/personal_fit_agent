@@ -236,6 +236,31 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         category=CATEGORY_WORKFLOW,
     ),
     ToolDef(
+        name="rebuild_activity_reports",
+        description=(
+            "在后台把本地活动重新生成并写入 activity_reports 的 V2 报告。"
+            "用户明确说重新分析全部/所有活动时使用；提交后立即返回 job_id，不阻塞聊天。"
+            "scope=all 强制重建全部，scope=outdated 只处理没有 V2 报告的活动。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "enum": ["all", "outdated"], "default": "all"},
+            },
+        },
+        category=CATEGORY_WORKFLOW,
+    ),
+    ToolDef(
+        name="get_activity_report_job",
+        description="查看后台 V2 报告重建任务的进度和逐活动结果；不会启动新分析。",
+        input_schema={
+            "type": "object",
+            "properties": {"job_id": {"type": "string"}},
+            "required": ["job_id"],
+        },
+        category=CATEGORY_WORKFLOW,
+    ),
+    ToolDef(
         name="get_activity_workflow",
         description="读取持久化活动工作流的真实状态和任务结果；不执行操作。",
         input_schema={

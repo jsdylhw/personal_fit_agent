@@ -8,7 +8,7 @@ from typing import Any
 from agent.activity.operations.service import upload_to_strava_tool
 
 
-def upload_summary(fit_path: str | Path, *, force: bool = False) -> dict[str, Any]:
+def upload_activity(fit_path: str | Path, *, force: bool = False) -> dict[str, Any]:
     """上传一个已分析 FIT。"""
     path = Path(fit_path).expanduser()
     if not path.exists():
@@ -25,7 +25,7 @@ def upload_summary(fit_path: str | Path, *, force: bool = False) -> dict[str, An
         return _failed(path, "upload_not_completed", str(result.get("message") or outcome or "Upload was not executed"), raw_result=result)
     return {
         "schema_version": "activity_operation_strava_upload.v1",
-        "operation": "upload_summary",
+        "operation": "upload_activity",
         "status": "completed",
         "outcome": outcome,
         "fit_path": str(path),
@@ -37,7 +37,7 @@ def upload_summary(fit_path: str | Path, *, force: bool = False) -> dict[str, An
 def _failed(path: Path, error: str, message: str, *, raw_result: dict[str, Any] | None = None) -> dict[str, Any]:
     response: dict[str, Any] = {
         "schema_version": "activity_operation_strava_upload.v1",
-        "operation": "upload_summary",
+        "operation": "upload_activity",
         "status": "failed",
         "fit_path": str(path),
         "error": error,

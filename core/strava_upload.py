@@ -1,55 +1,47 @@
-"""Strava 上传/描述更新:从 summary JSON 读取分析结果并发布到 Strava.
-
-依赖 sinks/strava.py 的 StravaSink 做实际的 API 调用.
-"""
+"""Publish one SQLite-backed activity report to Strava."""
 
 from __future__ import annotations
 
-import json
+import re
 from pathlib import Path
 from typing import Any
 
-from core.activity_index import upsert_activity_from_summary
+from core.storage.activity_store import ActivityStore
 from sinks.strava import StravaSink
 
 
-def upload_summary_to_strava(
-    summary_path: str | Path, *, title: str | None = None, wait: bool = True,
+def upload_activity_to_strava(
+    activity_key: str,
+    *,
+    title: str | None = None,
+    wait: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
-    """从 summary JSON 读取 strava_summary 和 fit_path,上传到 Strava.
+    """Upload the FIT referenced by one persisted V2 report."""
+    store = ActivityStore()
+    activity = store.get_activity(activity_key)
+    report = store.get_report(activity_key)
+    if activity is None:
+        raise KeyError(f"activity not found: {activity_key}")
+    if report is None:
+        raise KeyError(f"activity report not found: {activity_key}")
 
-    Args:
-        summary_path: data/summaries/*.summary.json 路径.
-        title: 自定义活动标题,默认用日期+运动类型.
-        wait: 是否轮询等待 Strava 处理完成.
-        force: 遇到 duplicate 时不报错,改为更新已有活动的描述.
+    fit_path = str(activity.get("fit_path") or report.get("fit_path") or "")
+    if not fit_path or not Path(fit_path).exists():
+        raise FileNotFoundError(fit_path or f"FIT path missing for {activity_key}")
+    description = str(report.get("strava_summary") or "").strip()
+    if not description:
+        raise RuntimeError("activity report does not contain strava_summary")
 
-    Returns:
-        dict: {summary_path, fit_path, title, description, upload, upload_status?}
-    """
-    path = Path(summary_path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-    summary = json.loads(path.read_text(encoding="utf-8"))
-
-    fit_path = summary.get("fit_path")
-    if not fit_path:
-        raise RuntimeError(f"summary does not contain fit_path: {path}")
-    strava_summary = summary.get("strava_summary")
-    if not strava_summary:
-        raise RuntimeError(f"summary does not contain strava_summary: {path}")
-
-    fit_summary = summary.get("fit_summary") or {}
+    fit_summary = report.get("fit_summary") if isinstance(report.get("fit_summary"), dict) else {}
     upload_title = title or _default_title(fit_summary, Path(fit_path))
     sink = StravaSink()
-
-    known_activity_id = _known_strava_activity_id(summary)
+    known_activity_id = _known_strava_activity_id(activity, report)
     if force and known_activity_id:
-        updated = sink.update_description(known_activity_id, strava_summary)
-        _remember_strava_activity_id(path, summary, known_activity_id)
+        updated = sink.update_description(known_activity_id, description)
+        _remember_strava_activity_id(store, activity, report, known_activity_id)
         return {
-            "summary_path": str(path),
+            "activity_key": activity_key,
             "fit_path": fit_path,
             "status": "description_updated",
             "strava_activity_id": known_activity_id,
@@ -58,102 +50,87 @@ def upload_summary_to_strava(
         }
 
     upload = sink.upload_fit(
-        fit_path, title=upload_title, description=strava_summary,
-        external_id=summary.get("activity_key"),
+        fit_path,
+        title=upload_title,
+        description=description,
+        external_id=activity_key,
     )
-
     result: dict[str, Any] = {
-        "summary_path": str(path), "fit_path": fit_path,
-        "title": upload_title, "description": strava_summary, "upload": upload,
+        "activity_key": activity_key,
+        "fit_path": fit_path,
+        "title": upload_title,
+        "description": description,
+        "upload": upload,
     }
     upload_id = upload.get("id")
     if wait and upload_id is not None:
         result["upload_status"] = sink.wait_for_upload(upload_id)
     elif not wait and upload_id is None:
-        # upload_fit 直接返回了错误(如 duplicate)
         result["upload_status"] = upload
 
-    # 处理 duplicate 错误:提取已有活动 ID,根据 force 决定报错还是更新描述
     duplicate_id = _parse_duplicate_activity_id(result.get("upload_status") or {})
     if duplicate_id:
-        _remember_strava_activity_id(path, summary, duplicate_id)
+        _remember_strava_activity_id(store, activity, report, duplicate_id)
         if force:
-            updated = sink.update_description(duplicate_id, strava_summary)
-            result["status"] = "description_updated"
-            result["strava_activity_id"] = duplicate_id
-            result["update_result"] = updated
+            result.update({
+                "status": "description_updated",
+                "strava_activity_id": duplicate_id,
+                "update_result": sink.update_description(duplicate_id, description),
+            })
             result.pop("upload_status", None)
         else:
             return {
-                "summary_path": str(path),
+                "activity_key": activity_key,
                 "fit_path": fit_path,
                 "status": "duplicate",
                 "strava_activity_id": duplicate_id,
-                "message": f"该活动已上传到 Strava (activity_id={duplicate_id})。使用 --force 更新描述,或手动调用 update-strava-description。",
+                "message": (
+                    f"该活动已上传到 Strava (activity_id={duplicate_id})。"
+                    "使用 --force 更新描述。"
+                ),
             }
 
     uploaded_activity_id = (result.get("upload_status") or {}).get("activity_id")
     if uploaded_activity_id:
-        _remember_strava_activity_id(path, summary, str(uploaded_activity_id))
+        _remember_strava_activity_id(store, activity, report, str(uploaded_activity_id))
     return result
 
 
-def update_strava_description_from_summary(
-    activity_id: str, summary_path: str | Path,
-) -> dict[str, Any]:
-    """仅更新已上传活动的描述,不上传 FIT.
-
-    Args:
-        activity_id: Strava 活动 ID.
-        summary_path: summary JSON 路径.
-
-    Returns:
-        dict: Strava API 响应.
-    """
-    path = Path(summary_path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-    summary = json.loads(path.read_text(encoding="utf-8"))
-    strava_summary = summary.get("strava_summary")
-    if not strava_summary:
-        raise RuntimeError(f"summary does not contain strava_summary: {path}")
-    result = StravaSink().update_description(activity_id, strava_summary)
-    _remember_strava_activity_id(path, summary, str(activity_id))
+def update_strava_description(activity_id: str, activity_key: str) -> dict[str, Any]:
+    """Update a Strava description from the current SQLite report."""
+    store = ActivityStore()
+    activity = store.get_activity(activity_key)
+    report = store.get_report(activity_key)
+    if activity is None or report is None:
+        raise KeyError(f"activity report not found: {activity_key}")
+    description = str(report.get("strava_summary") or "").strip()
+    if not description:
+        raise RuntimeError("activity report does not contain strava_summary")
+    result = StravaSink().update_description(activity_id, description)
+    _remember_strava_activity_id(store, activity, report, str(activity_id))
     return result
 
 
-def _known_strava_activity_id(summary: dict[str, Any]) -> str | None:
-    value = summary.get("strava_activity_id")
-    if value:
-        return str(value)
-    upload_status = summary.get("strava_upload_status")
-    if isinstance(upload_status, dict) and upload_status.get("activity_id"):
-        return str(upload_status["activity_id"])
-    return None
+def _known_strava_activity_id(activity: dict[str, Any], report: dict[str, Any]) -> str | None:
+    value = activity.get("strava_activity_id") or report.get("strava_activity_id")
+    return str(value) if value else None
 
 
-def _remember_strava_activity_id(summary_path: Path, summary: dict[str, Any], activity_id: str) -> None:
-    """把 Strava 活动 ID 写回 summary,并刷新 activity_index 中的同一行."""
+def _remember_strava_activity_id(
+    store: ActivityStore,
+    activity: dict[str, Any],
+    report: dict[str, Any],
+    activity_id: str,
+) -> None:
+    """Commit remote identity to both normalized and report records."""
     if not activity_id:
         return
-    updated = dict(summary)
-    updated["strava_activity_id"] = str(activity_id)
-    if summary.get("strava_activity_id") != str(activity_id):
-        summary_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    try:
-        upsert_activity_from_summary(summary_path)
-    except Exception:
-        # summary 是主缓存;index 刷新失败不应影响上传/更新描述主流程.
-        pass
+    updated_report = {**report, "strava_activity_id": str(activity_id)}
+    store.save_report(updated_report)
+    store.upsert_activity({**activity, "strava_activity_id": str(activity_id)})
 
 
 def _parse_duplicate_activity_id(status: dict[str, Any]) -> str | None:
-    """从 Strava upload status 的 error 字段提取已有活动 ID.
-
-    Strava duplicate 错误格式:
-      "xxx.fit duplicate of <a href='/activities/18619000064' ...>Title</a>"
-    """
-    import re
     error = status.get("error")
     if not isinstance(error, str):
         return None
@@ -164,6 +141,4 @@ def _parse_duplicate_activity_id(status: dict[str, Any]) -> str | None:
 def _default_title(fit_summary: dict[str, Any], fit_path: Path) -> str:
     start_time = str(fit_summary.get("start_time_local") or fit_summary.get("start_time") or "")[:10]
     sport = fit_summary.get("sport_type") or "activity"
-    if start_time:
-        return f"{start_time} {sport}"
-    return fit_path.stem
+    return f"{start_time} {sport}" if start_time else fit_path.stem

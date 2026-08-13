@@ -244,7 +244,7 @@ def _activity_ref(activity: dict[str, Any]) -> dict[str, Any]:
     return {
         key: activity.get(key)
         for key in (
-            "activity_key", "fit_path", "summary_path", "strava_activity_id",
+            "activity_key", "fit_path", "strava_activity_id",
             "file_name", "sport_type", "start_time_local", "date_local", "source_activity_id",
         )
         if activity.get(key) is not None
@@ -284,7 +284,7 @@ def _reset_terminal_task(run: dict[str, Any], task: dict[str, Any], *, reason: s
         "finished_at": task.get("updated_at"),
         "details": snapshot,
     })
-    for key in ("error", "message", "reason", "outcome", "report", "result_status", "summary_path", "strava_activity_id"):
+    for key in ("error", "message", "reason", "outcome", "report", "result_status", "strava_activity_id"):
         task.pop(key, None)
     task["status"] = "pending"
     task["retry_reason"] = reason

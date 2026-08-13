@@ -8,14 +8,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
-from agent.activity.comparison import read_activity_summary
+from agent.activity.comparison import read_activity_report
 from agent.activity.metrics import build_activity_metrics
 from agent.context import AgentContext
 from core.activity_summary import (
-    build_history_entry,
     get_tss,
     get_tss_source,
-    is_legacy_summary,
     summary_schema_version,
 )
 from fit.parser import parse_fit
@@ -53,7 +51,6 @@ def calculate_history_metrics_tool(
             missing.append({
                 "activity_key": activity.get("activity_key"),
                 "fit_path": activity.get("fit_path"),
-                "summary_path": activity.get("summary_path"),
                 "error": error,
             })
             continue
@@ -131,19 +128,16 @@ def calculate_history_metrics_tool(
 
 
 def load_activity_metrics(activity: dict[str, Any]) -> tuple[dict[str, Any] | None, str, str | None]:
-    """Load stable metrics from summary JSON or a read-only FIT fallback."""
-    _, summary, summary_error = read_activity_summary(activity)
+    """Load V2 metrics from SQLite or compute them from the immutable FIT."""
+    summary, summary_error = read_activity_report(activity)
     if summary is not None:
         metrics = summary.get("activity_metrics")
-        if isinstance(metrics, dict) and metrics.get("schema_version") in {
-            "activity_metrics.v1",
-            "activity_metrics.v2",
-        }:
-            if is_legacy_summary(summary):
-                return metrics, "stored_summary_v1", None
-            if summary_schema_version(summary) == "llm_fit_file_analysis.v2":
-                return metrics, "stored_summary_v2", None
-            return metrics, "stored_summary_unknown", None
+        if (
+            isinstance(metrics, dict)
+            and metrics.get("schema_version") == "activity_metrics.v2"
+            and summary_schema_version(summary) == "llm_fit_file_analysis.v2"
+        ):
+            return metrics, "stored_report_v2", None
 
     fit_path = _resolve_fit_path(activity, summary)
     if fit_path is not None:
@@ -170,22 +164,20 @@ def _basic_metrics_fallback(
 ) -> dict[str, Any] | None:
     summary = summary or {}
     fit_summary = _section(summary, "fit_summary")
-    history = build_history_entry(summary)
     start = (
         fit_summary.get("start_time_local")
-        or history.get("start_time_local")
         or activity.get("start_time_local")
     )
-    duration_min = _first_number(history.get("duration_min"), activity.get("duration_min"))
-    distance_km = _first_number(history.get("distance_km"), activity.get("distance_km"))
+    duration_min = _first_number(activity.get("duration_min"))
+    distance_km = _first_number(activity.get("distance_km"))
     if start is None or (duration_min is None and distance_km is None):
         return None
     return {
         "schema_version": "activity_metrics.v2",
         "activity_key": summary.get("activity_key") or activity.get("activity_key"),
         "identity": {
-            "sport_type": fit_summary.get("sport_type") or history.get("sport_type") or activity.get("sport_type"),
-            "sub_sport": fit_summary.get("sub_sport") or history.get("sub_sport") or activity.get("sub_sport"),
+            "sport_type": fit_summary.get("sport_type") or activity.get("sport_type"),
+            "sub_sport": fit_summary.get("sub_sport") or activity.get("sub_sport"),
             "start_time_local": start,
         },
         "scale": {"duration_min": duration_min, "distance_km": distance_km},
@@ -357,7 +349,7 @@ def _deduplicate_activities(activities: Iterable[Any]) -> list[dict[str, Any]]:
     for value in activities:
         if not isinstance(value, dict):
             continue
-        identity = str(value.get("activity_key") or value.get("fit_path") or value.get("summary_path") or "")
+        identity = str(value.get("activity_key") or value.get("fit_path") or "")
         if identity and identity in seen:
             continue
         if identity:

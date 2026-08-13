@@ -151,6 +151,20 @@ def run_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[s
     return result
 
 
+def rebuild_activity_reports(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    """Submit a non-blocking, in-process rebuild of current V2 reports."""
+    from agent.activity.report_jobs import submit_activity_report_rebuild
+
+    return submit_activity_report_rebuild(scope=str(args.get("scope") or "all"))
+
+
+def get_activity_report_job(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    """Read progress for a bulk report rebuild without starting new work."""
+    from agent.activity.report_jobs import get_activity_report_job as get_job
+
+    return get_job(str(args.get("job_id") or ""))
+
+
 def get_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     from agent.activity.workflow_service import get_activity_workflow as get_workflow
 
@@ -186,6 +200,8 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "sync_garmin_activities": sync_garmin_activities,
     "sync_and_run_activity_workflow": sync_and_run_activity_workflow,
     "run_activity_workflow": run_activity_workflow,
+    "rebuild_activity_reports": rebuild_activity_reports,
+    "get_activity_report_job": get_activity_report_job,
     "get_activity_workflow": get_activity_workflow,
     "retry_activity_workflow": retry_activity_workflow,
     "compare_activities": compare_activities,

@@ -1,9 +1,4 @@
-"""ActivityAnalysisAgent: single-activity analysis boundary.
-
-The main agent calls `analyze_activity`; this module owns the independent FIT
-analysis session, exposes read-only FIT data tools to that session, writes the
-summary/history artifacts, and returns a structured result to the main agent.
-"""
+"""Single-activity child agent backed by the SQLite report store."""
 
 from __future__ import annotations
 
@@ -19,17 +14,13 @@ from agent.prompts import build_fit_analysis_system_prompt
 from agent.tools import build_tool_handlers
 from agent.tools.fit_analysis import FIT_ANALYSIS_TOOLS
 from agent.tools.spec import ToolRegistry
-from core.config import ensure_data_dirs
-from core.history import query_activity_history, upsert_activity_history
 from core.path_utils import project_relative_or_absolute
-from core.time_utils import local_time_without_timezone
+from core.storage.activity_store import ActivityStore
 from agent.tools.fit_analysis import llm_safe_fit_summary, llm_safe_history
 from agent.activity.metrics import build_activity_metrics
 from core.activity_summary import (
-    SUPPORTED_SUMMARY_SCHEMAS,
     SUMMARY_SCHEMA_V2,
-    analysis_summary_from_history_entry,
-    build_history_entry,
+    analysis_summary_from_submission,
     get_analysis_summary,
 )
 from fit.parser import parse_fit
@@ -91,7 +82,6 @@ def analyze_fit_file(
     fit_path: str | Path,
     *,
     use_history: bool = False,
-    update_history: bool = True,
     force: bool = False,
     user_request: str = "",
     persist: bool = True,
@@ -103,34 +93,22 @@ def analyze_fit_file(
     if path.suffix.lower() != ".fit":
         raise ValueError(f"Only .fit files are supported: {path}")
 
-    summary_path = _summary_path(path)
-    previous_summary = _read_existing_summary(summary_path)
+    activity_key = _activity_key(path)
+    store = ActivityStore()
+    previous_summary = store.get_report(activity_key)
     # A focused question must reach the child agent even if a generic summary
     # already exists.  The caller can set persist=False to keep that answer
     # read-only and avoid replacing the cached full report.
-    if summary_path.exists() and not force and not user_request.strip():
+    if previous_summary and not force and not user_request.strip():
         result = previous_summary
-        if result.get("schema_version") in SUPPORTED_SUMMARY_SCHEMAS:
+        if result.get("schema_version") == SUMMARY_SCHEMA_V2:
             _sanitize_result_times(result)
-            result["summary_path"] = str(summary_path)
-            history_entry = build_history_entry(result)
-            try:
-                from core.activity_index import upsert_activity_from_summary
-
-                upsert_activity_from_summary(summary_path)
-            except Exception:
-                pass
-            if update_history:
-                upsert_activity_history(history_entry)
-            # Keep the child-agent return contract compatible without putting
-            # the history-cache row back into a V2 summary file.
-            result["history_entry"] = history_entry
             result["status"] = "skipped_existing_summary"
             return result
 
     parsed = parse_fit(path)
     history_before = (
-        query_activity_history(
+        store.query_history(
             before=parsed["summary"].get("start_time_local") or parsed["summary"].get("start_time"),
             days=90,
             limit=50,
@@ -144,25 +122,21 @@ def analyze_fit_file(
         history_before=history_before,
         user_request=user_request,
     )
-    history_entry = normalize_history_entry(
-        model_result.get("history_entry") or {},
-        path=path,
-        parsed=parsed,
-    )
+    analysis_submission = normalize_analysis_submission(model_result.get("analysis_summary") or {})
 
     activity_metrics = build_activity_metrics(
         parsed,
-        activity_key=_activity_key(path),
+        activity_key=activity_key,
         fit_path=project_relative_or_absolute(path),
     )
     result = {
         "schema_version": SUMMARY_SCHEMA_V2,
         "status": "analyzed" if persist else "analyzed_query",
-        "activity_key": _activity_key(path),
+        "activity_key": activity_key,
         "fit_path": project_relative_or_absolute(path),
         "fit_summary": llm_safe_fit_summary(parsed["summary"]),
         "activity_metrics": activity_metrics,
-        "analysis_summary": analysis_summary_from_history_entry(history_entry),
+        "analysis_summary": analysis_summary_from_submission(analysis_submission),
         "model": model_result.get("model"),
         "session_id": model_result.get("session_id"),
         "log_path": model_result.get("log_path"),
@@ -173,24 +147,16 @@ def analyze_fit_file(
     }
     if history_before is not None:
         result["history_context"] = llm_safe_history(history_before)
-    result["summary_path"] = str(summary_path)
-
     if persist:
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        summary_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        try:
-            from core.activity_index import upsert_activity_from_summary
+        # Direct CLI/API analysis may start from an unindexed FIT.  Register the
+        # immutable source row before enforcing the report foreign key.
+        if store.get_activity(activity_key) is None:
+            from core.storage.activity_store import entry_from_fit_summary
 
-            upsert_activity_from_summary(summary_path)
-        except Exception:
-            pass
+            store.upsert_activity(entry_from_fit_summary(path, parsed.get("summary") or {}))
+        store.save_report(result)
 
-        if update_history:
-            upsert_activity_history(history_entry)
-
-    # The persisted V2 document remains clean, while callers that still need
-    # to update the separate history cache receive its normalized row.
-    return {**result, "history_entry": history_entry}
+    return result
 
 
 def analyze_with_llm(
@@ -262,9 +228,37 @@ def analyze_with_llm(
         )
         if submission is not None:
             submitted_data = submission.get("input")
-            data = submitted_data if isinstance(submitted_data, dict) else {}
-            turns.append({"step": loop_step, "type": "analysis_submission", "tool": "submit_analysis"})
-            break
+            candidate = submitted_data if isinstance(submitted_data, dict) else {}
+            validation_error = _submission_validation_error(candidate)
+            if validation_error is None:
+                data = candidate
+                turns.append({"step": loop_step, "type": "analysis_submission", "tool": "submit_analysis"})
+                break
+
+            # Compatible backends occasionally emit a syntactically valid
+            # submit_analysis call whose long report field is empty/truncated.
+            # Reject it inside the tool loop so the model can repair the same
+            # call instead of failing the whole activity after the loop exits.
+            turns.append({
+                "step": loop_step,
+                "type": "invalid_analysis_submission",
+                "tool": "submit_analysis",
+                "error": validation_error,
+            })
+            messages.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": submission.get("id"),
+                    "is_error": True,
+                    "content": (
+                        f"Invalid submit_analysis input: {validation_error}. "
+                        "Call submit_analysis again with a concise but non-empty Chinese markdown_report, "
+                        "non-empty strava_summary, and analysis_summary."
+                    ),
+                }],
+            })
+            continue
 
         tool_result_blocks: list[dict[str, Any]] = []
         for block in response.get("content") or []:
@@ -321,10 +315,21 @@ def analyze_with_llm(
         )
         raise RuntimeError("LLM did not return final analysis within tool-loop steps")
 
-    if not isinstance(data.get("markdown_report"), str) or not data["markdown_report"].strip():
-        raise RuntimeError("LLM response must include non-empty markdown_report")
-    if not isinstance(data.get("strava_summary"), str) or not data["strava_summary"].strip():
-        raise RuntimeError("LLM response must include non-empty strava_summary")
+    validation_error = _submission_validation_error(data)
+    if validation_error is not None:
+        _write_analysis_log(
+            session_id=session_id,
+            path=path,
+            history_before=history_before,
+            strava_summary_tone=strava_summary_tone,
+            system_prompt=system_prompt,
+            messages=messages,
+            turns=turns,
+            parsed_response=data,
+            status="failed",
+            error={"type": "RuntimeError", "message": validation_error},
+        )
+        raise RuntimeError(validation_error)
     data["model"] = (last_response or {}).get("model")
     data["raw_response_id"] = (last_response or {}).get("id")
     data["strava_summary_tone"] = strava_summary_tone
@@ -360,13 +365,13 @@ def build_initial_loop_payload(
             "the activity. Analyze only this FIT file. Use the available read-only FIT data tools when needed. "
             "When user_request is non-empty, answer that question explicitly and use focused intervals or scans "
             "when the question asks about a specific period or effort. "
-            "When done, call submit_analysis with markdown_report, strava_summary, and history_entry."
+            "When done, call submit_analysis with markdown_report, strava_summary, and analysis_summary."
         ),
         "completion_contract": {
             "tool": "submit_analysis",
             "markdown_report": "Chinese markdown report.",
             "strava_summary": "About 200 Chinese characters for Strava. Follow strava_summary_style.",
-            "history_entry": "Compact JSON object for future comparisons.",
+            "analysis_summary": "Compact qualitative judgement for future comparisons.",
         },
         "strava_summary_style": strava_summary_tone,
         "user_request": user_request.strip(),
@@ -374,6 +379,17 @@ def build_initial_loop_payload(
         "fit_summary": llm_safe_fit_summary(parsed.get("summary", {})),
         "history_available": history_before is not None,
     }
+
+
+def _submission_validation_error(data: dict[str, Any]) -> str | None:
+    """Return a repairable completion-contract error, or None when valid."""
+    if not isinstance(data.get("markdown_report"), str) or not data["markdown_report"].strip():
+        return "LLM response must include non-empty markdown_report"
+    if not isinstance(data.get("strava_summary"), str) or not data["strava_summary"].strip():
+        return "LLM response must include non-empty strava_summary"
+    if not isinstance(data.get("analysis_summary"), dict):
+        return "LLM response must include analysis_summary object"
+    return None
 
 
 def choose_strava_summary_tone() -> dict[str, str]:
@@ -386,25 +402,9 @@ def choose_strava_summary_tone() -> dict[str, str]:
     return {key: value for key, value in tone.items() if key != "weight"}
 
 
-def normalize_history_entry(entry: dict[str, Any], *, path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
-    """Fill required fields in the child-agent history entry."""
-    summary = parsed.get("summary", {})
+def normalize_analysis_submission(entry: dict[str, Any]) -> dict[str, Any]:
+    """Keep only qualitative fields owned by the child agent."""
     normalized = dict(entry)
-    normalized.setdefault("schema_version", "llm_activity_history_entry.v2")
-    normalized["activity_key"] = _activity_key(path)
-    normalized["file_path"] = project_relative_or_absolute(path)
-    local_start = local_time_without_timezone(
-        summary.get("start_time_local")
-        or normalized.get("start_time_local")
-        or normalized.get("start_time")
-        or summary.get("start_time")
-    )
-    normalized["start_time"] = local_start
-    normalized["start_time_local"] = local_start
-    normalized.setdefault("sport_type", summary.get("sport_type"))
-    normalized.setdefault("sub_sport", summary.get("sub_sport"))
-    normalized.setdefault("duration_s", summary.get("duration_s"))
-    normalized.setdefault("distance_m", summary.get("distance_m"))
     normalized.setdefault("brief", "")
     return normalized
 
@@ -416,7 +416,6 @@ def _compact_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "activity_key": result.get("activity_key"),
         "fit_path": result.get("fit_path"),
-        "summary_path": result.get("summary_path"),
         "sport_type": fit_summary.get("sport_type"),
         "start_time_local": fit_summary.get("start_time_local"),
         "duration_min": _seconds_to_minutes(fit_summary.get("duration_s")),
@@ -424,7 +423,6 @@ def _compact_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
         "markdown_report": result.get("markdown_report"),
         "strava_summary": result.get("strava_summary"),
         "analysis_summary": get_analysis_summary(result),
-        "history_entry": result.get("history_entry") if isinstance(result.get("history_entry"), dict) else {},
         "activity_metrics": result.get("activity_metrics") if isinstance(result.get("activity_metrics"), dict) else {},
         "model": result.get("model"),
         "status": result.get("status") or "analyzed",
@@ -449,10 +447,8 @@ def _analysis_error_result(fit_path: str, exc: Exception, *, user_request: str =
     return {
         "activity_key": None,
         "fit_path": str(path),
-        "summary_path": None,
         "markdown_report": report,
         "strava_summary": "",
-        "history_entry": {},
         "status": "analysis_error",
         "agent": "ActivityAnalysisAgent",
         "analysis_error": {
@@ -463,29 +459,11 @@ def _analysis_error_result(fit_path: str, exc: Exception, *, user_request: str =
     }
 
 
-def _summary_path(path: Path) -> Path:
-    ensure_data_dirs()
-    return Path("data") / "summaries" / f"{path.stem}.summary.json"
-
-
-def _read_existing_summary(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def _sanitize_result_times(result: dict[str, Any]) -> None:
     fit_summary = result.get("fit_summary")
     if isinstance(fit_summary, dict):
         result["fit_summary"] = llm_safe_fit_summary(fit_summary)
 
-    history_before = result.get("history_before")
-    if isinstance(history_before, dict):
-        result["history_before"] = llm_safe_history(history_before)
     history_context = result.get("history_context")
     if isinstance(history_context, dict):
         result["history_context"] = llm_safe_history(history_context)
@@ -533,15 +511,15 @@ def _extract_final_jsonish_object(text: str) -> dict[str, Any]:
     """
     action = _extract_simple_json_string(text, "action") or "final"
     markdown_report = _extract_delimited_jsonish_string(text, "markdown_report", "strava_summary")
-    strava_summary = _extract_delimited_jsonish_string(text, "strava_summary", "history_entry")
-    history_entry = _extract_jsonish_history_entry(text)
+    strava_summary = _extract_delimited_jsonish_string(text, "strava_summary", "analysis_summary")
+    analysis_summary = _extract_jsonish_object(text, "analysis_summary")
     if not markdown_report and not strava_summary:
         raise RuntimeError("LLM response must be a JSON object")
     return {
         "action": action,
         "markdown_report": markdown_report,
         "strava_summary": strava_summary,
-        "history_entry": history_entry,
+        "analysis_summary": analysis_summary,
     }
 
 
@@ -566,10 +544,10 @@ def _extract_delimited_jsonish_string(text: str, key: str, next_key: str) -> str
     return _decode_jsonish_string(text[start : start + next_match.start()])
 
 
-def _extract_jsonish_history_entry(text: str) -> dict[str, Any]:
+def _extract_jsonish_object(text: str, key: str) -> dict[str, Any]:
     import re
 
-    match = re.search(r'"history_entry"\s*:\s*', text)
+    match = re.search(rf'"{key}"\s*:\s*', text)
     if not match:
         return {}
     start = text.find("{", match.end())

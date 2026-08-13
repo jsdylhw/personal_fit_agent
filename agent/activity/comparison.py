@@ -1,17 +1,12 @@
-"""基于已有 summary.json 的多活动对比.
-
-这里不重新解析 FIT,也不调用 LLM.它只读取已经生成的活动报告,把关键字段
-整理成 tool-use runtime 可消费的结构化对比结果.
-"""
+"""基于 SQLite 中已有 V2 报告的确定性多活动对比。"""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 from agent.context import AgentContext
-from core.activity_summary import build_history_entry, get_analysis_summary, get_tss
+from core.activity_summary import build_history_view, get_analysis_summary, get_tss
+from core.storage.activity_store import ActivityStore
 
 
 def compare_selected_activities_tool(
@@ -34,18 +29,16 @@ def compare_selected_activities_tool(
     loaded: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for activity in activities:
-        summary_path = _resolve_summary_path(activity)
-        if not summary_path:
+        summary, error = read_activity_report(activity)
+        if summary is None:
             missing.append(_compact_missing_summary(activity))
             continue
-        try:
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        if error:
             return {
                 "error": "summary_read_failed",
-                "message": f"failed to read summary: {summary_path}; {exc}",
+                "message": error,
             }
-        loaded.append(_activity_report_from_summary(activity, summary_path, summary))
+        loaded.append(_activity_report_from_summary(activity, summary))
 
     if missing:
         return {
@@ -69,69 +62,39 @@ def compare_selected_activities_tool(
     }
 
 
-def read_activity_summary(activity: dict[str, Any]) -> tuple[Path | None, dict[str, Any] | None, str | None]:
-    """读取单条活动已有 summary,返回 path/data/error."""
-    summary_path = _resolve_summary_path(activity)
-    if not summary_path:
-        return None, None, "missing_activity_summary"
-    try:
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return summary_path, None, f"summary_read_failed: {exc}"
-    if not isinstance(summary, dict):
-        return summary_path, None, "summary_must_be_object"
-    return summary_path, summary, None
-
-
-def _resolve_summary_path(activity: dict[str, Any]) -> Path | None:
-    summary_path = activity.get("summary_path")
-    if summary_path:
-        path = Path(str(summary_path)).expanduser()
-        if path.exists():
-            return path
-
-        # activity_index 可能来自 Windows 路径;在当前项目下用文件名回退查找.
-        name = _path_name(str(summary_path))
-        fallback = Path("data") / "summaries" / name
-        if fallback.exists():
-            return fallback
-
-    fit_path = activity.get("fit_path")
-    if fit_path:
-        stem = _path_stem(str(fit_path))
-        fallback = Path("data") / "summaries" / f"{stem}.summary.json"
-        if fallback.exists():
-            return fallback
-
-    return None
+def read_activity_report(activity: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    """Read the activity's current report exclusively from SQLite."""
+    activity_key = str(activity.get("activity_key") or "")
+    if not activity_key:
+        return None, "missing_activity_key"
+    stored = ActivityStore().get_report_for_activity(activity)
+    return (stored, None) if stored else (None, "missing_activity_report")
 
 
 def _activity_report_from_summary(
     activity: dict[str, Any],
-    summary_path: Path,
     summary: dict[str, Any],
 ) -> dict[str, Any]:
     fit_summary = summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {}
     analysis_summary = get_analysis_summary(summary)
-    history_entry = build_history_entry(summary)
+    history_view = build_history_view(summary)
     metrics = summary.get("activity_metrics") if isinstance(summary.get("activity_metrics"), dict) else {}
     scale = metrics.get("scale") if isinstance(metrics.get("scale"), dict) else {}
     power = metrics.get("power") if isinstance(metrics.get("power"), dict) else {}
     return {
         "activity_key": summary.get("activity_key") or activity.get("activity_key"),
         "file_name": activity.get("file_name") or _path_name(str(summary.get("fit_path") or "")),
-        "summary_path": str(summary_path),
-        "start_time_local": fit_summary.get("start_time_local") or history_entry.get("start_time_local"),
-        "sport_type": fit_summary.get("sport_type") or history_entry.get("sport_type"),
+        "start_time_local": fit_summary.get("start_time_local") or history_view.get("start_time_local"),
+        "sport_type": fit_summary.get("sport_type") or history_view.get("sport_type"),
         "duration_min": _first_number(
             scale.get("duration_min"),
             _seconds_to_minutes(fit_summary.get("duration_s")),
-            history_entry.get("duration_min"),
+            history_view.get("duration_min"),
         ),
         "distance_km": _first_number(
             scale.get("distance_km"),
             _meters_to_km(fit_summary.get("distance_m")),
-            history_entry.get("distance_km"),
+            history_view.get("distance_km"),
         ),
         "summary_label": analysis_summary.get("summary_label"),
         "main_stimulus": analysis_summary.get("main_stimulus"),
@@ -225,17 +188,11 @@ def _compact_missing_summary(activity: dict[str, Any]) -> dict[str, Any]:
     return {
         "activity_key": activity.get("activity_key"),
         "fit_path": activity.get("fit_path"),
-        "summary_path": activity.get("summary_path"),
     }
 
 
 def _path_name(value: str) -> str:
     return value.replace("\\", "/").rstrip("/").split("/")[-1]
-
-
-def _path_stem(value: str) -> str:
-    name = _path_name(value)
-    return name.rsplit(".", 1)[0] if "." in name else name
 
 
 def _number(value: Any) -> float | None:

@@ -1,11 +1,10 @@
-"""读取已落盘 summary 的多活动确定性汇总。"""
+"""读取 SQLite V2 报告的多活动确定性汇总。"""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any, Iterable
 
+from agent.activity.comparison import read_activity_report
 from core.activity_summary import get_analysis_summary
 
 
@@ -16,13 +15,11 @@ def aggregate_summaries(activities: Iterable[dict[str, Any]]) -> dict[str, Any]:
     for activity in activities:
         if not isinstance(activity, dict):
             continue
-        summary_path = _summary_path(activity)
-        summary = _read_summary(summary_path)
+        summary, _ = read_activity_report(activity)
         if summary is None:
             omitted.append({
                 "activity_key": activity.get("activity_key"),
-                "summary_path": str(summary_path) if summary_path else None,
-                "reason": "summary_unavailable",
+                "reason": "report_unavailable",
             })
             continue
         fit_summary = summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {}
@@ -35,7 +32,6 @@ def aggregate_summaries(activities: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "summary_label": analysis.get("summary_label"),
             "main_stimulus": analysis.get("main_stimulus"),
             "load_label": analysis.get("load_label"),
-            "summary_path": str(summary_path),
         })
     return {
         "schema_version": "activity_operation_aggregate.v1",
@@ -50,24 +46,6 @@ def aggregate_summaries(activities: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "duration_min": round(sum(float(item.get("duration_min") or 0) for item in included), 1),
         },
     }
-
-
-def _summary_path(activity: dict[str, Any]) -> Path | None:
-    if activity.get("summary_path"):
-        return Path(str(activity["summary_path"])).expanduser()
-    if activity.get("fit_path"):
-        return Path("data") / "summaries" / f"{Path(str(activity['fit_path'])).stem}.summary.json"
-    return None
-
-
-def _read_summary(path: Path | None) -> dict[str, Any] | None:
-    if path is None:
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
 
 
 def _distance_km(fit_summary: dict[str, Any], activity: dict[str, Any]) -> float:

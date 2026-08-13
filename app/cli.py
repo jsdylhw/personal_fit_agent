@@ -13,8 +13,8 @@ from agent.main_agent.loop import run_tool_loop
 from core.fit_paths import resolve_fit_path
 from agent.activity.operations.service import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
 from core.strava_upload import (
-    update_strava_description_from_summary,
-    upload_summary_to_strava,
+    update_strava_description,
+    upload_activity_to_strava,
 )
 from sinks.strava import StravaSink
 
@@ -90,18 +90,18 @@ def sync_garmin_command(
 
 @app.command("upload-strava")
 def upload_strava_command(
-    summary_path: str,
+    activity_key: str,
     title: str | None = None,
     wait: bool = True,
     force: bool = typer.Option(False, "--force", help="遇到重复活动时不报错,改为更新已有活动的描述"),
 ) -> None:
-    result = upload_summary_to_strava(summary_path, title=title, wait=wait, force=force)
+    result = upload_activity_to_strava(activity_key, title=title, wait=wait, force=force)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 
 @app.command("update-strava-description")
-def update_strava_description_command(activity_id: str, summary_path: str) -> None:
-    result = update_strava_description_from_summary(activity_id, summary_path)
+def update_strava_description_command(activity_id: str, activity_key: str) -> None:
+    result = update_strava_description(activity_id, activity_key)
     typer.echo(f"已更新 Strava 活动 {activity_id} 的描述。")
     detail = result.get("description")
     if detail:

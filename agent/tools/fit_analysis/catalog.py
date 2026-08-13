@@ -94,21 +94,26 @@ SUBMIT_ANALYSIS_TOOL = ToolDef(
         "properties": {
             "markdown_report": {
                 "type": "string",
-                "description": "Complete Chinese Markdown activity report that explicitly answers user_request when present.",
+                "minLength": 1,
+                "description": (
+                    "Complete but concise Chinese Markdown activity report, under 1800 Chinese characters, "
+                    "that explicitly answers user_request when present. Never submit an empty string."
+                ),
             },
             "strava_summary": {
                 "type": "string",
+                "minLength": 1,
                 "description": "About 200 Chinese characters for Strava, following strava_summary_style.",
             },
-            "history_entry": {
+            "analysis_summary": {
                 "type": "object",
                 "description": (
-                    "Compact qualitative entry for the separate history cache. Use load_label for a short "
-                    "non-numeric load description; objective TSS/IF/NP values are persisted by local code."
+                    "Compact qualitative judgement for this report. Use load_label for a short non-numeric "
+                    "description; objective TSS/IF/NP values are persisted by local code."
                 ),
             },
         },
-        "required": ["markdown_report", "strava_summary", "history_entry"],
+        "required": ["markdown_report", "strava_summary", "analysis_summary"],
     },
     category=CATEGORY_ANALYSIS,
 )

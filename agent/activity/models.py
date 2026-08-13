@@ -23,7 +23,6 @@ class ActivityHandle:
     activity_key: str
     activity_index: int | None = None
     fit_path: str | None = None
-    summary_path: str | None = None
     file_name: str | None = None
     start_time_local: str | None = None
     date_local: str | None = None
@@ -40,12 +39,11 @@ class ActivityHandle:
 
     @classmethod
     def from_index_entry(cls, entry: dict[str, Any]) -> "ActivityHandle":
-        """从 activity_index.json 的一行创建."""
+        """从 SQLite 活动目录的一行创建。"""
         return cls(
             activity_key=str(entry.get("activity_key") or ""),
             activity_index=_int_or_none(entry.get("activity_index")),
             fit_path=entry.get("fit_path"),
-            summary_path=entry.get("summary_path"),
             file_name=entry.get("file_name"),
             start_time_local=entry.get("start_time_local"),
             date_local=entry.get("date_local"),
@@ -62,13 +60,12 @@ class ActivityHandle:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """兼容旧接口,返回旧格式 dict (prune None 值)."""
+        """返回工具层使用的紧凑 dict。"""
         d = {
             "activity_key": self.activity_key,
             "activity_index": self.activity_index,
             "file_name": self.file_name,
             "fit_path": self.fit_path,
-            "summary_path": self.summary_path,
             "start_time_local": self.start_time_local,
             "date_local": self.date_local,
             "sport_type": self.sport_type,

@@ -49,19 +49,14 @@ Running analysis mode:
 FIT_ANALYSIS_OUTPUT_CONTRACT = """\
 Finish by calling submit_analysis with this input object:
 {
-  "markdown_report": "# ...",
+  "markdown_report": "# ... (non-empty concise Chinese Markdown; keep it under 1800 Chinese characters so the tool input is not truncated)",
   "strava_summary": "About 200 Chinese characters for Strava. Follow strava_summary_style from the user payload. The tone may be normal, professional, playful, minimal, humorous, or occasionally catgirl; do not force catgirl wording unless that selected style asks for it. Avoid repeating basics Strava already displays. Prefer training stimulus, rhythm judgment, TSS/IF/NP, data-quality reminders, and next-session advice.",
-  "history_entry": {
-    "schema_version": "llm_activity_history_entry.v2",
-    "start_time": "Local wall-clock time copied from fit_summary.start_time_local, with no timezone suffix.",
-    "sport_type": "...",
-    "duration_min": 0,
-    "distance_km": 0,
+  "analysis_summary": {
     "summary_label": "...",
     "main_stimulus": "...",
     "load_label": "A short qualitative label such as low total load. Do not repeat TSS, IF, NP or other numeric metrics here.",
     "quality_notes": ["..."],
-    "brief": "A compact Chinese note for future comparison."
+    "brief": "A compact Chinese judgement for future comparison."
   }
 }
 """

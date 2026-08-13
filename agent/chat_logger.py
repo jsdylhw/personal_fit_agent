@@ -101,7 +101,7 @@ def _format_record(record: dict[str, Any]) -> list[str]:
     event = str(record.get("event") or "event")
     logged_at = record.get("logged_at")
     lines = ["---", "", f"## {event}", "", f"- logged_at: `{logged_at}`"]
-    for key in ["fit_path", "activity_key", "summary_path", "session_id"]:
+    for key in ["fit_path", "activity_key", "session_id"]:
         if record.get(key):
             lines.append(f"- {key}: `{record[key]}`")
     lines.append("")
@@ -244,7 +244,7 @@ def _main_agent_result_summary(result: Any, *, final_response: str = "") -> list
                 + ", ".join(
                     part for part in [
                         f"fit=`{item.get('fit_path')}`" if item.get("fit_path") else "",
-                        f"summary=`{item.get('summary_path')}`" if item.get("summary_path") else "",
+                        f"report=`{item.get('report_schema_version')}`" if item.get("report_schema_version") else "",
                         f"status=`{item.get('status')}`" if item.get("status") else "",
                     ] if part
                 )
@@ -287,7 +287,7 @@ def _summary_generation_line(item: dict[str, Any]) -> str:
         f"activity=#{item.get('activity_index')}" if item.get("activity_index") is not None else "",
         f"status=`{item.get('status')}`" if item.get("status") else "",
         f"fit=`{item.get('fit_path')}`" if item.get("fit_path") else "",
-        f"summary=`{item.get('summary_path')}`" if item.get("summary_path") else "",
+        f"report=`{item.get('report_schema_version')}`" if item.get("report_schema_version") else "",
     ]
     return ", ".join(part for part in parts if part)
 
@@ -306,8 +306,6 @@ def _main_agent_activity_section(
         if not isinstance(activity, dict):
             continue
         lines.append(f"- {_activity_line(activity)}")
-        if activity.get("summary_path"):
-            lines.append(f"  - summary: `{activity.get('summary_path')}`")
         if activity.get("fit_path"):
             lines.append(f"  - fit: `{activity.get('fit_path')}`")
     lines.append("")

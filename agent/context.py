@@ -18,11 +18,11 @@ class AgentContext:
 
     活动定位:
       selected_handles       — 新接口: list[ActivityHandle]
-      selected_activities    — 旧接口(兼容): list[dict], 与 handles 保持同步
+      selected_activities    — 工具层 dict 视图,与 handles 保持同步
       selected_activity_range — 活动范围元数据
 
-    单活动快捷字段(兼容旧代码):
-      current_fit_file / current_activity_key / current_summary_path
+    单活动快捷字段:
+      current_fit_file / current_activity_key
 
     内部缓存:
       last_failed_action / parsed / history_before
@@ -35,7 +35,7 @@ class AgentContext:
     last_failed_action: dict[str, Any] | None = None
     last_llm_error: dict[str, Any] | None = None
 
-    # 活动定位 — 新旧接口并存
+    # 活动定位
     selected_handles: list[ActivityHandle] = field(default_factory=list)
     selected_activities: list[dict[str, Any]] = field(default_factory=list)
     selected_activity_range: dict[str, Any] | None = None
@@ -43,7 +43,6 @@ class AgentContext:
     # 单活动快捷字段
     current_fit_file: Path | None = None
     current_activity_key: str | None = None
-    current_summary_path: Path | None = None
 
     # 内部缓存
     parsed: dict[str, Any] | None = None
@@ -76,7 +75,6 @@ class AgentContext:
         self.selected_activity_range = None
         self.current_fit_file = None
         self.current_activity_key = None
-        self.current_summary_path = None
 
     # -- 内部 ------------------------------------------------------------
 
@@ -84,5 +82,3 @@ class AgentContext:
         if handle.fit_path:
             self.current_fit_file = Path(handle.fit_path).expanduser()
         self.current_activity_key = handle.activity_key
-        if handle.summary_path:
-            self.current_summary_path = Path(handle.summary_path).expanduser()

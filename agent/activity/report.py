@@ -1,4 +1,4 @@
-"""基于已有 summary.json 展示单活动报告."""
+"""基于 SQLite V2 报告展示或定向分析单活动。"""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from agent.activity.analysis_agent import run_activity_analysis_agent
-from agent.activity.comparison import read_activity_summary
+from agent.activity.comparison import read_activity_report
 from agent.context import AgentContext
-from core.activity_summary import build_history_entry, get_analysis_summary
+from core.activity_summary import build_history_view, get_analysis_summary
 
 
 def show_selected_activity_report_tool(
@@ -26,12 +26,11 @@ def show_selected_activity_report_tool(
             "message": "analyze_activity requires a resolved activity.",
         }
 
-    summary_path, summary, error = read_activity_summary(activity)
+    summary, error = read_activity_report(activity)
     if bool(args.get("force")) and isinstance(summary, dict):
         refreshed_activity = {
             **activity,
             "fit_path": activity.get("fit_path") or summary.get("fit_path"),
-            "summary_path": str(summary_path) if summary_path else activity.get("summary_path"),
             "activity_key": activity.get("activity_key") or summary.get("activity_key"),
         }
         generated = _analyze_missing_summary(name, args, context, refreshed_activity)
@@ -53,7 +52,6 @@ def show_selected_activity_report_tool(
         return {
             "error": "missing_markdown_report",
             "message": "Summary exists but does not contain markdown_report or analysis_summary.",
-            "summary_path": str(summary_path) if summary_path else None,
         }
 
     return {
@@ -64,8 +62,7 @@ def show_selected_activity_report_tool(
             "schema_version": "activity_report.v1",
             "activity_key": summary.get("activity_key") or activity.get("activity_key"),
             "fit_path": summary.get("fit_path") or activity.get("fit_path"),
-            "summary_path": str(summary_path) if summary_path else None,
-            "source": "existing_summary",
+            "source": "existing_report",
             "fit_summary": summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {},
             "analysis_summary": get_analysis_summary(summary),
         },
@@ -85,21 +82,18 @@ def query_selected_activity_detail_tool(
     if not activity:
         return {"error": "missing_selected_activity", "message": "query_activity_detail requires a resolved activity."}
 
-    summary_path, summary, error = read_activity_summary(activity)
+    summary, error = read_activity_report(activity)
     if error or summary is None:
         generated = _analyze_missing_summary(name, {}, context, activity)
         if generated.get("error"):
             return generated
-        summary_path, summary, error = read_activity_summary({
-            **activity,
-            "summary_path": generated.get("result", {}).get("summary_path"),
-        })
+        summary, error = read_activity_report(activity)
         if error or not isinstance(summary, dict):
             return {
                 "error": "missing_summary_after_analysis",
                 "message": "完整报告生成后无法读取 summary，无法继续定向查询。",
             }
-    return _answer_targeted_question(name, context, activity, summary, summary_path, question)
+    return _answer_targeted_question(name, context, activity, summary, question)
 
 
 def _answer_targeted_question(
@@ -107,7 +101,6 @@ def _answer_targeted_question(
     context: AgentContext,
     activity: dict[str, Any],
     summary: dict[str, Any],
-    summary_path: Path | None,
     user_request: str,
 ) -> dict[str, Any]:
     """Answer a new question without overwriting the cached full report."""
@@ -116,7 +109,6 @@ def _answer_targeted_question(
         return {
             "error": "missing_fit_path",
             "message": "A focused activity question requires the original FIT file.",
-            "summary_path": str(summary_path) if summary_path else None,
         }
 
     analysis = run_activity_analysis_agent(
@@ -139,7 +131,6 @@ def _answer_targeted_question(
             "schema_version": "activity_report.v1",
             "activity_key": analysis.get("activity_key") or activity.get("activity_key"),
             "fit_path": analysis.get("fit_path") or fit_path,
-            "summary_path": str(summary_path) if summary_path else analysis.get("summary_path"),
             "source": "targeted_query",
             "status": analysis.get("status"),
             "agent": analysis.get("agent"),
@@ -177,11 +168,8 @@ def _analyze_missing_summary(
             "analysis": analysis,
         }
 
-    summary_path = analysis.get("summary_path")
     context.current_fit_file = Path(str(analysis.get("fit_path") or fit_path)).expanduser()
     context.current_activity_key = analysis.get("activity_key") or activity.get("activity_key")
-    if summary_path:
-        context.current_summary_path = Path(str(summary_path)).expanduser()
 
     source = "analysis_agent_error" if analysis.get("analysis_error") else "generated_summary"
     return {
@@ -192,7 +180,6 @@ def _analyze_missing_summary(
             "schema_version": "activity_report.v1",
             "activity_key": analysis.get("activity_key") or activity.get("activity_key"),
             "fit_path": analysis.get("fit_path") or fit_path,
-            "summary_path": summary_path,
             "source": source,
             "status": analysis.get("status"),
             "agent": analysis.get("agent"),
@@ -206,11 +193,10 @@ def _selected_activity(context: AgentContext) -> dict[str, Any] | None:
     if context.selected_activities:
         first = context.selected_activities[0]
         return first if isinstance(first, dict) else None
-    if context.current_fit_file or context.current_activity_key or context.current_summary_path:
+    if context.current_fit_file or context.current_activity_key:
         return {
             "activity_key": context.current_activity_key,
             "fit_path": str(context.current_fit_file) if context.current_fit_file else None,
-            "summary_path": str(context.current_summary_path) if context.current_summary_path else None,
         }
     return None
 
@@ -219,14 +205,14 @@ def _fallback_report(summary: dict[str, Any]) -> str:
     analysis_summary = get_analysis_summary(summary)
     if not analysis_summary:
         return ""
-    history_entry = build_history_entry(summary)
+    history_view = build_history_view(summary)
     lines = [
         f"# {analysis_summary.get('summary_label') or '活动报告'}",
         "",
-        f"- 时间: {history_entry.get('start_time_local') or history_entry.get('start_time') or '未知'}",
-        f"- 类型: {history_entry.get('sport_type') or '未知'}",
-        f"- 距离: {history_entry.get('distance_km') or '未知'} km",
-        f"- 时长: {history_entry.get('duration_min') or '未知'} 分钟",
+        f"- 时间: {history_view.get('start_time_local') or history_view.get('start_time') or '未知'}",
+        f"- 类型: {history_view.get('sport_type') or '未知'}",
+        f"- 距离: {history_view.get('distance_km') or '未知'} km",
+        f"- 时长: {history_view.get('duration_min') or '未知'} 分钟",
         f"- 主要刺激: {analysis_summary.get('main_stimulus') or '未知'}",
         f"- 负荷标签: {analysis_summary.get('load_label') or '未知'}",
     ]

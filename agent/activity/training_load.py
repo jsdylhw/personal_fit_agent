@@ -10,7 +10,7 @@ from collections import Counter
 from datetime import date, datetime
 from typing import Any
 
-from agent.activity.comparison import read_activity_summary
+from agent.activity.comparison import read_activity_report
 from agent.activity.history_metrics import load_activity_metrics
 from agent.context import AgentContext
 from core.activity_summary import get_analysis_summary, get_tss
@@ -36,12 +36,11 @@ def summarize_recent_training_load_tool(
     reports: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for activity in activities:
-        _, summary, summary_error = read_activity_summary(activity)
+        summary, summary_error = read_activity_report(activity)
         metrics, metrics_source, metrics_error = load_activity_metrics(activity)
         if metrics is None:
             missing.append({
                 "activity_key": activity.get("activity_key"),
-                "summary_path": activity.get("summary_path"),
                 "error": metrics_error or summary_error,
             })
             continue

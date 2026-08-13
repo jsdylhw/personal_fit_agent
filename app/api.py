@@ -1,4 +1,4 @@
-"""FastAPI Web API:9 个接口,提供 Web UI 后端的活动管理能力.
+"""FastAPI Web API for the SQLite-backed activity catalogue.
 
 注意:所有接口是同步的,LLM 分析接口会阻塞事件循环(30-120s).
 后续应改为 async + run_in_executor.
@@ -7,8 +7,6 @@
 from __future__ import annotations
 
 import hmac
-import json
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,9 +22,10 @@ from agent.activity.operations.service import (
     analyze_fit_document,
     check_garmin_connection,
     sync_garmin_activities_tool,
-    upload_summary_document,
 )
 from core.garmin_cn import DEFAULT_OUTPUT_DIR
+from core.storage.activity_store import ActivityStore, file_content_key
+from core.strava_upload import upload_activity_to_strava
 from fit.parser import parse_fit
 
 
@@ -46,7 +45,7 @@ class AnalyzeFitRequest(BaseModel):
 
 
 class UploadStravaRequest(BaseModel):
-    summary_path: str
+    activity_key: str
     title: str | None = None
     wait: bool = True
     force: bool = False
@@ -145,33 +144,20 @@ def analyze_fit_endpoint(request: AnalyzeFitRequest, http_request: Request) -> d
 
 
 @app.get("/api/summary")
-def summary_endpoint(path: str, request: Request):
-    """读取 summary JSON,返回 markdown_report 用于前端展示.
-
-    只允许 data/summaries/ 下的 .summary.json 文件.
-    """
+def summary_endpoint(activity_key: str, request: Request):
+    """Return the current report body by stable activity key."""
     _require_api_access(request)
-    requested = _require_managed_path(
-        path,
-        allowed_root=Path("data/summaries"),
-        suffix=".summary.json",
-        label="summary file",
-    )
-    data = json.loads(requested.read_text(encoding="utf-8"))
-    return {"markdown_report": data.get("markdown_report", "")}
+    data = ActivityStore().get_report(activity_key)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Activity report does not exist.")
+    return {"activity_key": activity_key, "markdown_report": data.get("markdown_report", "")}
 
 
 @app.post("/api/strava/upload")
 def strava_upload_endpoint(request: UploadStravaRequest, http_request: Request) -> dict[str, Any]:
     _require_api_access(http_request)
-    summary_path = _require_managed_path(
-        request.summary_path,
-        allowed_root=Path("data/summaries"),
-        suffix=".summary.json",
-        label="summary file",
-    )
-    return upload_summary_document(
-        summary_path,
+    return upload_activity_to_strava(
+        request.activity_key,
         title=request.title,
         wait=request.wait,
         force=request.force,
@@ -232,27 +218,28 @@ def _fit_files(output_dir: Path) -> list[Path]:
 
 
 def _fit_file_info(path: Path) -> dict[str, Any]:
-    summary_path = _matching_summary_path(path)
+    activity_key = file_content_key(path)
+    store = ActivityStore()
+    summary = store.get_report(activity_key)
     info: dict[str, Any] = {
+        "activity_key": activity_key,
         "name": path.name,
         "path": str(path),
         "size_bytes": path.stat().st_size,
         "mtime": path.stat().st_mtime,
-        "summary_path": str(summary_path) if summary_path.exists() else None,
-        "has_summary": summary_path.exists(),
+        "has_summary": summary is not None,
     }
 
-    if summary_path.exists():
+    if summary is not None:
         try:
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
             info["fit_summary"] = summary.get("fit_summary")
             info["analysis_summary"] = get_analysis_summary(summary)
             info["summary_schema_version"] = summary_schema_version(summary)
             info["display_summary"] = _display_summary_from_analysis(summary)
             info["strava_summary"] = summary.get("strava_summary")
             info["strava_summary_tone"] = summary.get("strava_summary_tone")
-        except (OSError, json.JSONDecodeError):
-            info["summary_error"] = "Failed to read summary JSON"
+        except (TypeError, ValueError):
+            info["summary_error"] = "Failed to read activity report"
     else:
         try:
             fit_summary = parse_fit(path).get("summary")
@@ -308,23 +295,6 @@ def _activity_sort_key(item: dict[str, Any]) -> float | str:
     if parsed:
         return parsed.timestamp()
     return str(value or item.get("name") or "")
-
-
-def _matching_summary_path(path: Path) -> Path:
-    exact = Path("data") / "summaries" / f"{path.stem}.summary.json"
-    if exact.exists():
-        return exact
-    activity_id = _activity_id_from_stem(path.stem)
-    if activity_id:
-        matches = sorted((Path("data") / "summaries").glob(f"*_{activity_id}.summary.json"))
-        if matches:
-            return matches[0]
-    return exact
-
-
-def _activity_id_from_stem(stem: str) -> str | None:
-    match = re.search(r"_(\d{6,})$", stem)
-    return match.group(1) if match else None
 
 
 def _parse_datetime(value: Any) -> datetime | None:

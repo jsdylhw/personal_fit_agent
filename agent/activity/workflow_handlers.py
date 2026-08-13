@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from agent.activity.operations.analysis import ensure_summary
 from agent.activity.operations.aggregate import aggregate_summaries
-from agent.activity.operations.strava import upload_summary
+from agent.activity.operations.strava import upload_activity
 from agent.activity.workflow_factory import (
     TASK_AGGREGATE_REPORT,
     TASK_ENSURE_SUMMARY,
     TASK_UPLOAD_STRAVA,
 )
 from agent.runtime.executor import TaskExecution, TaskHandler
+from core.storage.activity_store import ActivityStore
 
 def activity_task_handlers() -> dict[str, TaskHandler]:
     """注册活动领域任务。任务直接执行，状态由持久化 Run 记录。"""
@@ -28,12 +28,10 @@ def _ensure_summary(run: dict[str, Any], task: dict[str, Any]) -> TaskExecution:
     activity = _activity(run, task)
     if activity is None:
         return TaskExecution(status="failed", details={"error": "missing_activity"})
-    existing_summary = _existing_summary_path(activity)
-    if existing_summary is not None and not bool((run.get("request") or {}).get("force")):
+    if _has_existing_report(activity) and not bool((run.get("request") or {}).get("force")):
         return TaskExecution(
             status="skipped",
-            details={"summary_path": str(existing_summary), "reason": "existing_summary"},
-            activity_update={"summary_path": str(existing_summary)},
+            details={"reason": "existing_report"},
         )
     fit_path = activity.get("fit_path")
     if not fit_path:
@@ -47,8 +45,10 @@ def _ensure_summary(run: dict[str, Any], task: dict[str, Any]) -> TaskExecution:
         )
     return TaskExecution(
         status="skipped" if status == "skipped" else "completed",
-        details={"summary_path": result.get("summary_path"), "result_status": result.get("result_status")},
-        activity_update={"summary_path": result.get("summary_path")},
+        details={
+            "report_schema_version": result.get("report_schema_version"),
+            "result_status": result.get("result_status"),
+        },
     )
 
 
@@ -77,7 +77,7 @@ def _upload_strava(run: dict[str, Any], task: dict[str, Any]) -> TaskExecution:
     if not fit_path:
         return TaskExecution(status="failed", details={"error": "missing_fit_path"})
 
-    result = upload_summary(str(fit_path), force=bool(request.get("force_upload")))
+    result = upload_activity(str(fit_path), force=bool(request.get("force_upload")))
     if result.get("status") != "completed":
         return TaskExecution(
             status="failed",
@@ -103,14 +103,7 @@ def _activity(run: dict[str, Any], task: dict[str, Any]) -> dict[str, Any] | Non
     return None
 
 
-def _existing_summary_path(activity: dict[str, Any]) -> Path | None:
-    summary_path = activity.get("summary_path")
-    if summary_path:
-        path = Path(str(summary_path)).expanduser()
-        if path.exists():
-            return path
-    fit_path = activity.get("fit_path")
-    if not fit_path:
-        return None
-    default_path = Path("data") / "summaries" / f"{Path(str(fit_path)).stem}.summary.json"
-    return default_path if default_path.exists() else None
+def _has_existing_report(activity: dict[str, Any]) -> bool:
+    """Return report existence from SQLite; exported JSON is irrelevant."""
+    activity_key = str(activity.get("activity_key") or "")
+    return bool(activity_key and ActivityStore().get_report_for_activity(activity))

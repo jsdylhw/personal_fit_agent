@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -164,7 +163,7 @@ def analyze_fit_file_tool(
         force: 强制重新分析(即使已有缓存)。
 
     Returns:
-        dict: 精简活动元数据 + summary_path/markdown_report,供 main_agent 直接展示报告.
+        dict: 精简活动元数据与报告正文,供 main_agent 直接展示.
     """
     result = analyze_fit_document(fit_path, use_history=use_history, force=force)
     fit_summary = result.get("fit_summary") or {}
@@ -173,7 +172,6 @@ def analyze_fit_file_tool(
     return {
         "activity_key": result.get("activity_key"),
         "fit_path": result.get("fit_path"),
-        "summary_path": result.get("summary_path"),
         "sport_type": fit_summary.get("sport_type"),
         "start_time_local": fit_summary.get("start_time_local"),
         "duration_min": _seconds_to_minutes(fit_summary.get("duration_s")),
@@ -187,22 +185,6 @@ def analyze_fit_file_tool(
     }
 
 
-def upload_summary_document(
-    summary_path: str | Path,
-    *,
-    title: str | None = None,
-    wait: bool = True,
-    force: bool = False,
-) -> dict[str, Any]:
-    """上传一个受调用方验证过路径边界的 summary 文档。"""
-    from core.strava_upload import upload_summary_to_strava
-
-    kwargs: dict[str, Any] = {"wait": wait, "force": force}
-    if title is not None:
-        kwargs["title"] = title
-    return upload_summary_to_strava(summary_path, **kwargs)
-
-
 def upload_to_strava_tool(fit_path: str, *, force: bool = False) -> dict[str, Any]:
     """上传 FIT 文件到 Strava 并写入描述。
 
@@ -214,19 +196,24 @@ def upload_to_strava_tool(fit_path: str, *, force: bool = False) -> dict[str, An
         dict: 执行成功返回 {status, strava_activity_id}。
     """
     path = Path(fit_path)
-    summary_path = Path("data/summaries") / f"{path.stem}.summary.json"
+    from core.storage.activity_store import ActivityStore, file_content_key
+    from core.strava_upload import upload_activity_to_strava
 
-    if not summary_path.exists():
+    store = ActivityStore()
+    indexed = store.get_activity_by_fit_path(str(path))
+    activity_key = str(indexed.get("activity_key") or "") if indexed else ""
+    if not activity_key and path.exists():
+        activity_key = file_content_key(path)
+    summary = store.get_report(activity_key) if activity_key else None
+    if summary is None:
         return {"error": "no_summary", "message": f"Please analyze the activity first: {fit_path}"}
-
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
     strava_summary = summary.get("strava_summary")
     if not strava_summary:
         return {"error": "no_strava_summary", "message": "Summary does not contain strava_summary"}
-    pending_activity = _pending_strava_activity_info(path, summary, summary_path)
+    pending_activity = _pending_strava_activity_info(path, summary)
 
     try:
-        result = upload_summary_document(str(summary_path), wait=True, force=force)
+        result = upload_activity_to_strava(activity_key, wait=True, force=force)
     except requests.RequestException as exc:
         return {
             "error": "network_error",
@@ -276,12 +263,11 @@ def upload_to_strava_tool(fit_path: str, *, force: bool = False) -> dict[str, An
     }
 
 
-def _pending_strava_activity_info(path: Path, summary: dict[str, Any], summary_path: Path) -> dict[str, Any]:
+def _pending_strava_activity_info(path: Path, summary: dict[str, Any]) -> dict[str, Any]:
     fit_summary = summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {}
     return {
         "activity_key": summary.get("activity_key"),
         "fit_path": str(path),
-        "summary_path": str(summary_path),
         "sport_type": fit_summary.get("sport_type"),
         "start_time_local": fit_summary.get("start_time_local") or fit_summary.get("start_time"),
         "title": _default_upload_title(fit_summary, path),

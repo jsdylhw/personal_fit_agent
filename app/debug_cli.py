@@ -1,4 +1,4 @@
-"""开发/调试 CLI:检查工具返回、FIT 解析和活动索引.
+"""开发/调试 CLI:检查工具返回、FIT 解析和 SQLite 活动目录.
 
 主 CLI(app.cli) 面向日常使用;这里保留偏底层的验证入口.
 """
@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +21,8 @@ from core.activity_index import (
     resolve_activity,
     upsert_activity_from_fit,
 )
-from core.history import query_activity_history
 from fit.parser import parse_fit
+from core.storage.activity_store import ActivityStore
 
 app = typer.Typer(help="Personal FIT Agent debug CLI")
 
@@ -50,7 +51,7 @@ def tool_call_command(
         if history:
             summary = parsed.get("summary") or {}
             before = summary.get("start_time_local") or summary.get("start_time")
-            history_before = query_activity_history(before=before, days=90, limit=50)
+            history_before = ActivityStore().query_history(before=before, days=90, limit=50)
 
     result = call_fit_analysis_tool(name, arguments, parsed=parsed, history_before=history_before)
     _echo_json(result)
@@ -71,7 +72,7 @@ def inspect_fit_command(
         if history:
             summary_for_history = parsed.get("summary") or {}
             before = summary_for_history.get("start_time_local") or summary_for_history.get("start_time")
-            history_before = query_activity_history(before=before, days=90, limit=50)
+            history_before = ActivityStore().query_history(before=before, days=90, limit=50)
         result = call_fit_analysis_tool(
             tool_name,
             _parse_args_json(args),
@@ -98,15 +99,45 @@ def inspect_fit_command(
 
 @app.command("index-fit")
 def index_fit_command(fit_path: str = typer.Argument("latest"), source: str = "manual") -> None:
-    """把一个 FIT 文件登记到 data/activity_index.json."""
+    """把一个 FIT 文件登记到 SQLite 活动目录。"""
     fit = resolve_fit_path(fit_path)
     _echo_json(upsert_activity_from_fit(fit, source=source))
 
 
 @app.command("rebuild-index")
 def rebuild_index_command() -> None:
-    """扫描本地 FIT 和 summary,重建 data/activity_index.json."""
+    """扫描本地 FIT，重建 SQLite 活动目录。"""
     _echo_json(rebuild_activity_index())
+
+
+@app.command("storage-status")
+def storage_status_command() -> None:
+    """检查 SQLite 中的活动数和各报告版本数量。"""
+    store = ActivityStore()
+    _echo_json({
+        "schema_version": "activity_storage_status.v1",
+        "activity_count": store.count_activities(),
+        "report_counts": store.report_counts(),
+    })
+
+
+@app.command("rebuild-v2-reports")
+def rebuild_v2_reports_command(
+    scope: str = "all",
+    activity_key: list[str] | None = typer.Option(None, "--activity-key", help="只重建指定 activity_key，可重复传入。"),
+) -> None:
+    """提交全量 V2 报告任务，并在 CLI 进程中等待最终结果。"""
+    from agent.activity.report_jobs import get_activity_report_job, submit_activity_report_rebuild
+
+    submitted = submit_activity_report_rebuild(scope=scope, activity_keys=activity_key)
+    typer.echo(f"report job {submitted.get('job_id')}: {submitted.get('status')}")
+    job_id = str(submitted.get("job_id") or "")
+    while job_id:
+        current = get_activity_report_job(job_id)
+        if current.get("status") not in {"queued", "running"}:
+            _echo_json(current)
+            return
+        time.sleep(0.5)
 
 
 @app.command("list-activities")
