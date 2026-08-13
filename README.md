@@ -88,10 +88,10 @@ docker compose up --build
 
 ## Agent 评测
 
-项目提供离线路由回归和真实模型工具选择评测。真实模型模式使用无副作用 Sandbox，不会访问 Garmin 或写入 Strava：
+项目提供 Skill 选择和真实模型工具选择评测。真实模型工具模式使用无副作用 Sandbox，不会访问 Garmin 或写入 Strava：
 
 ```bash
-python -m evaluation.cli run
+python -m evaluation.cli run --cases evaluation/cases/skills.jsonl --mode skill
 python -m evaluation.cli run --cases evaluation/cases/live.jsonl --mode live --repeats 3
 ```
 

@@ -1,125 +1,115 @@
 # Personal FIT Agent — 项目结构
 
-## 顶层
+## 顶层职责
 
 ```text
-.
-├── app/              # CLI + API 入口
-├── agent/            # LLM 交互、tool-use 运行时、工具定义、活动分析
-├── core/             # 配置、索引、通用统计/时间工具、Garmin/Strava 本地业务能力
-├── fit/              # FIT 二进制解析
-├── sinks/            # Strava API 客户端
-└── tests/            # pytest 测试套件
+app/           CLI、HTTP API 入口
+agent/         对话编排、分析 Agent、Skills、Tool 合同与适配器
+services/      不依赖 AgentContext 的请求-响应型业务用例
+domain/        活动与分析的数据合同、纯业务规则
+fit/           FIT 解析与时序事实计算
+storage/       SQLite 与 Workflow Repository
+integrations/  Garmin、Strava、LLM 外部适配器
+operations/    同步、批量报告、上传等有副作用或可恢复任务
+evaluation/    路由、Skill、工具调用与成本评测
+data/          本地数据库和运行状态
 ```
 
-## 主链路
+`core/` 与 `sinks/` 已移除。它们原先混合了领域逻辑、存储和第三方接口，现按职责迁入上述目录。
+
+## 对话与分析链路
 
 ```text
 用户消息
-  -> agent.main_agent.intent.route_intent()
-  -> agent.main_agent.loop.agent_loop()
-  -> LLM tool_use
-  -> agent.main_agent.tools.TOOL_HANDLERS[name]
-  -> 本地 handler
-  -> tool_result
-  -> 最终中文回答
+  -> metadata-only Skill selector
+  -> agent.main_agent.loop
+  -> 当前 Skill 的 Tool 白名单
+  -> agent.main_agent.tools.TOOL_HANDLERS
+  -> agent.tools.handlers（读取 AgentContext、包装 Tool 结果）
+  -> services.activity（显式活动 ID / 活动列表 / 分析请求）
+  -> domain + fit + storage
+  -> 主 Agent 生成回答
 ```
 
-旧的 planner / validator / selector / executor 流程已删除。当前大模型直接使用原生 tool_use，本地只保留 guard、handler 分发和上下文管理；批量副作用操作由持久化工作流负责恢复和重试。
+活动分析使用统一目标模型：
 
-批量本地活动不以 AgentContext 或 LLM TODO 为事实来源，而以持久化 `ActivityRun` 为准：模型只调用“创建 / 查询 / 重试”高层工具；通用 Runtime 根据任务依赖推进原子能力。
+```text
+Activity Scope -> Segment Scope -> Analysis Objective
+```
 
-## 关键模块
+`agent/analysis/workspace.py` 保存当前活动集合、单活动或片段焦点。用户说“看第二个”“比较前两个片段”时复用已保存的具体 ID，不重新依赖模糊对话文本定位。
+
+## Agent 与 Tool
 
 ```text
 agent/
-├── llm.py                    # Anthropic Messages API 兼容客户端
-├── context.py                # AgentContext: 当前 FIT、已选活动、对话历史
-├── chat_logger.py            # session + Markdown/JSONL 日志
+├── main_agent/             主对话循环、上下文、Guard、工具分发
+├── analysis/               FIT 分析子 Agent、Prompt、导航工作区
+├── skills/                 metadata selector、加载器、策略和 Skill library
 ├── tools/
-│   ├── spec.py               # ToolDef + renderer + 类别常量
-│   ├── agent_tools.py        # MAIN_AGENT_TOOLS: 外层业务工具清单
-│   ├── fit_query.py          # 旧路径兼容导出
-│   ├── fit_analysis/         # 单 FIT 分析内部只读数据工具
-│   │   ├── catalog.py        # FIT_DATA_TOOLS: 子 agent 工具清单
-│   │   ├── handlers.py       # tool name -> 数据工具 handler
-│   │   ├── data.py           # activity_overview / summary / intervals
-│   │   └── scan.py           # 区间/爬升/冲刺扫描
-│   └── index_query.py        # 活动索引查询工具定义
-├── main_agent/
-│   ├── loop.py               # 原生 tool_use 循环与 CLI 入口编排
-│   ├── tools.py              # tool name -> handler 直接分发表
-│   ├── handlers.py           # 会话范围汇总等主 agent handler
-│   ├── hooks.py              # 日志、guard
-│   ├── guard.py              # 前置条件与参数检查
-│   ├── turn_control.py       # 重试控制轮次
-├── activity/
-│   ├── analysis_agent.py     # ActivityAnalysisAgent: 单活动分析边界
-│   ├── report.py             # show_selected_activity_report_tool
-│   ├── comparison.py         # compare_selected_activities_tool
-│   ├── training_load.py      # summarize_recent_training_load_tool
-│   ├── selection/            # 用户条件 -> 本地活动选择 + AgentContext 更新
-│   ├── operations/           # 无 AgentContext 的目录 / 分析 / Garmin / Strava / 聚合操作
-│   │   └── service.py        # 操作服务，编排 core 与分析 Agent
-│   ├── report_jobs.py        # 全量 V2 报告的进程内后台任务
-│   ├── workflow_factory.py   # 冻结活动快照，创建 per-activity 任务图
-│   ├── workflow_handlers.py  # 活动任务 kind -> operations 映射
-│   ├── workflow_executor.py  # ActivityRun 的检查点执行入口
-│   └── workflow_service.py   # 创建、查询、失败重试的高层接口
-├── runtime/
-│   ├── workflow_models.py    # 通用 Run/Task 状态机、重试与依赖恢复
-│   ├── workflow_store.py     # 原子 JSON Run 存储
-│   └── executor.py           # 通用依赖调度器
-└── route/
-    └── advice.py             # generate_route_advice_tool
-
+│   ├── agent_tools.py      主 Agent ToolDef 清单
+│   ├── handlers/           AgentContext 到 Service 参数的薄适配器
+│   └── fit_analysis/       子 Agent 可见的只读 FIT ToolDef/handler
+└── runtime/                对话日志等 Agent 运行时辅助能力
 ```
+
+Tool 只负责 LLM 接口：参数校验、读取会话焦点、调用 Service、包装 `tool_result`。确定性业务实现不放在 Tool handler 中。
+
+## 业务、事实与存储
 
 ```text
-core/
-├── config.py                 # config.yaml / athlete 配置读取
-├── activity_index.py         # SQLite 活动目录查询接口
-├── storage/
-│   ├── database.py           # SQLite 连接、activities/activity_reports schema
-│   └── activity_store.py     # 活动、当前报告与历史视图 Repository
-├── garmin_cn.py              # Garmin 中国下载能力
-├── strava_upload.py          # Strava 上传与描述更新
-├── stats.py                  # 统计/格式化工具
-└── time_utils.py             # 本地时间字符串规范化
+services/activity/
+  catalog.py        活动查询
+  analysis.py       已解析目标的单/多活动与片段分析
+  comparison.py     多活动确定性比较
+  history.py        历史指标聚合
+  training_load.py  训练负荷聚合
+  reporting.py      当前报告读取
+
+fit/analysis/
+  data.py           overview、summary、时间/距离窗口
+  metrics.py        activity_metrics.v2
+  segments.py       通用区间扫描
+  sprints.py        短冲刺探测（当前算法独立保留，后续统一）
+  running.py        跑步指标
+
+storage/
+  database.py
+  repositories/
+    activity.py     activities + activity_reports
+    analysis.py     navigation + analysis_results
+    workflow.py     Run JSON 快照与跨进程锁
 ```
 
-## FIT 分析
+依赖方向由 `tests/test_architecture.py` 自动约束：`services/domain/fit/storage/integrations` 不得依赖 `agent`；`domain` 与 `fit` 不得依赖外层状态或基础设施。
 
-单活动分析由 `agent/activity/analysis_agent.py` 承接。它会独立启动 `fit_analysis` 子会话，只向子 agent 暴露 `agent/tools/fit_analysis/` 的只读 FIT 数据工具，并把当前 V2 报告直接写入 SQLite。
+## 副作用与长任务
 
-## 活动与报告存储
+普通活动问答不创建 Workflow。只有同步、批量报告、上传及其重试使用：
+
+```text
+operations/activity/
+  -> operations/runtime（任务状态机与执行器）
+  -> storage.repositories.workflow（持久化与排他锁）
+  -> services / storage / integrations
+```
+
+批量报告任务可调用 `agent.analysis` 子 Agent 生成报告，但不得依赖 `agent.main_agent`、Skill 或聊天上下文。Workflow 不保存聊天推理，只冻结具体活动目标和任务状态。用户取消、进程中断或上传失败时，可根据持久化 Run 恢复；单条定向问答仍走“定位活动 -> 最小必要分析 -> 回答与下钻建议”。
+
+## 活动与报告事实源
 
 ```text
 FIT 文件
-  -> activities（一 FIT 一行，活动目录与原始文件身份）
-  -> activity_reports（一活动一行，当前 V2 报告文档）
-  -> JSON（仅在调用 export_report 时显式导出）
+  -> activities（一 FIT 一行）
+  -> activity_reports（一活动一份当前 V2 报告）
+  -> analysis_results（定向问答/比较等分析产物）
 ```
 
-`data/personal-fit-agent.db` 是唯一权威来源。运行时不会读取 `activity_index.json`、`activity_history.jsonl` 或 summary JSON。全量 V2 重建由 `report_jobs.py` 在单线程后台逐条执行，进程退出只会中断任务，不会损坏已提交的活动或报告。
+`data/personal-fit-agent.db` 是活动和报告的唯一运行时事实源。新报告必须是 `llm_fit_file_analysis.v2`，历史数值从 `activity_metrics.v2` 读取，不从 Markdown 正则提取。
 
-## 分层边界
+## 外部能力
 
-- `main_agent/`：只负责对话、工具选择与展示；不串接多活动副作用。
-- `activity/selection/`：把聊天工具的事实条件解析成活动，并且是唯一更新 `AgentContext` 选择状态的地方。
-- `activity/operations/`：同步、单 FIT 分析、上传和聚合等无会话状态能力；CLI、API、工作流均复用它。
-- `activity/workflow_*.py` + `runtime/`：冻结目标活动、保存每项任务状态、按依赖执行和重试；不依赖聊天上下文。
-- `core/` 与 `sinks/`：配置、索引、Garmin 和 Strava 等外部/存储适配实现。HTTP API 会在入口处做路径和权限检查，再调用 operations 服务。
-
-## ActivityRun
-
-```text
-本地活动目录
-  -> workflow_factory（冻结活动快照）
-  -> runtime.executor（依赖调度）
-  -> operations.ensure_summary / operations.upload_activity
-  -> operations.aggregate_summaries
-  -> data/activity_runs/<workflow_id>.json
-```
-
-Run 状态为 `active | paused | completed | partial | cancelled`；任务状态为 `pending | running | completed | skipped | failed`。依赖等待不是额外 task 状态。失败重试会保留旧尝试记录，并恢复因依赖失败跳过的任务；允许失败依赖的聚合任务会重新计算，避免继续展示过期 partial 结果。
+- `integrations/garmin.py`：认证与下载。
+- `integrations/strava.py`：OAuth、上传与描述更新 HTTP 客户端。
+- `integrations/llm.py`：Anthropic Messages API 兼容客户端，不导入 Agent Tool 或 Skill。
+- `services/route/advice.py`：当前路线建议用例；路线计算 Demo 仍独立在 `demo/`，未接入主 Agent。
