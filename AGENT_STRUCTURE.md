@@ -61,6 +61,7 @@ agent/
 │   ├── selection/            # 用户条件 -> 本地活动选择 + AgentContext 更新
 │   ├── operations/           # 无 AgentContext 的目录 / 分析 / Garmin / Strava / 聚合操作
 │   │   └── service.py        # 操作服务，编排 core 与分析 Agent
+│   ├── report_jobs.py        # 全量 V2 报告的进程内后台任务
 │   ├── workflow_factory.py   # 冻结活动快照，创建 per-activity 任务图
 │   ├── workflow_handlers.py  # 活动任务 kind -> operations 映射
 │   ├── workflow_executor.py  # ActivityRun 的检查点执行入口
@@ -72,14 +73,15 @@ agent/
 └── route/
     └── advice.py             # generate_route_advice_tool
 
-agent/operations.py           # 旧 Python import 的兼容 re-export；新代码不应使用
 ```
 
 ```text
 core/
 ├── config.py                 # config.yaml / athlete 配置读取
-├── activity_index.py         # 本地活动索引
-├── history.py                # activity_history.jsonl
+├── activity_index.py         # SQLite 活动目录查询接口
+├── storage/
+│   ├── database.py           # SQLite 连接、activities/activity_reports schema
+│   └── activity_store.py     # 活动、当前报告与历史视图 Repository
 ├── garmin_cn.py              # Garmin 中国下载能力
 ├── strava_upload.py          # Strava 上传与描述更新
 ├── stats.py                  # 统计/格式化工具
@@ -88,7 +90,18 @@ core/
 
 ## FIT 分析
 
-单活动分析由 `agent/activity/analysis_agent.py` 承接。它会独立启动 `fit_analysis` 子会话，只向子 agent 暴露 `agent/tools/fit_analysis/` 的只读 FIT 数据工具，并负责写入 summary/history。
+单活动分析由 `agent/activity/analysis_agent.py` 承接。它会独立启动 `fit_analysis` 子会话，只向子 agent 暴露 `agent/tools/fit_analysis/` 的只读 FIT 数据工具，并把当前 V2 报告直接写入 SQLite。
+
+## 活动与报告存储
+
+```text
+FIT 文件
+  -> activities（一 FIT 一行，活动目录与原始文件身份）
+  -> activity_reports（一活动一行，当前 V2 报告文档）
+  -> JSON（仅在调用 export_report 时显式导出）
+```
+
+`data/personal-fit-agent.db` 是唯一权威来源。运行时不会读取 `activity_index.json`、`activity_history.jsonl` 或 summary JSON。全量 V2 重建由 `report_jobs.py` 在单线程后台逐条执行，进程退出只会中断任务，不会损坏已提交的活动或报告。
 
 ## 分层边界
 
@@ -104,7 +117,7 @@ core/
 本地活动目录
   -> workflow_factory（冻结活动快照）
   -> runtime.executor（依赖调度）
-  -> operations.ensure_summary / operations.upload_summary
+  -> operations.ensure_summary / operations.upload_activity
   -> operations.aggregate_summaries
   -> data/activity_runs/<workflow_id>.json
 ```

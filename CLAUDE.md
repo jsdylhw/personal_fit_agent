@@ -4,7 +4,7 @@ This file provides guidance when working in this repository.
 
 ## Overview
 
-Personal FIT Agent is a local sports data assistant: download Garmin China FIT files, generate activity reports via an LLM, maintain a local activity index, and optionally upload to Strava. The LLM backend uses an Anthropic Messages API-compatible endpoint from `config.yaml`.
+Personal FIT Agent is a local sports data assistant: download Garmin China FIT files, generate activity reports via an LLM, maintain a SQLite activity catalogue, and optionally upload to Strava. The LLM backend uses an Anthropic Messages API-compatible endpoint from `config.yaml`.
 
 ## Commands
 
@@ -16,10 +16,11 @@ python -m app.cli chat
 python -m app.cli chat "分析最新的活动"
 python -m app.cli analyze-file latest --force
 python -m app.cli sync-garmin --count 5
-python -m app.cli upload-strava "data/summaries/activity.summary.json"
+python -m app.cli upload-strava ACTIVITY_KEY
 
 python -m app.debug_cli list-activities --limit 10
 python -m app.debug_cli inspect-fit latest
+python -m app.debug_cli storage-status
 ```
 
 ## Architecture
@@ -40,8 +41,10 @@ Key files:
 - `agent/main_agent/handlers.py`: upload, summary generation, range summary handlers.
 - `agent/main_agent/hooks.py`: logging, permission checks, guard checks, TODO display.
 - `agent/activity/analysis_agent.py`: ActivityAnalysisAgent boundary for single-activity analysis.
+- `agent/activity/report_jobs.py`: in-process bulk V2 report rebuilds.
+- `core/storage/`: authoritative SQLite activity/report repositories.
 - `agent/activity/resolution/executor.py`: direct activity resolution tool implementation.
 - `agent/activity/report.py`, `comparison.py`, `training_load.py`: activity business handlers.
 - `agent/route/advice.py`: route advice handler.
 
-Single FIT analysis is owned by `agent/activity/analysis_agent.py`. It starts an independent `fit_analysis` child-agent session, exposes only read-only FIT data tools from `agent/tools/fit_analysis/`, and writes summary/history artifacts.
+Single FIT analysis is owned by `agent/activity/analysis_agent.py`. It starts an independent `fit_analysis` child-agent session, exposes only read-only FIT data tools from `agent/tools/fit_analysis/`, and commits the current V2 report to SQLite. JSON is produced only by an explicit export and is never read as report state.
