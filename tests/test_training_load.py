@@ -72,7 +72,7 @@ def test_summarize_recent_training_load_outputs_structured_metrics_only(tmp_path
     assert "load_assessment" not in summary
 
 
-def test_summarize_recent_training_load_reports_missing_summaries():
+def test_summarize_recent_training_load_reports_missing_metrics():
     context = AgentContext(
         session_id="training-load-test",
         selected_activities=[{"activity_key": "a1"}],
@@ -80,7 +80,7 @@ def test_summarize_recent_training_load_reports_missing_summaries():
 
     result = summarize_recent_training_load_tool(context)
 
-    assert result["error"] == "missing_activity_summary"
+    assert result["error"] == "missing_activity_metrics"
     assert result["missing"][0]["activity_key"] == "a1"
 
 

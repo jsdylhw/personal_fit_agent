@@ -189,6 +189,7 @@ def test_main_agent_exposes_explicit_detail_query_instead_of_implicit_targeted_a
 
     assert "query_activity_detail" in names
     assert "calculate_history_metrics" in names
+    assert "analyze_training_history" in names
     resolver_schema = next(tool for tool in MAIN_AGENT_TOOLS if tool.name == "resolve_activities").input_schema
     assert resolver_schema["properties"]["days"]["minimum"] == 1
     assert resolver_schema["required"] == ["kind"]
@@ -209,6 +210,27 @@ def test_history_metrics_handler_uses_selected_activities(monkeypatch):
 
     assert result == {"status": "completed"}
     assert captured == {"context": context, "group_by": "month", "name": "calculate_history_metrics"}
+
+
+def test_professional_history_handler_forwards_bounded_options(monkeypatch):
+    captured = {}
+
+    def fake_tool(context, **kwargs):
+        captured.update({"context": context, **kwargs})
+        return {"status": "completed"}
+
+    monkeypatch.setattr("agent.tools.handlers.activity_insights.analyze_training_history_tool", fake_tool)
+    context = AgentContext(session_id="history-analysis", selected_activities=[{"activity_key": "a1"}])
+
+    result = TOOL_HANDLERS["analyze_training_history"]({
+        "group_by": "month", "sport_type": "cycling", "combine_sports_for_volume": False,
+    }, context)
+
+    assert result == {"status": "completed"}
+    assert captured == {
+        "context": context, "group_by": "month", "sport_type": "cycling",
+        "combine_sports_for_volume": False, "name": "analyze_training_history",
+    }
 
 
 def test_guard_requires_activity_selection_for_history_metrics():
