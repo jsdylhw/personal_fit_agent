@@ -198,14 +198,12 @@ class TestChooseStravaSummaryTone:
 
 
 class TestFitAnalysisToolCatalog:
-    def test_data_catalog_has_only_8_readonly_tools(self):
-        """Hidden tool loop 只能看到 8 个只读数据工具,不能看到副作用工具."""
+    def test_data_catalog_has_only_raw_detail_tools(self):
+        """Whole-activity facts are precomputed; child tools inspect raw detail only."""
         tools = fit_data_tool_catalog()
         tool_names = {t["name"] for t in tools}
         assert tool_names == {
-            "get_activity_overview", "get_activity_summary", "scan_activity_segments",
-            "detect_sprints", "get_time_intervals", "get_distance_intervals",
-            "get_running_efficiency", "get_history",
+            "get_time_intervals", "get_distance_intervals", "get_running_efficiency", "get_history",
         }
 
     def test_no_side_effect_tools_in_data_catalog(self, sample_parsed_fit):
@@ -240,7 +238,7 @@ class TestFitAnalysisPrompt:
     def test_build_contains_all_sections(self):
         prompt = build_fit_analysis_system_prompt()
         assert "endurance training analysis assistant" in prompt
-        assert "get_activity_summary" in prompt
+        assert "activity_metrics" in prompt
         assert "markdown_report" in prompt
         assert "strava_summary" in prompt
 
@@ -465,6 +463,8 @@ class TestBuildInitialLoopPayload:
         # 工具已迁移到原生 tools 参数,不再出现在 payload 中
         assert "available_tools" not in payload
         assert payload["completion_contract"]["tool"] == "submit_analysis"
+        assert payload["activity_metrics"]["schema_version"] == "activity_metrics.v2"
+        assert payload["activity_features"]["schema_version"] == "activity_features.v1"
 
     def test_includes_targeted_user_request(self, sample_parsed_fit, tmp_path):
         fit_path = tmp_path / "test_activity.fit"
@@ -520,6 +520,59 @@ def test_submit_analysis_ends_child_loop(sample_parsed_fit, tmp_path, monkeypatc
     assert tool_names[-1] == "submit_analysis"
     assert "get_history" not in tool_names
     assert SUBMIT_ANALYSIS_TOOL.input_schema["required"] == ["markdown_report", "strava_summary", "analysis_summary"]
+
+
+def test_explicit_time_window_exposes_and_requires_raw_interval_evidence(sample_parsed_fit, tmp_path, monkeypatch):
+    """A candidate must not be accepted as proof for an explicit time window."""
+    fit_path = tmp_path / "test_activity.fit"
+    fit_path.write_bytes(b"mock fit content")
+    calls = []
+
+    class FakeClient:
+        def create_messages(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                # The loop must reject this premature completion.
+                return {
+                    "id": "premature", "model": "test-model", "stop_reason": "tool_use",
+                    "content": [{"type": "tool_use", "id": "submit-early", "name": "submit_analysis",
+                                 "input": {"markdown_report": "# 猜测", "strava_summary": "摘要", "analysis_summary": {}}}],
+                }
+            if len(calls) == 2:
+                return {
+                    "id": "interval", "model": "test-model", "stop_reason": "tool_use",
+                    "content": [{"type": "tool_use", "id": "window", "name": "get_time_intervals",
+                                 "input": {"bucket_seconds": 10, "start_s": 100, "end_s": 200}}],
+                }
+            return {
+                "id": "submit", "model": "test-model", "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "id": "submit-final", "name": "submit_analysis",
+                             "input": {"markdown_report": "# 有局部证据", "strava_summary": "摘要", "analysis_summary": {}}}],
+            }
+
+    monkeypatch.setattr("agent.analysis.agent.AnthropicMessagesClient", FakeClient)
+    monkeypatch.setattr("agent.analysis.agent.new_session_id", lambda prefix: "window-test")
+    monkeypatch.setattr("agent.analysis.agent.append_chat_log", lambda *args, **kwargs: tmp_path / "window.jsonl")
+
+    result = analyze_with_llm(
+        fit_path, sample_parsed_fit, history_before=None,
+        user_request="100–200 秒有没有连续冲刺？",
+    )
+
+    assert result["markdown_report"] == "# 有局部证据"
+    assert [tool["name"] for tool in calls[0]["tools"]] == ["get_time_intervals", "submit_analysis"]
+    assert "explicit raw window requires get_time_intervals" in str(calls[1]["messages"])
+
+
+def test_lazy_fit_handlers_parse_only_when_raw_tool_is_called(sample_parsed_fit):
+    from agent.tools.fit_analysis.handlers import build_tool_handlers
+
+    calls = []
+    handlers = build_tool_handlers(lambda: calls.append("parse") or sample_parsed_fit, None)
+
+    assert calls == []
+    handlers["get_time_intervals"](bucket_seconds=60)
+    assert calls == ["parse"]
 
 
 def test_invalid_submit_analysis_is_repaired_inside_child_loop(sample_parsed_fit, tmp_path, monkeypatch):
@@ -586,7 +639,7 @@ class TestAnalyzeFitFileResultTimes:
         monkeypatch.setattr("agent.analysis.agent.parse_fit", lambda path: sample_parsed_fit)
         monkeypatch.setattr(
             "agent.analysis.agent.analyze_with_llm",
-            lambda path, parsed, history_before, user_request: {
+            lambda path, parsed, history_before, user_request, facts=None, fit_summary=None: {
                 "model": "test-model",
                 "markdown_report": "# Report",
                 "strava_summary": "summary",
@@ -623,7 +676,7 @@ class TestAnalyzeFitFileResultTimes:
         )
         monkeypatch.setattr(
             "agent.analysis.agent.analyze_with_llm",
-            lambda path, parsed, history_before, user_request: {
+            lambda path, parsed, history_before, user_request, facts=None, fit_summary=None: {
                 "model": "test-model",
                 "markdown_report": "# Report",
                 "strava_summary": "summary",

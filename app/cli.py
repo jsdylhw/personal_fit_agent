@@ -12,6 +12,7 @@ from agent.main_agent.context import AgentContext
 from agent.main_agent.loop import run_tool_loop
 from fit.paths import resolve_fit_path
 from operations.activity.service import MAX_SYNC_COUNT, analyze_fit_file_tool, sync_garmin_activities_tool
+from operations.activity.facts import rebuild_activity_facts
 from operations.activity.strava import (
     update_strava_description,
     upload_activity_to_strava,
@@ -98,6 +99,15 @@ def sync_garmin_command(
 ) -> None:
     """下载 Garmin 中国区最近活动 FIT 文件,自动跳过本地已有文件."""
     result = sync_garmin_activities_tool(count=count)
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
+@app.command("rebuild-facts")
+def rebuild_facts_command(
+    force: bool = typer.Option(False, "--force", help="重新计算已有活动的确定性指标和特征"),
+) -> None:
+    """补齐导入前遗留活动的 metrics/features，不调用 LLM、不生成报告。"""
+    result = rebuild_activity_facts(force=force)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 

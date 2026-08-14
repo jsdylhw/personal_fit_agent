@@ -68,7 +68,10 @@ def navigate_selection(arguments: dict[str, Any], context: AgentContext) -> dict
             ordinal=arguments.get("ordinal"),
         )
     except ValueError as exc:
-        return {"error": "invalid_navigation", "message": str(exc)}
+        message = str(exc)
+        if message.startswith("ordinal must be between 1 and 0"):
+            message = "当前焦点是单条活动，不存在可按序号选择的活动集合。请先定位一个活动集合。"
+        return {"error": "invalid_navigation", "message": message}
     return {
         "step": "navigate_selection",
         "status": "completed",

@@ -5,7 +5,7 @@ from datetime import date
 import pytest
 
 from agent.main_agent.context import AgentContext
-from agent.tools.handlers.activity_selection import resolve_activities
+from agent.tools.handlers.activity_selection import lookup_activities, resolve_activities
 from domain.activity.selection import ActivitySelectionRequest
 from services.activity.catalog import replace_activity_entries
 
@@ -157,6 +157,33 @@ def test_current_does_not_replace_navigation_root_after_ordinal_selection(tmp_pa
 
     assert context.analysis_navigation["root_scope"]["ids"] == ["a3", "a2"]
     assert context.analysis_navigation["focus_stack"][-1] == {"type": "activity", "id": "a2"}
+
+
+def test_auxiliary_lookup_does_not_replace_frozen_navigation_or_current_focus(tmp_path):
+    """An independent catalogue lookup must not break an ordinal follow-up."""
+    database = tmp_path / "activities.db"
+    _write_catalog(database)
+    context = AgentContext(session_id="test", workspace_id="test")
+    _resolve(database, {"kind": "recent", "limit": 2}, context=context)
+
+    from agent.analysis.workspace import AnalysisNavigationService
+
+    AnalysisNavigationService(database).navigate(context, action="select", ordinal=2)
+    before_range = dict(context.selected_activity_range or {})
+    before_navigation = dict(context.analysis_navigation or {})
+
+    result = lookup_activities(
+        {"kind": "all", "limit": 1, "order": "earliest"},
+        context,
+        path=database,
+        today=date(2026, 5, 19),
+    )
+
+    assert [item["activity_key"] for item in result["result"]["activities"]] == ["a1"]
+    assert result["navigation_changed"] is False
+    assert context.selected_activity_range == before_range
+    assert context.analysis_navigation == before_navigation
+    assert context.current_activity_key == "a2"
 
 
 def test_empty_selection_clears_context_and_persisted_navigation(tmp_path):

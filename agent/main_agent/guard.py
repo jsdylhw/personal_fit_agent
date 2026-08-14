@@ -22,6 +22,7 @@ TOOL_DEPENDENCIES: dict[str, set[str]] = {
     "compare_activities": {"selected_activities"},
     "summarize_recent_training_load": {"selected_activities"},
     "calculate_history_metrics": {"selected_activities"},
+    "analyze_training_history": {"selected_activities"},
     "generate_training_advice": {"selected_activities"},
 }
 

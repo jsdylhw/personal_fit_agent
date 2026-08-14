@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 
 DEFAULT_DATABASE_PATH = Path("data") / "personal-fit-agent.db"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def database_path(path: str | Path | None = None) -> Path:
@@ -89,6 +89,25 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_activity_reports_schema_version
             ON activity_reports(schema_version, updated_at DESC);
+
+        -- Import-time deterministic facts are deliberately independent from
+        -- generated reports.  They can be rebuilt when detector algorithms
+        -- change and remain available even if no LLM report exists yet.
+        CREATE TABLE IF NOT EXISTS activity_facts (
+            activity_id TEXT PRIMARY KEY,
+            schema_version TEXT NOT NULL,
+            extractor_version TEXT NOT NULL,
+            metrics_json TEXT NOT NULL,
+            features_json TEXT NOT NULL,
+            input_hash TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_activity_facts_schema_version
+            ON activity_facts(schema_version, updated_at DESC);
 
         -- Analysis navigation is intentionally separate from chat history.  It
         -- freezes concrete activity/segment targets so a later CLI process can

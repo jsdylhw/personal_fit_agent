@@ -5,47 +5,9 @@ from __future__ import annotations
 from agent.tools.spec import CATEGORY_ANALYSIS, CATEGORY_FIT_QUERY, ToolDef
 
 FIT_DATA_TOOLS = (
-    ToolDef(
-        name="get_activity_overview",
-        description="""Compact high-level activity overview.
-Use for: lightweight inventory, listing activities in a period, quick profile questions.
-Do NOT use as the first step for a full single-activity training report — use get_activity_summary instead.""",
-        category=CATEGORY_FIT_QUERY,
-    ),
-    ToolDef(
-        name="get_activity_summary",
-        description="""Primary objective data for full single-activity reports. Return structured summary by sections. Core sections include power/heart_rate/cadence/speed/pace/elevation; running_dynamics is returned only when the FIT device recorded it.
-Use for: full training reports needing grouped objective data.
-Use sections to pick specific ones, or 'all' for all 11.""",
-        input_schema={
-            "type": "object",
-            "properties": {"sections": {"type": "array", "items": {"type": "string"}}},
-        },
-        category=CATEGORY_FIT_QUERY,
-    ),
-    ToolDef(
-        name="scan_activity_segments",
-        description="""Scan for sustained effort segments >= 30s. Cycling uses high power; running uses faster-than-baseline pace. Each interval includes available power/HR/cadence/speed/elevation context. Marks climb only when >= 30m gain. Returns data-quality warnings.
-Use for: hard intervals, fast running segments, climbs, surges. This is a locator, not a report generator — after finding segments, use get_time_intervals or get_distance_intervals to inspect in detail.""",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "window_seconds": {"type": "integer", "default": 30},
-                "step_seconds": {"type": "integer", "default": 10},
-                "max_segments": {"type": "integer", "default": 12},
-            },
-        },
-        category=CATEGORY_FIT_QUERY,
-    ),
-    ToolDef(
-        name="detect_sprints",
-        description="""Detect 3-45 second cycling power bursts and return concrete windows with power, heart-rate, cadence and speed evidence. Use for sprint-specific questions; use scan_activity_segments for sustained efforts >=30s.""",
-        input_schema={
-            "type": "object",
-            "properties": {"max_segments": {"type": "integer", "default": 12}},
-        },
-        category=CATEGORY_FIT_QUERY,
-    ),
+    # Import-time facts already include overview, summary metrics, sprint
+    # candidates and sustained-effort/climb candidates.  The child agent only
+    # receives tools that inspect a user-requested raw FIT window in more detail.
     ToolDef(
         name="get_time_intervals",
         description="""Fixed time-window averages. bucket_seconds supports 1-600s. Use start_s/end_s for a focused window. Includes non-zero averages and zero fractions.

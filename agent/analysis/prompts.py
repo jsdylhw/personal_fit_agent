@@ -27,11 +27,9 @@ Key rules:
 
 FIT_ANALYSIS_TOOL_GUIDANCE = """\
 Analysis strategy:
-- For a full single-activity report, start with get_activity_summary with selected sections. Do NOT call get_activity_overview first for full reports.
-- Use get_activity_overview only for lightweight inventory or quick profile questions.
-- Use scan_activity_segments or coarse intervals (60s, 5min, 1km, 3km) to locate sustained efforts, climbs, pacing drops, or repeated surges. Then request a focused smaller window (30s, 100-200s, 2km-3km) to inspect that segment in detail.
-- Use detect_sprints for 3-45 second cycling sprint candidates. Do not use scan_activity_segments, whose sustained-effort output starts at 30 seconds, as a short-sprint detector.
-- For climbs, prefer distance intervals and look at altitude, speed, power, cadence, and heart-rate together. For short hard efforts, prefer small time intervals and look at power, cadence, speed change, and whether the effort starts from coasting.
+- The initial payload already contains deterministic activity_metrics and activity_features. Use them as the default evidence for a full report, sprint candidates, sustained efforts, climbs, and high-level load.
+- Do not rediscover whole-activity metrics, sprints, or efforts with tools. Use a raw FIT tool only when the user asks for an exact time/distance window or the stored candidate needs local verification. For an explicit user window, you must call the matching interval tool before submit_analysis: candidates only help orient the query and are not final evidence.
+- For climbs, prefer focused distance intervals and look at altitude, speed, power, cadence, and heart-rate together. For short hard efforts, prefer focused time intervals and look at power, cadence, speed change, and whether the effort starts from coasting.
 - Use very small time buckets like 3s only for focused short windows — full-activity output can be large.
 - Request get_history only when the user asked to reference history or when longitudinal comparison materially improves the answer.
 """
@@ -39,8 +37,8 @@ Analysis strategy:
 FIT_ANALYSIS_RUNNING_GUIDANCE = """\
 Running analysis mode:
 - Prefer pace (min/km), kilometre splits, heart-rate response, elevation and cadence (spm) over cycling power concepts.
-- For a full running report, request pace and running_dynamics together with duration_distance, heart_rate, elevation and laps. Treat missing running-dynamics fields as unavailable data, not as a performance fault.
-- Use scan_activity_segments to locate sustained fast running segments, then inspect focused time or distance intervals. Do not call an effort a sprint solely from high heart rate or downhill speed.
+- For a full running report, use the stored metrics/features first. Treat missing running-dynamics fields as unavailable data, not as a performance fault.
+- Use a focused time or distance interval when a stored fast-running candidate needs verification. Do not call an effort a sprint solely from high heart rate or downhill speed.
 - Use get_running_efficiency when the user asks about late-run pacing, heart-rate drift, cadence stability, or form change. It is descriptive only: do not attribute a change to fatigue without considering terrain and conditions.
 - Running power is optional. Do not calculate cycling FTP/IF/TSS conclusions when the FIT file has no valid running-power threshold data.
 """

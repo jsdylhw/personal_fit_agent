@@ -125,6 +125,36 @@ def test_history_metrics_falls_back_to_fit_without_rewriting_old_summary(
     assert result["overall"]["weighted_averages"]["intensity_factor"] == 0.75
 
 
+def test_history_metrics_prefers_imported_facts_without_any_report(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    metrics = _metrics(
+        key="facts-only", start="2026-05-14T08:00:00", duration_min=45, distance_km=20,
+        tss=40, avg_power_w=180, normalized_power_w=200, intensity_factor=0.8, avg_hr_bpm=145,
+    )
+    from storage.repositories.activity import ActivityStore
+
+    store = ActivityStore()
+    store.upsert_activity({
+        "activity_key": "facts-only",
+        "fit_path": str(tmp_path / "facts-only.fit"),
+        "sport_type": "cycling",
+        "start_time_local": "2026-05-14T08:00:00",
+        "duration_min": 45,
+        "distance_km": 20,
+    })
+    store.save_facts(
+        "facts-only",
+        metrics=metrics,
+        features={"schema_version": "activity_features.v1", "extractor_version": "test", "sprint_candidates": {}, "effort_candidates": {}, "climb_candidates": {}},
+    )
+    context = AgentContext(session_id="facts-history", selected_activities=[{"activity_key": "facts-only"}])
+
+    output = calculate_history_metrics_tool(context)
+
+    assert output["result"]["coverage"]["source_counts"] == {"stored_facts_v1": 1}
+    assert output["result"]["overall"]["totals"]["tss"] == 40.0
+
+
 def test_history_metrics_rejects_unknown_grouping():
     context = AgentContext(session_id="history", selected_activities=[{"activity_key": "a1"}])
 

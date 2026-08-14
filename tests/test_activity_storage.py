@@ -81,7 +81,7 @@ def test_report_store_rejects_unindexed_and_legacy_documents(tmp_path):
         store.save_report({**report, "schema_version": "llm_fit_file_analysis.v1"})
 
 
-def test_history_is_derived_from_v2_reports(tmp_path):
+def test_history_uses_v2_report_only_as_legacy_fallback(tmp_path):
     database = tmp_path / "activities.db"
     fit = tmp_path / "ride.fit"
     fit.write_bytes(b"fit-data")
@@ -100,6 +100,6 @@ def test_history_is_derived_from_v2_reports(tmp_path):
 
     history = store.query_history(before="2026-08-14T00:00:00", days=7)
 
-    assert history["schema_version"] == "activity_report_history.v1"
+    assert history["schema_version"] == "activity_facts_history.v1"
     assert history["count"] == 1
     assert history["activities"][0]["summary_label"] == "晨间骑行"

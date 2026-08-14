@@ -68,7 +68,7 @@ def test_analyze_fit_file_persists_activity_metrics_json(sample_parsed_fit, tmp_
     monkeypatch.setattr("agent.analysis.agent.parse_fit", lambda path: sample_parsed_fit)
     monkeypatch.setattr(
         "agent.analysis.agent.analyze_with_llm",
-        lambda path, parsed, history_before, user_request: {
+        lambda path, parsed, history_before, user_request, facts=None, fit_summary=None: {
             "model": "test-model",
             "markdown_report": "# report",
             "strava_summary": "summary",
@@ -88,3 +88,6 @@ def test_analyze_fit_file_persists_activity_metrics_json(sample_parsed_fit, tmp_
     assert saved["activity_metrics"]["load"]["garmin"]["training_load_peak"] == 120.0
     assert saved["activity_metrics"]["power"]["normalized_power_w"] == 195.0
     assert saved["activity_metrics"]["power"]["intensity_factor"] == 0.75
+    facts = ActivityStore().get_facts(result["activity_key"])
+    assert facts["metrics"]["schema_version"] == "activity_metrics.v2"
+    assert facts["features"]["schema_version"] == "activity_features.v1"

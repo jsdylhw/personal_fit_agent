@@ -7,6 +7,7 @@ from typing import Any
 from agent.main_agent.context import AgentContext
 from services.activity.comparison import compare_activities
 from services.activity.history import calculate_history_metrics
+from services.activity.training_history_analysis import analyze_training_history
 from services.activity.training_load import summarize_training_load
 
 
@@ -46,5 +47,24 @@ def summarize_recent_training_load_tool(
     return summarize_training_load(
         context.selected_activities,
         scope=context.selected_activity_range,
+        name=name,
+    )
+
+
+def analyze_training_history_tool(
+    context: AgentContext,
+    *,
+    group_by: str = "week",
+    sport_type: str | None = None,
+    combine_sports_for_volume: bool = False,
+    name: str = "analyze_training_history",
+) -> dict[str, Any]:
+    """Build the professional history artifact from the frozen selection."""
+    return analyze_training_history(
+        context.selected_activities,
+        scope=context.selected_activity_range,
+        group_by=group_by,
+        sport_type=sport_type,
+        combine_sports_for_volume=combine_sports_for_volume,
         name=name,
     )

@@ -205,6 +205,10 @@ def _main_agent_execution_section(execution: dict[str, Any], *, final_response: 
             lines.append(f"- message: {result.get('message')}")
         if result.get("error"):
             lines.append(f"- error: `{result.get('error')}`")
+        before = result.get("navigation_before")
+        after = result.get("navigation_after")
+        if isinstance(before, dict) and isinstance(after, dict) and before != after:
+            lines.append(f"- navigation: `{_inline_json(before)}` → `{_inline_json(after)}`")
         lines.extend(_main_agent_result_summary(result.get("result"), final_response=final_response))
         lines.append("")
     return lines

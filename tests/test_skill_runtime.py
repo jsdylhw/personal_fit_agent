@@ -3,6 +3,7 @@ from __future__ import annotations
 from agent.main_agent.context import AgentContext
 from agent.main_agent.guard import guard_tool_call
 from agent.main_agent.turn_control import handle_control_turn
+from agent.main_agent.loop import _requires_raw_window_evidence, _tools_for_turn
 from agent.skills.catalog import get_skill, list_skill_descriptors
 from agent.skills.loader import load_skill_instructions, load_sport_references
 from agent.skills.models import SkillSelection
@@ -79,6 +80,15 @@ def test_skill_body_loads_only_after_selection_and_sport_reference_is_structured
     assert references[0].startswith("# Running evidence")
 
 
+def test_history_skill_loads_professional_methodology_and_output_contract():
+    body = load_skill_instructions(get_skill("analyze-training-history"))
+
+    assert "# Analyze Training History" in body
+    assert "# Endurance history methodology" in body
+    assert "# Training history output contract" in body
+    assert "two aligned evidence lanes" in body
+
+
 def test_no_conversation_skill_is_registered():
     assert get_skill("conversation") is None
 
@@ -90,21 +100,34 @@ def test_analysis_skills_keep_established_and_unified_tool_entry_points():
     coaching = set(get_skill("coach-training").tool_names)
 
     assert {
-        "resolve_activities", "find_segments", "navigate_selection",
+        "resolve_activities", "lookup_activities", "find_segments", "navigate_selection",
         "inspect_selection", "analyze_selection", "analyze_activity",
         "query_activity_detail",
     } <= single
     assert {
-        "resolve_activities", "navigate_selection", "inspect_selection",
+        "resolve_activities", "lookup_activities", "navigate_selection", "inspect_selection",
         "analyze_selection", "summarize_activities", "compare_activities",
         "summarize_recent_training_load", "calculate_history_metrics",
+        "analyze_training_history",
     } <= history
     assert {
-        "resolve_activities", "navigate_selection", "inspect_selection",
+        "resolve_activities", "lookup_activities", "navigate_selection", "inspect_selection",
         "analyze_selection", "summarize_activities", "compare_activities",
         "summarize_recent_training_load", "calculate_history_metrics",
         "generate_training_advice",
     } <= coaching
+
+
+def test_explicit_window_hides_candidate_tools_but_keeps_targeted_query():
+    skill = get_skill("analyze-activity")
+    tools = _tools_for_turn(skill, "这次 100–200 秒有没有连续冲刺？")
+
+    assert "query_activity_detail" in tools
+    assert "resolve_activities" in tools
+    assert "find_segments" not in tools
+    assert "analyze_selection" not in tools
+    assert _requires_raw_window_evidence("第 3–5 km 的爬坡怎么样？")
+    assert not _requires_raw_window_evidence("看看这次有没有冲刺")
 
 
 def test_every_skill_allowlist_name_has_a_registered_main_agent_tool():

@@ -7,6 +7,7 @@ run_tool_loop() — 便捷入口: intent/context/handlers 组装.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -273,19 +274,25 @@ def _run_agent_turn(
 ):
     """执行 agent_loop 并同步 messages 回 context. 返回 step_count."""
     tool_categories = set(allowed_cats)
-    allowed_tool_names = set(active_skill.tool_names) if active_skill else set()
+    allowed_tool_names = _tools_for_turn(active_skill, message)
     tools = [render_anthropic_tools([t])[0] for t in MAIN_AGENT_TOOLS if t.name in allowed_tool_names]
     handlers = TOOL_HANDLERS
     skill_instructions = (
         load_skill_instructions(active_skill)
         if active_skill else ""
     )
+    if _requires_raw_window_evidence(message):
+        skill_instructions += (
+            "\n\n本轮请求包含明确的时间或距离窗口。完成活动定位后，必须调用 "
+            "`query_activity_detail`，把原问题原样传入；不得仅根据预计算候选片段给出最终结论。"
+        )
     system = _build_system_prompt(intent, skill_instructions=skill_instructions)
     # A frozen multi-activity collection is also a resolved target.  Basing
     # this guard solely on current_fit_file incorrectly blocked navigation
     # until the model redundantly resolved one activity again.
     has_resolved = {"value": bool(context.selected_activities)}
     steps_taken: list[dict] = []
+    context.execution_trace = []
 
     messages = list(context.messages)
     preamble = _build_state_preamble(context)
@@ -315,6 +322,43 @@ def _run_agent_turn(
         _sync_messages_to_context(context, messages)
 
     return step_count, steps_taken
+
+
+def _tools_for_turn(active_skill, message: str) -> set[str]:
+    """Apply narrow, deterministic tool exposure within an activated Skill.
+
+    Import-time candidates are excellent for semantic requests such as “看看
+    冲刺”.  A request containing a concrete time/distance window instead needs
+    raw FIT evidence.  Do not expose ``find_segments`` in that case: otherwise
+    the model can stop after a cheap candidate lookup and present it as an
+    exact-window conclusion.  ``query_activity_detail`` starts the child agent
+    with only the relevant raw interval tool available.
+    """
+    names = set(active_skill.tool_names) if active_skill else set()
+    if active_skill and active_skill.skill_id == "analyze-activity" and _requires_raw_window_evidence(message):
+        names.discard("find_segments")
+        names.discard("analyze_selection")
+        names.discard("analyze_activity")
+    return names
+
+
+_TIME_WINDOW_RE = re.compile(
+    r"(?:\d+|[一二三四五六七八九十]+)\s*(?:-|–|—|到|至|~)\s*(?:\d+|[一二三四五六七八九十]+)\s*(?:秒|s\b|分钟|min\b|分\b)"
+    r"|(?:前|后|最后|开始后)\s*(?:\d+|[一二三四五六七八九十]+)\s*(?:秒|s\b|分钟|min\b|分\b)",
+    re.IGNORECASE,
+)
+_DISTANCE_WINDOW_RE = re.compile(
+    r"(?:\d+(?:\.\d+)?|[一二三四五六七八九十]+)\s*(?:-|–|—|到|至|~)\s*"
+    r"(?:\d+(?:\.\d+)?|[一二三四五六七八九十]+)\s*(?:公里|km\b|千米|米\b)"
+    r"|(?:前|后|最后)\s*\d+(?:\.\d+)?\s*(?:公里|km\b|千米|米\b)",
+    re.IGNORECASE,
+)
+
+
+def _requires_raw_window_evidence(message: str) -> bool:
+    """Whether a user explicitly requests a bounded raw FIT window."""
+    text = str(message or "")
+    return bool(_TIME_WINDOW_RE.search(text) or _DISTANCE_WINDOW_RE.search(text))
 
 
 def _sync_messages_to_context(context, messages):
@@ -376,7 +420,7 @@ def _build_result(intent, context, message, fit_path, use_history, step_count=0,
     log_path = write_main_agent_markdown_log(
         context.session_id, user_message=message,
         tool_plan={"intent": _intent_kind(intent), "tool_groups": _intent_groups(intent)},
-        execution={"status": "completed", "steps": steps},
+        execution={"status": "completed", "steps": steps, "step_results": context.execution_trace},
         selected_activities=context.selected_activities,
         selected_activity_range=context.selected_activity_range,
         current_fit_file=str(context.current_fit_file) if context.current_fit_file else None,
@@ -488,6 +532,7 @@ def _with_execution_header(answer: str, *, context: AgentContext, steps: list[di
         "summarize_activities": "汇总已有报告",
         "compare_activities": "对比活动",
         "calculate_history_metrics": "计算历史指标",
+        "analyze_training_history": "分析训练历史",
         "sync_garmin_activities": "同步 Garmin 活动",
         "sync_and_run_activity_workflow": "同步并处理活动",
         "run_activity_workflow": "处理本地活动",

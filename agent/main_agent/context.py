@@ -36,6 +36,9 @@ class AgentContext:
     last_tool_result: dict[str, Any] | None = None
     last_failed_action: dict[str, Any] | None = None
     last_llm_error: dict[str, Any] | None = None
+    # Per-turn, compact tool trace used by the readable Markdown log.  This is
+    # diagnostic metadata only; it is not persisted as conversation state.
+    execution_trace: list[dict[str, Any]] = field(default_factory=list)
 
     # 当前用户轮次激活的领域 Skill；每个新请求都会重新选择，不跨轮授权。
     active_skill_id: str | None = None

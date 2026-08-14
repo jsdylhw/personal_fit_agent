@@ -21,7 +21,7 @@ from domain.time import local_time_without_timezone
 
 
 class ActivityStore:
-    """Persist one activity per FIT and one current report per activity."""
+    """Persist one FIT activity, its deterministic facts and current report."""
 
     def __init__(self, path: str | Path | None = None):
         self.path = path
@@ -122,9 +122,11 @@ class ActivityStore:
                 """
                 SELECT a.*, r.schema_version AS report_schema_version,
                        r.status AS report_status, r.export_path,
-                       r.analysis_json, r.strava_summary AS report_strava_summary
+                       r.analysis_json, r.strava_summary AS report_strava_summary,
+                       f.schema_version AS facts_schema_version
                 FROM activities AS a
                 LEFT JOIN activity_reports AS r ON r.activity_id = a.id
+                LEFT JOIN activity_facts AS f ON f.activity_id = a.id
                 ORDER BY COALESCE(a.started_at, ''), a.name, a.id
                 """
             ).fetchall()
@@ -136,9 +138,11 @@ class ActivityStore:
                 """
                 SELECT a.*, r.schema_version AS report_schema_version,
                        r.status AS report_status, r.export_path,
-                       r.analysis_json, r.strava_summary AS report_strava_summary
+                       r.analysis_json, r.strava_summary AS report_strava_summary,
+                       f.schema_version AS facts_schema_version
                 FROM activities AS a
                 LEFT JOIN activity_reports AS r ON r.activity_id = a.id
+                LEFT JOIN activity_facts AS f ON f.activity_id = a.id
                 WHERE a.id = ?
                 """,
                 (str(activity_id),),
@@ -154,6 +158,84 @@ class ActivityStore:
                 (value,),
             ).fetchone()
         return self.get_activity(str(row["id"])) if row else None
+
+    def save_facts(self, activity_id: str, *, metrics: dict[str, Any], features: dict[str, Any]) -> dict[str, Any]:
+        """Upsert import-time metrics/features without involving a LLM report."""
+        activity_id = str(activity_id).strip()
+        if self.get_activity(activity_id) is None:
+            raise KeyError(f"activity must be indexed before saving facts: {activity_id}")
+        if metrics.get("schema_version") != "activity_metrics.v2":
+            raise ValueError("metrics must use activity_metrics.v2")
+        if features.get("schema_version") != "activity_features.v1":
+            raise ValueError("features must use activity_features.v1")
+
+        now = _now()
+        extractor_version = str(features.get("extractor_version") or "unknown")
+        canonical = json.dumps(
+            {"metrics": metrics, "features": features},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        input_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        with connect_database(self.path) as connection:
+            existing = connection.execute(
+                "SELECT revision, input_hash, created_at FROM activity_facts WHERE activity_id = ?",
+                (activity_id,),
+            ).fetchone()
+            revision = int(existing["revision"] or 0) if existing else 0
+            if not existing or str(existing["input_hash"] or "") != input_hash:
+                revision += 1
+            created_at = str(existing["created_at"]) if existing else now
+            connection.execute(
+                """
+                INSERT INTO activity_facts (
+                    activity_id, schema_version, extractor_version, metrics_json,
+                    features_json, input_hash, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(activity_id) DO UPDATE SET
+                    schema_version = excluded.schema_version,
+                    extractor_version = excluded.extractor_version,
+                    metrics_json = excluded.metrics_json,
+                    features_json = excluded.features_json,
+                    input_hash = excluded.input_hash,
+                    revision = excluded.revision,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    activity_id,
+                    str(features["schema_version"]),
+                    extractor_version,
+                    json.dumps(metrics, ensure_ascii=False, default=str),
+                    json.dumps(features, ensure_ascii=False, default=str),
+                    input_hash,
+                    revision,
+                    created_at,
+                    now,
+                ),
+            )
+        return {"activity_id": activity_id, "revision": revision, "schema_version": features["schema_version"]}
+
+    def get_facts(self, activity_id: str) -> dict[str, Any] | None:
+        """Read structured import-time facts for one immutable activity."""
+        with connect_database(self.path) as connection:
+            row = connection.execute(
+                "SELECT * FROM activity_facts WHERE activity_id = ?",
+                (str(activity_id),),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "activity_id": str(row["activity_id"]),
+            "schema_version": str(row["schema_version"]),
+            "extractor_version": str(row["extractor_version"]),
+            "metrics": _json_object(row["metrics_json"]),
+            "features": _json_object(row["features_json"]),
+            "revision": int(row["revision"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
 
     def save_report(
         self,
@@ -304,7 +386,7 @@ class ActivityStore:
         days: int | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
-        """Build analysis history directly from persisted V2 reports."""
+        """Build history from imported metrics, not generated report prose."""
         before_dt = _parse_datetime(before) if before else None
         after_dt = before_dt - timedelta(days=int(days)) if before_dt and days else None
         rows: list[dict[str, Any]] = []
@@ -314,6 +396,13 @@ class ActivityStore:
                 continue
             if after_dt and started_at and started_at < after_dt:
                 continue
+            facts = self.get_facts(str(activity.get("activity_key") or ""))
+            metrics = facts.get("metrics") if isinstance(facts, dict) else None
+            if isinstance(metrics, dict) and metrics.get("schema_version") == "activity_metrics.v2":
+                rows.append(_history_view_from_metrics(activity, metrics))
+                continue
+            # Compatibility for databases created before import-time facts.
+            # New code never chooses prose/report data when facts are present.
             report = self.get_report(str(activity.get("activity_key") or ""))
             if report is not None:
                 rows.append(build_history_view(report))
@@ -321,7 +410,7 @@ class ActivityStore:
         if limit:
             rows = rows[-int(limit):]
         return {
-            "schema_version": "activity_report_history.v1",
+            "schema_version": "activity_facts_history.v1",
             "before": before,
             "days": days,
             "limit": limit,
@@ -431,6 +520,8 @@ def _activity_entry(row: Any) -> dict[str, Any]:
     analysis = _json_object(row["analysis_json"])
     raw.update({
         "has_summary": has_report,
+        "has_facts": row["facts_schema_version"] is not None,
+        "facts_schema_version": row["facts_schema_version"],
         "has_strava_summary": bool(row["report_strava_summary"]) if has_report else False,
         "summary_schema_version": row["report_schema_version"] if has_report else None,
         "status": row["report_status"] if has_report else raw.get("status"),
@@ -441,6 +532,30 @@ def _activity_entry(row: Any) -> dict[str, Any]:
     raw.pop("training_load", None)
     raw.pop("summary_path", None)
     return _without_none(raw)
+
+
+def _history_view_from_metrics(activity: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
+    """Build a compact, fact-only history row for optional child-agent context."""
+    identity = metrics.get("identity") if isinstance(metrics.get("identity"), dict) else {}
+    scale = metrics.get("scale") if isinstance(metrics.get("scale"), dict) else {}
+    power = metrics.get("power") if isinstance(metrics.get("power"), dict) else {}
+    heart_rate = metrics.get("heart_rate") if isinstance(metrics.get("heart_rate"), dict) else {}
+    return _without_none({
+        "schema_version": "activity_facts_history.v1",
+        "activity_key": metrics.get("activity_key") or activity.get("activity_key"),
+        "file_path": activity.get("fit_path"),
+        "start_time": identity.get("start_time_local") or activity.get("start_time_local"),
+        "start_time_local": identity.get("start_time_local") or activity.get("start_time_local"),
+        "sport_type": identity.get("sport_type") or activity.get("sport_type"),
+        "sub_sport": identity.get("sub_sport") or activity.get("sub_sport"),
+        "duration_min": scale.get("duration_min"),
+        "distance_km": scale.get("distance_km"),
+        "normalized_power_w": power.get("normalized_power_w"),
+        "intensity_factor": power.get("intensity_factor"),
+        "avg_hr_bpm": heart_rate.get("avg_hr_bpm"),
+        "tss": get_tss(metrics),
+        "metrics_source": "activity_facts",
+    })
 
 
 def _activity_enrichment_from_report(document: dict[str, Any]) -> dict[str, Any]:
