@@ -76,6 +76,37 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         category=CATEGORY_ACTIVITY_SELECTION,
     ),
     ToolDef(
+        name="lookup_activities",
+        description=(
+            "按显式 kind 只读查询本地 SQLite 活动目录，不改变当前活动集合或导航焦点。"
+            "用于在已建立的活动范围外补充查询、对照或查找全库最早/最新活动；参数规则与 resolve_activities 相同。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["current", "recent", "date", "range", "all", "key", "index", "name"],
+                    "description": "选择类型；必须显式提供。",
+                },
+                "activity_key": {"type": "string"},
+                "activity_index": {"type": "integer"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 1},
+                "order": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
+                "date": {"type": "string", "description": "相对或 ISO 日期,如 today/yesterday/2026-05-18"},
+                "name": {"type": "string"},
+                "sport_type": {"type": "string", "description": "可传 cycling/running/walking，也接受常见别名。"},
+                "time_of_day": {"type": "string", "enum": ["morning", "afternoon", "evening", "night"]},
+                "start_date": {"type": "string", "description": "ISO date"},
+                "end_date": {"type": "string", "description": "ISO date"},
+                "relative_range": {"type": "string", "enum": ["this_week", "this_month", "last_week", "last_month"]},
+                "days": {"type": "integer", "minimum": 1, "maximum": 3650},
+            },
+            "required": ["kind"],
+        },
+        category=CATEGORY_ACTIVITY_SELECTION,
+    ),
+    ToolDef(
         name="find_segments",
         description=(
             "在当前单条活动内定位语义片段并保存导航焦点。"
@@ -214,6 +245,35 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                     "enum": ["day", "week", "month"],
                     "default": "week",
                     "description": "历史指标的时间分组粒度。",
+                },
+            },
+        },
+        category=CATEGORY_ANALYSIS,
+    ),
+    ToolDef(
+        name="analyze_training_history",
+        description=(
+            "对已定位的多条活动生成专业、保守且可视化友好的历史分析。"
+            "输出 training_history_analysis.v1，包含当前期/基线期、覆盖率、训练量/强度/规律性证据、"
+            "不可用维度、置信度和趋势序列；不从报告文本提取数值。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "group_by": {
+                    "type": "string",
+                    "enum": ["day", "week", "month"],
+                    "default": "week",
+                },
+                "sport_type": {
+                    "type": "string",
+                    "enum": ["cycling", "running", "walking"],
+                    "description": "表现分析必须按运动类型筛选。",
+                },
+                "combine_sports_for_volume": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "仅当用户明确询问跨运动总训练量时启用。",
                 },
             },
         },

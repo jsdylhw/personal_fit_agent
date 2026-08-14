@@ -12,24 +12,36 @@ SKILL_LIBRARY = Path(__file__).with_name("library")
 
 
 def load_skill_instructions(skill: SkillSpec, *, sport_types: Iterable[str] = ()) -> str:
-    """Load SKILL.md only after activation, then add known sport references."""
+    """Load SKILL.md only after activation, then add bounded references."""
     skill_dir = SKILL_LIBRARY / skill.skill_id
     body = _markdown_body((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
-    references = list(load_sport_references(skill, sport_types=sport_types))
+    references = list(load_skill_references(skill, sport_types=sport_types))
     return "\n\n".join(part for part in (body.strip(), *references) if part)
+
+
+def load_skill_references(skill: SkillSpec, *, sport_types: Iterable[str] = ()) -> tuple[str, ...]:
+    """Load only references explicitly registered for the activated Skill."""
+    skill_dir = SKILL_LIBRARY / skill.skill_id
+    names = [*_general_reference_names(skill), *_sport_reference_names(sport_types)]
+    references: list[str] = []
+    for reference_name in names:
+        path = skill_dir / "references" / f"{reference_name}.md"
+        if path.exists():
+            references.append(path.read_text(encoding="utf-8").strip())
+    return tuple(references)
 
 
 def load_sport_references(skill: SkillSpec, *, sport_types: Iterable[str]) -> tuple[str, ...]:
     """Load only references selected by structured sport values."""
     if skill.skill_id != "analyze-activity":
         return ()
-    skill_dir = SKILL_LIBRARY / skill.skill_id
-    references = []
-    for reference_name in _sport_reference_names(sport_types):
-        path = skill_dir / "references" / f"{reference_name}.md"
-        if path.exists():
-            references.append(path.read_text(encoding="utf-8").strip())
-    return tuple(references)
+    return load_skill_references(skill, sport_types=sport_types)
+
+
+def _general_reference_names(skill: SkillSpec) -> tuple[str, ...]:
+    if skill.skill_id == "analyze-training-history":
+        return ("methodology", "output-contract")
+    return ()
 
 
 def _markdown_body(text: str) -> str:

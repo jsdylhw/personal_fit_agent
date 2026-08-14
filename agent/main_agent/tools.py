@@ -25,6 +25,13 @@ def resolve_activities(args: dict[str, Any], context: AgentContext) -> dict[str,
     return resolve(args, context)
 
 
+def lookup_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    """Read an auxiliary activity selection without changing current focus."""
+    from agent.tools.handlers.activity_selection import lookup_activities as lookup
+
+    return lookup(args, context)
+
+
 def find_segments(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     from agent.tools.handlers.activity_analysis import find_segments as find
 
@@ -125,6 +132,18 @@ def calculate_history_metrics(args: dict[str, Any], context: AgentContext) -> di
     )
 
 
+def analyze_training_history(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    from agent.tools.handlers.activity_insights import analyze_training_history_tool
+
+    return analyze_training_history_tool(
+        context,
+        group_by=str(args.get("group_by") or "week"),
+        sport_type=str(args.get("sport_type") or "") or None,
+        combine_sports_for_volume=bool(args.get("combine_sports_for_volume")),
+        name="analyze_training_history",
+    )
+
+
 def generate_route_advice(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     from agent.tools.handlers.route import generate_route_advice_tool
 
@@ -200,6 +219,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "casual_chat": casual_chat,
     "ask_user_clarification": ask_user_clarification,
     "resolve_activities": resolve_activities,
+    "lookup_activities": lookup_activities,
     "find_segments": find_segments,
     "inspect_selection": inspect_selection,
     "analyze_selection": analyze_selection,
@@ -218,6 +238,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "generate_training_advice": generate_training_advice,
     "summarize_recent_training_load": summarize_recent_training_load,
     "calculate_history_metrics": calculate_history_metrics,
+    "analyze_training_history": analyze_training_history,
     "generate_route_advice": generate_route_advice,
 }
 

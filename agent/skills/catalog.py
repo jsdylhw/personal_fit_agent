@@ -14,6 +14,7 @@ from agent.skills.models import SkillSpec
 # add a new entry point while accidentally hiding an existing valid tool.
 _ACTIVITY_NAVIGATION_TOOLS = (
     "resolve_activities",
+    "lookup_activities",
     "navigate_selection",
 )
 
@@ -23,6 +24,7 @@ _SELECTION_ANALYSIS_TOOLS = (
 )
 
 _HISTORY_EVIDENCE_TOOLS = (
+    "analyze_training_history",
     "summarize_activities",
     "compare_activities",
     "summarize_recent_training_load",

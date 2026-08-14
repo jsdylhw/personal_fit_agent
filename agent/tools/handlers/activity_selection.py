@@ -71,3 +71,44 @@ def resolve_activities(
         "status": "completed",
         "result": result,
     }
+
+
+def lookup_activities(
+    arguments: dict[str, Any],
+    context: AgentContext,
+    *,
+    path: str | Path | None = None,
+    today: date | None = None,
+) -> dict[str, Any]:
+    """Resolve an auxiliary catalogue query without changing navigation.
+
+    A compound user request can refer to an established collection and an
+    independent activity at the same time.  Unlike ``resolve_activities``,
+    this read-only lookup must not replace the persisted root or current focus.
+    """
+    try:
+        request = ActivitySelectionRequest.from_arguments(arguments)
+        current_ids = [
+            str(item.get("activity_key") or "")
+            for item in context.selected_activities
+            if isinstance(item, dict) and item.get("activity_key")
+        ]
+        selection = ActivityResolver(path).resolve(
+            request,
+            today=today,
+            current_activity_ids=current_ids,
+        )
+    except ValueError as exc:
+        return {
+            "step": "lookup_activities",
+            "status": "failed",
+            "error": "invalid_activity_selection",
+            "message": str(exc),
+        }
+
+    return {
+        "step": "lookup_activities",
+        "status": "completed",
+        "result": selection.to_dict(),
+        "navigation_changed": False,
+    }

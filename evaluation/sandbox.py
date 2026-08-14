@@ -127,6 +127,20 @@ def _default_output(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 },
             },
         }
+    if name == "analyze_training_history":
+        return {
+            "status": "completed",
+            "result": {
+                "schema_version": "training_history_analysis.v1",
+                "coverage": {"activity_count": 8, "comparable_session_count": 0},
+                "conclusion": {
+                    "assessment": "mixed", "confidence": "low",
+                    "summary": "训练量可比较，但缺少匹配训练证据。",
+                },
+                "dimensions": [],
+                "view": {"type": "training_history"},
+            },
+        }
     if name == "generate_training_advice":
         return {"status": "completed", "answer": "建议安排轻松恢复骑。"}
     if name == "generate_route_advice":

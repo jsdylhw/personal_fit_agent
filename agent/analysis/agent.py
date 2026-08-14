@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import re
 from pathlib import Path
 from typing import Any
 
@@ -106,10 +107,37 @@ def analyze_fit_file(
             result["status"] = "skipped_existing_summary"
             return result
 
-    parsed = parse_fit(path)
+    facts = store.get_facts(activity_key)
+    activity = store.get_activity(activity_key)
+    parsed: dict[str, Any] | None = None
+    facts_were_ephemeral = False
+    if facts is None:
+        # Focused read-only analysis can be requested for an unimported FIT.
+        # Build equivalent facts in memory; persistent calls save them below.
+        from fit.analysis.features import build_activity_features
+
+        parsed = parse_fit(path)
+        facts_were_ephemeral = True
+        facts = {
+            "metrics": build_activity_metrics(
+                parsed,
+                activity_key=activity_key,
+                fit_path=project_relative_or_absolute(path),
+            ),
+            "features": build_activity_features(
+                parsed,
+                activity_key=activity_key,
+                fit_path=project_relative_or_absolute(path),
+            ),
+        }
+    fit_summary = (
+        dict(parsed.get("summary") or {})
+        if parsed is not None
+        else _fit_summary_from_facts(facts, activity)
+    )
     history_before = (
         store.query_history(
-            before=parsed["summary"].get("start_time_local") or parsed["summary"].get("start_time"),
+            before=fit_summary.get("start_time_local") or fit_summary.get("start_time"),
             days=90,
             limit=50,
         )
@@ -121,21 +149,20 @@ def analyze_fit_file(
         parsed,
         history_before=history_before,
         user_request=user_request,
+        facts=facts,
+        fit_summary=fit_summary,
     )
     analysis_submission = normalize_analysis_submission(model_result.get("analysis_summary") or {})
 
-    activity_metrics = build_activity_metrics(
-        parsed,
-        activity_key=activity_key,
-        fit_path=project_relative_or_absolute(path),
-    )
+    activity_metrics = facts.get("metrics") if isinstance(facts.get("metrics"), dict) else {}
     result = {
         "schema_version": SUMMARY_SCHEMA_V2,
         "status": "analyzed" if persist else "analyzed_query",
         "activity_key": activity_key,
         "fit_path": project_relative_or_absolute(path),
-        "fit_summary": llm_safe_fit_summary(parsed["summary"]),
+        "fit_summary": llm_safe_fit_summary(fit_summary),
         "activity_metrics": activity_metrics,
+        "activity_features": facts.get("features") if isinstance(facts.get("features"), dict) else {},
         "analysis_summary": analysis_summary_from_submission(analysis_submission),
         "model": model_result.get("model"),
         "session_id": model_result.get("session_id"),
@@ -153,7 +180,23 @@ def analyze_fit_file(
         if store.get_activity(activity_key) is None:
             from storage.repositories.activity import entry_from_fit_summary
 
+            if parsed is None:
+                parsed = parse_fit(path)
+                fit_summary = dict(parsed.get("summary") or fit_summary)
             store.upsert_activity(entry_from_fit_summary(path, parsed.get("summary") or {}))
+        # A report may be generated directly from a FIT that was not imported
+        # through Garmin/manual indexing.  Keep its deterministic facts in the
+        # same durable store so later questions do not depend on report prose.
+        if facts_were_ephemeral:
+            from services.activity.catalog import persist_activity_facts
+
+            if parsed is None:
+                parsed = parse_fit(path)
+            persist_activity_facts(
+                parsed,
+                activity_key=activity_key,
+                fit_path=project_relative_or_absolute(path),
+            )
         store.save_report(result)
 
     return result
@@ -161,23 +204,26 @@ def analyze_fit_file(
 
 def analyze_with_llm(
     path: Path,
-    parsed: dict[str, Any],
+    parsed: dict[str, Any] | None,
     *,
     history_before: dict[str, Any] | None,
     user_request: str = "",
+    facts: dict[str, Any] | None = None,
+    fit_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the child-agent FIT tool loop and return final structured analysis."""
     client = AnthropicMessagesClient()
     session_id = new_session_id("fit_analysis")
     strava_summary_tone = choose_strava_summary_tone()
-    system_prompt = build_fit_analysis_system_prompt((parsed.get("summary") or {}).get("sport_type"))
-    analysis_tools = (
-        FIT_ANALYSIS_TOOLS
-        if history_before is not None
-        else tuple(tool for tool in FIT_ANALYSIS_TOOLS if tool.name != "get_history")
+    summary = dict(fit_summary or ((parsed or {}).get("summary") or {}))
+    system_prompt = build_fit_analysis_system_prompt(summary.get("sport_type"))
+    required_raw_tool = _required_raw_window_tool(user_request)
+    analysis_tools = _analysis_tools_for_request(
+        history_before=history_before,
+        required_raw_tool=required_raw_tool,
     )
     registry = ToolRegistry(analysis_tools)
-    handlers = build_tool_handlers(parsed, history_before)
+    handlers = build_tool_handlers(parsed if parsed is not None else lambda: parse_fit(path), history_before)
 
     messages: list[dict[str, Any]] = [
         {
@@ -189,6 +235,8 @@ def analyze_with_llm(
                     history_before=history_before,
                     strava_summary_tone=strava_summary_tone,
                     user_request=user_request,
+                    facts=facts,
+                    fit_summary=summary,
                 ),
                 ensure_ascii=False,
                 indent=2,
@@ -199,6 +247,7 @@ def analyze_with_llm(
     turns: list[dict[str, Any]] = []
     data: dict[str, Any] | None = None
     last_response: dict[str, Any] | None = None
+    raw_window_tool_used = False
 
     for loop_step in range(1, MAX_TOOL_LOOP_STEPS + 1):
         response = client.create_messages(
@@ -230,6 +279,11 @@ def analyze_with_llm(
             submitted_data = submission.get("input")
             candidate = submitted_data if isinstance(submitted_data, dict) else {}
             validation_error = _submission_validation_error(candidate)
+            if validation_error is None and required_raw_tool and not raw_window_tool_used:
+                validation_error = (
+                    f"explicit raw window requires {required_raw_tool}; "
+                    "call it with the requested bounds before submit_analysis"
+                )
             if validation_error is None:
                 data = candidate
                 turns.append({"step": loop_step, "type": "analysis_submission", "tool": "submit_analysis"})
@@ -276,6 +330,8 @@ def analyze_with_llm(
                     output = json.dumps({"error": type(exc).__name__, "message": str(exc)})
             tool_result_blocks.append(build_tool_result_block(block["id"], output))
             turns.append({"step": loop_step, "type": "tool_result", "tool": block["name"]})
+            if block["name"] == required_raw_tool:
+                raw_window_tool_used = True
 
         if tool_result_blocks:
             messages.append({"role": "user", "content": tool_result_blocks})
@@ -352,11 +408,13 @@ def analyze_with_llm(
 
 def build_initial_loop_payload(
     path: Path,
-    parsed: dict[str, Any],
+    parsed: dict[str, Any] | None,
     *,
     history_before: dict[str, Any] | None,
     strava_summary_tone: dict[str, str],
     user_request: str = "",
+    facts: dict[str, Any] | None = None,
+    fit_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the first user message for the child-agent tool loop."""
     return {
@@ -376,9 +434,75 @@ def build_initial_loop_payload(
         "strava_summary_style": strava_summary_tone,
         "user_request": user_request.strip(),
         "fit_file": {"path": str(path), "name": path.name, "activity_key": _activity_key(path)},
-        "fit_summary": llm_safe_fit_summary(parsed.get("summary", {})),
+        "fit_summary": llm_safe_fit_summary(fit_summary or ((parsed or {}).get("summary") or {})),
+        "activity_metrics": facts.get("metrics") if isinstance(facts, dict) and isinstance(facts.get("metrics"), dict) else build_activity_metrics(parsed or {}, activity_key=_activity_key(path), fit_path=project_relative_or_absolute(path)),
+        "activity_features": facts.get("features") if isinstance(facts, dict) and isinstance(facts.get("features"), dict) else _build_ephemeral_features(parsed or {}, path),
         "history_available": history_before is not None,
     }
+
+
+def _fit_summary_from_facts(facts: dict[str, Any], activity: dict[str, Any] | None) -> dict[str, Any]:
+    """Build the child payload identity without parsing an already-indexed FIT."""
+    metrics = facts.get("metrics") if isinstance(facts.get("metrics"), dict) else {}
+    identity = metrics.get("identity") if isinstance(metrics.get("identity"), dict) else {}
+    scale = metrics.get("scale") if isinstance(metrics.get("scale"), dict) else {}
+    activity = activity or {}
+    duration_min = scale.get("duration_min")
+    distance_km = scale.get("distance_km")
+    return {
+        "sport_type": identity.get("sport_type") or activity.get("sport_type"),
+        "sub_sport": identity.get("sub_sport") or activity.get("sub_sport"),
+        "start_time_local": identity.get("start_time_local") or activity.get("start_time_local"),
+        "duration_s": round(float(duration_min) * 60, 3) if duration_min is not None else activity.get("duration_s"),
+        "distance_m": round(float(distance_km) * 1000, 3) if distance_km is not None else activity.get("distance_m"),
+        "file_name": activity.get("file_name"),
+    }
+
+
+_TIME_WINDOW_RE = re.compile(
+    r"(?:\d+|[一二三四五六七八九十]+)\s*(?:-|–|—|到|至|~)\s*(?:\d+|[一二三四五六七八九十]+)\s*(?:秒|s\b|分钟|min\b|分\b)"
+    r"|(?:前|后|最后|开始后)\s*(?:\d+|[一二三四五六七八九十]+)\s*(?:秒|s\b|分钟|min\b|分\b)",
+    re.IGNORECASE,
+)
+_DISTANCE_WINDOW_RE = re.compile(
+    r"(?:\d+(?:\.\d+)?|[一二三四五六七八九十]+)\s*(?:-|–|—|到|至|~)\s*"
+    r"(?:\d+(?:\.\d+)?|[一二三四五六七八九十]+)\s*(?:公里|km\b|千米|米\b)"
+    r"|(?:前|后|最后)\s*\d+(?:\.\d+)?\s*(?:公里|km\b|千米|米\b)",
+    re.IGNORECASE,
+)
+
+
+def _required_raw_window_tool(user_request: str) -> str | None:
+    """Map an explicit user window to the sole fitting child FIT tool."""
+    text = str(user_request or "")
+    if _TIME_WINDOW_RE.search(text):
+        return "get_time_intervals"
+    if _DISTANCE_WINDOW_RE.search(text):
+        return "get_distance_intervals"
+    return None
+
+
+def _analysis_tools_for_request(
+    *, history_before: dict[str, Any] | None, required_raw_tool: str | None,
+) -> tuple:
+    """Expose the minimum child-tool set for the current analysis question.
+
+    Exact windows intentionally receive exactly one matching raw query tool.
+    This makes the evidence boundary visible and prevents a sprint candidate
+    lookup from being substituted for a requested local measurement.
+    """
+    if required_raw_tool:
+        return tuple(tool for tool in FIT_ANALYSIS_TOOLS if tool.name in {required_raw_tool, "submit_analysis"})
+    if history_before is None:
+        return tuple(tool for tool in FIT_ANALYSIS_TOOLS if tool.name != "get_history")
+    return FIT_ANALYSIS_TOOLS
+
+
+def _build_ephemeral_features(parsed: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Keep direct unit callers compatible when no imported facts are supplied."""
+    from fit.analysis.features import build_activity_features
+
+    return build_activity_features(parsed, activity_key=_activity_key(path), fit_path=project_relative_or_absolute(path))
 
 
 def _submission_validation_error(data: dict[str, Any]) -> str | None:
