@@ -1,10 +1,11 @@
-"""基于 SQLite 中已有 V2 报告的确定性多活动对比。"""
+"""Deterministic multi-activity comparison over imported facts."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from domain.analysis.artifacts import build_history_view, get_analysis_summary, get_tss
+from domain.analysis.artifacts import get_analysis_summary, get_tss
+from services.activity.history import load_activity_metrics
 from services.activity.reporting import read_activity_report
 
 
@@ -24,31 +25,24 @@ def compare_activities(
     loaded: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for activity in activities:
-        summary, error = read_activity_report(activity)
-        if summary is None:
-            missing.append(_compact_missing_summary(activity))
+        metrics, source, error = load_activity_metrics(activity)
+        if metrics is None:
+            missing.append({**_compact_missing_summary(activity), "error": error})
             continue
-        if error:
-            return {
-                "error": "summary_read_failed",
-                "message": error,
-            }
-        loaded.append(_activity_report_from_summary(activity, summary))
-
-    if missing:
-        return {
-            "error": "missing_activity_summary",
-            "message": "Some selected activities do not have readable summary files.",
-            "missing": missing,
-        }
+        # Qualitative labels enrich presentation when a report exists, but the
+        # comparison remains valid for an imported activity without one.
+        summary, _ = read_activity_report(activity)
+        loaded.append(_activity_from_facts(activity, metrics, summary or {}, source=source))
     if len(loaded) < 2:
         return {
-            "error": "not_enough_summaries",
-            "message": "Need at least two readable summaries to compare activities.",
+            "error": "not_enough_activity_facts",
+            "message": "Need at least two activities with readable structured facts to compare.",
+            "missing": missing,
         }
 
     loaded = sorted(loaded, key=lambda item: str(item.get("start_time_local") or ""))
     comparison = _build_comparison(loaded)
+    comparison["missing"] = missing
     return {
         "step": name,
         "status": "completed",
@@ -57,30 +51,32 @@ def compare_activities(
     }
 
 
-def _activity_report_from_summary(
+def _activity_from_facts(
     activity: dict[str, Any],
+    metrics: dict[str, Any],
     summary: dict[str, Any],
+    *,
+    source: str,
 ) -> dict[str, Any]:
     fit_summary = summary.get("fit_summary") if isinstance(summary.get("fit_summary"), dict) else {}
     analysis_summary = get_analysis_summary(summary)
-    history_view = build_history_view(summary)
-    metrics = summary.get("activity_metrics") if isinstance(summary.get("activity_metrics"), dict) else {}
     scale = metrics.get("scale") if isinstance(metrics.get("scale"), dict) else {}
     power = metrics.get("power") if isinstance(metrics.get("power"), dict) else {}
+    identity = metrics.get("identity") if isinstance(metrics.get("identity"), dict) else {}
     return {
-        "activity_key": summary.get("activity_key") or activity.get("activity_key"),
-        "file_name": activity.get("file_name") or _path_name(str(summary.get("fit_path") or "")),
-        "start_time_local": fit_summary.get("start_time_local") or history_view.get("start_time_local"),
-        "sport_type": fit_summary.get("sport_type") or history_view.get("sport_type"),
+        "activity_key": metrics.get("activity_key") or activity.get("activity_key"),
+        "file_name": activity.get("file_name") or _path_name(str(activity.get("fit_path") or "")),
+        "start_time_local": identity.get("start_time_local") or fit_summary.get("start_time_local") or activity.get("start_time_local"),
+        "sport_type": identity.get("sport_type") or fit_summary.get("sport_type") or activity.get("sport_type"),
         "duration_min": _first_number(
             scale.get("duration_min"),
             _seconds_to_minutes(fit_summary.get("duration_s")),
-            history_view.get("duration_min"),
+            activity.get("duration_min"),
         ),
         "distance_km": _first_number(
             scale.get("distance_km"),
             _meters_to_km(fit_summary.get("distance_m")),
-            history_view.get("distance_km"),
+            activity.get("distance_km"),
         ),
         "summary_label": analysis_summary.get("summary_label"),
         "main_stimulus": analysis_summary.get("main_stimulus"),
@@ -89,7 +85,7 @@ def _activity_report_from_summary(
         "quality_notes": analysis_summary.get("quality_notes") if isinstance(analysis_summary.get("quality_notes"), list) else [],
         "tss": get_tss(metrics),
         "intensity_factor": _number(power.get("intensity_factor")),
-        "fit_summary": fit_summary,
+        "metrics_source": source,
     }
 
 
@@ -143,7 +139,7 @@ def _training_judgement(
     higher_load: dict[str, Any] | None,
 ) -> str:
     if not higher_load:
-        return "已有报告不足以判断训练价值。"
+        return "导入时结构化事实不足以判断相对训练负荷。"
     label = higher_load.get("summary_label") or higher_load.get("activity_key")
     tss = higher_load.get("tss")
     load = higher_load.get("load_label") or "未知负荷"
@@ -154,7 +150,7 @@ def _training_judgement(
 def _format_comparison_answer(comparison: dict[str, Any]) -> str:
     activities = comparison.get("activities") or []
     lines = [
-        f"已基于 {len(activities)} 份已有活动报告完成对比,没有重新解析 FIT。",
+        f"已基于 {len(activities)} 条导入时结构化事实完成对比,没有重新解析 FIT 或依赖报告文本。",
         f"总量: {comparison['totals']['distance_km']} km, {comparison['totals']['duration_min']} 分钟。",
     ]
     for index, activity in enumerate(activities, start=1):

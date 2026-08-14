@@ -49,8 +49,8 @@ def summarize_training_load(
 
     if not reports:
         return {
-            "error": "missing_activity_summary",
-            "message": "Need at least one readable summary to summarize training load.",
+            "error": "missing_activity_metrics",
+            "message": "Need at least one activity with readable structured metrics to summarize training load.",
             "missing": missing,
         }
 

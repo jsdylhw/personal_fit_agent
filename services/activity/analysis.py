@@ -33,33 +33,37 @@ def discover_activity_segments(activity_id: str, arguments: dict[str, Any]) -> d
     activity = ActivityStore().get_activity(activity_id)
     if activity is None:
         return {"error": "activity_not_found", "message": f"activity not found: {activity_id}"}
-    fit_path = _fit_path(activity)
-    if fit_path is None:
-        return {"error": "missing_fit_file", "message": "The selected activity FIT file is unavailable."}
-
-    try:
-        parsed = parse_fit(fit_path)
-        # Short sprint discovery needs a shorter detector window than sustained
-        # interval discovery, but the detector still owns the actual threshold.
-        requested_window = arguments.get("window_seconds")
-        window_seconds = int(requested_window or (10 if segment_type == "sprint" else 30))
-        step_seconds = int(arguments.get("step_seconds") or (5 if window_seconds <= 15 else 10))
-        if segment_type == "sprint":
-            sprint_scan = detect_sprints(parsed, max_segments=int(arguments.get("max_segments") or 12))
-            scan = {
-                **sprint_scan,
-                "efforts": sprint_scan.get("segments") or [],
-                "summary": {"effort_count": int(sprint_scan.get("count") or 0)},
-            }
-        else:
-            scan = scan_activity_segments(
-                parsed,
-                window_seconds=window_seconds,
-                step_seconds=step_seconds,
-                max_segments=int(arguments.get("max_segments") or 12),
-            )
-    except Exception as exc:
-        return {"error": "segment_scan_failed", "message": f"{type(exc).__name__}: {exc}"}
+    facts = ActivityStore().get_facts(activity_id)
+    features = facts.get("features") if isinstance(facts, dict) else None
+    if isinstance(features, dict) and features.get("schema_version") == "activity_features.v1":
+        scan = _scan_from_stored_features(features, segment_type=segment_type)
+    else:
+        fit_path = _fit_path(activity)
+        if fit_path is None:
+            return {"error": "missing_fit_file", "message": "The selected activity FIT file is unavailable."}
+        try:
+            parsed = parse_fit(fit_path)
+            # This fallback is only for legacy activities that have not yet had
+            # their import-time facts rebuilt.
+            requested_window = arguments.get("window_seconds")
+            window_seconds = int(requested_window or (10 if segment_type == "sprint" else 30))
+            step_seconds = int(arguments.get("step_seconds") or (5 if window_seconds <= 15 else 10))
+            if segment_type == "sprint":
+                sprint_scan = detect_sprints(parsed, max_segments=int(arguments.get("max_segments") or 12))
+                scan = {
+                    **sprint_scan,
+                    "efforts": sprint_scan.get("segments") or [],
+                    "summary": {"effort_count": int(sprint_scan.get("count") or 0)},
+                }
+            else:
+                scan = scan_activity_segments(
+                    parsed,
+                    window_seconds=window_seconds,
+                    step_seconds=step_seconds,
+                    max_segments=int(arguments.get("max_segments") or 12),
+                )
+        except Exception as exc:
+            return {"error": "segment_scan_failed", "message": f"{type(exc).__name__}: {exc}"}
 
     candidates = _segment_candidates(scan, activity_id=activity_id, requested_type=segment_type)
     if ordinal is not None and ordinal > len(candidates):
@@ -155,13 +159,24 @@ def _focused_activity_analysis(
 
 
 def _inspect_activity_with_atomic_tools(activity: dict[str, Any]) -> dict[str, Any]:
+    activity_id = str(activity.get("activity_key") or "")
+    facts = ActivityStore().get_facts(activity_id) if activity_id else None
+    if isinstance(facts, dict):
+        # Import-time facts are the default L1 inspection source.  They contain
+        # the same deterministic metrics/features sent to the child agent.
+        return {
+            "status": "completed",
+            "source": "activity_facts",
+            "activity_id": activity_id,
+            "metrics": facts.get("metrics") or {},
+            "features": facts.get("features") or {},
+        }
     parsed = _parse_activity(activity)
     if parsed is None:
         return {"status": "unavailable", "error": "missing_fit_file"}
-    # Reuse the same atomic overview tool exposed to ActivityAnalysisAgent.
     return {
         "status": "completed",
-        "source": "get_activity_overview",
+        "source": "legacy_fit_overview",
         "activity_id": activity.get("activity_key"),
         "overview": get_activity_overview_tool(parsed),
     }
@@ -345,6 +360,30 @@ def _segment_candidates(
             "confidence": item.get("score"),
         })
     return candidates
+
+
+def _scan_from_stored_features(features: dict[str, Any], *, segment_type: str) -> dict[str, Any]:
+    """Adapt import-time candidates to the existing segment selection shape."""
+    sprint = _section(features, "sprint_candidates")
+    efforts = _section(features, "effort_candidates")
+    climbs = _section(features, "climb_candidates")
+    if segment_type == "sprint":
+        candidates = sprint.get("segments") if isinstance(sprint.get("segments"), list) else []
+        return {
+            "efforts": candidates,
+            "summary": {"effort_count": int(sprint.get("count") or len(candidates))},
+        }
+    raw_efforts = efforts.get("efforts") if isinstance(efforts.get("efforts"), list) else []
+    if segment_type == "fast_running_segment":
+        raw_efforts = [item for item in raw_efforts if isinstance(item, dict) and item.get("type") == segment_type]
+    if segment_type in {"interval", "effort"}:
+        raw_efforts = [item for item in raw_efforts if isinstance(item, dict)]
+    climb_segments = climbs.get("segments") if isinstance(climbs.get("segments"), list) else []
+    return {
+        "efforts": raw_efforts,
+        "segments": climb_segments,
+        "summary": efforts.get("summary") if isinstance(efforts.get("summary"), dict) else {},
+    }
 
 
 def _segment_ref(value: dict[str, Any]) -> SegmentRef:

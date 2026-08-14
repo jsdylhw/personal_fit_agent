@@ -6,6 +6,7 @@ import calendar
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from statistics import median
 from typing import Any, Iterable
 
 from services.activity.reporting import read_activity_report
@@ -16,6 +17,7 @@ from domain.analysis.artifacts import (
     summary_schema_version,
 )
 from fit.parser import parse_fit
+from storage.repositories.activity import ActivityStore
 
 
 GROUP_BY_VALUES = {"day", "week", "month"}
@@ -35,7 +37,8 @@ def calculate_history_metrics(
             "message": "group_by must be one of: day, week, month.",
         }
 
-    selected = _deduplicate_activities(activities)
+    raw_selected = [item for item in activities if isinstance(item, dict)]
+    selected = _deduplicate_activities(raw_selected)
     if not selected:
         return {
             "error": "missing_selected_activities",
@@ -96,10 +99,12 @@ def calculate_history_metrics(
         "group_by": group_by,
         "coverage": {
             "selected_activity_count": len(selected),
+            "duplicate_activity_count": len(raw_selected) - len(selected),
             "included_activity_count": len(loaded),
             "missing_activity_count": len(missing),
             "source_counts": dict(sorted(source_counts.items())),
             "metric_counts": overall.pop("metric_counts"),
+            "missing_metrics": _missing_metric_names(loaded),
         },
         "date_range": {
             "start": loaded[0]["start_time_local"][:10],
@@ -112,6 +117,7 @@ def calculate_history_metrics(
             "power_thresholds_w": thresholds,
             "tss_sources": tss_sources,
             "comparable_power_load": len(thresholds) <= 1 and len(tss_sources) <= 1,
+            "threshold_timeline": _threshold_timeline(loaded),
         },
         "activities": [
             {
@@ -128,7 +134,14 @@ def calculate_history_metrics(
 
 
 def load_activity_metrics(activity: dict[str, Any]) -> tuple[dict[str, Any] | None, str, str | None]:
-    """Load V2 metrics from SQLite or compute them from the immutable FIT."""
+    """Load imported metrics first, retaining legacy report/FIT fallbacks."""
+    activity_key = str(activity.get("activity_key") or "")
+    if activity_key:
+        facts = ActivityStore().get_facts(activity_key)
+        metrics = facts.get("metrics") if isinstance(facts, dict) else None
+        if isinstance(metrics, dict) and metrics.get("schema_version") == "activity_metrics.v2":
+            return metrics, "stored_facts_v1", None
+
     summary, summary_error = read_activity_report(activity)
     if summary is not None:
         metrics = summary.get("activity_metrics")
@@ -239,6 +252,10 @@ def _build_periods(rows: list[dict[str, Any]], *, group_by: str) -> list[dict[st
 
 
 def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    durations = [
+        value for row in rows
+        if (value := _number(_section(row["metrics"], "scale").get("duration_min"))) is not None
+    ]
     totals = {
         "duration_min": _sum_metric(rows, "scale", "duration_min"),
         "distance_km": _sum_metric(rows, "scale", "distance_km"),
@@ -272,6 +289,8 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "activity_count": len(rows),
         "active_days": len({row["start_time_local"][:10] for row in rows}),
+        "median_session_duration_min": round(float(median(durations)), 2) if durations else None,
+        "longest_inactivity_gap_days": _longest_inactivity_gap_days(rows),
         "sport_counts": dict(sorted(Counter(
             str(_section(row["metrics"], "identity").get("sport_type") or "unknown") for row in rows
         ).items())),
@@ -280,6 +299,54 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "best": best,
         "metric_counts": metric_counts,
     }
+
+
+def _longest_inactivity_gap_days(rows: list[dict[str, Any]]) -> int | None:
+    active_dates = sorted({datetime.fromisoformat(row["start_time_local"]).date() for row in rows})
+    if len(active_dates) < 2:
+        return None
+    return max((later - earlier).days for earlier, later in zip(active_dates, active_dates[1:]))
+
+
+def _missing_metric_names(rows: list[dict[str, Any]]) -> list[str]:
+    checks = {
+        "heart_rate": ("heart_rate", "avg_hr_bpm"),
+        "cadence": ("cadence", "avg"),
+        "speed": ("performance", "avg_speed_kmh"),
+    }
+    sports = {str(_section(row["metrics"], "identity").get("sport_type") or "").lower() for row in rows}
+    if any(token in sport for sport in sports for token in ("cycl", "ride", "bike", "骑")):
+        checks["power"] = ("power", "avg_power_w")
+    if any(token in sport for sport in sports for token in ("run", "跑")):
+        checks["pace"] = ("performance", "avg_pace_s_per_km")
+    missing = []
+    for label, (section, key) in checks.items():
+        if not rows or all(_number(_section(row["metrics"], section).get(key)) is None for row in rows):
+            missing.append(label)
+    cycling = any(token in sport for sport in sports for token in ("cycl", "ride", "bike", "骑"))
+    if cycling and (not rows or all(get_tss(row["metrics"]) is None for row in rows)):
+        missing.append("tss")
+    return missing
+
+
+def _threshold_timeline(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expose observed threshold changes without inventing effective dates."""
+    timeline: list[dict[str, Any]] = []
+    previous: tuple[float | None, str | None] | None = None
+    for row in rows:
+        power = _section(row["metrics"], "power")
+        current = (_number(power.get("threshold_power_w")), str(power.get("threshold_power_source") or "") or None)
+        if current == previous:
+            continue
+        if current[0] is not None:
+            timeline.append({
+                "observed_at": row["start_time_local"],
+                "threshold_power_w": current[0],
+                "source": current[1],
+                "activity_key": row["activity_key"],
+            })
+        previous = current
+    return timeline
 
 
 def _compare_latest_periods(periods: list[dict[str, Any]]) -> dict[str, Any] | None:

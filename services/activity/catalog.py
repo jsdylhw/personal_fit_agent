@@ -10,6 +10,8 @@ from domain.analysis.artifacts import get_index_load_label
 from fit.analysis.stats import _meters_to_km, _seconds_to_minutes, prune_empty_values
 from storage.repositories.activity import ActivityStore, entry_from_fit_summary, file_content_key
 from fit.parser import parse_fit
+from fit.analysis.features import build_activity_features
+from fit.analysis.metrics import build_activity_metrics
 
 def load_activity_index(path: str | Path | None = None) -> dict[str, Any]:
     """Return the catalogue shape expected by existing selection handlers."""
@@ -41,7 +43,29 @@ def upsert_activity_from_fit(
     entry = entry_from_fit_summary(
         fit, summary, source=source, source_activity_id=source_activity_id,
     )
-    return ActivityStore(path).upsert_activity(entry)
+    store = ActivityStore(path)
+    stored = store.upsert_activity(entry)
+    activity_key = str(stored.get("activity_key") or entry["activity_key"])
+    facts = persist_activity_facts(
+        parsed,
+        activity_key=activity_key,
+        fit_path=stored.get("fit_path"),
+        path=path,
+    )
+    return {**stored, "facts_schema_version": facts["schema_version"], "facts_revision": facts["revision"]}
+
+
+def persist_activity_facts(
+    parsed: dict[str, Any],
+    *,
+    activity_key: str,
+    fit_path: str | None,
+    path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Save deterministic import-time facts after the matching activity exists."""
+    metrics = build_activity_metrics(parsed, activity_key=activity_key, fit_path=fit_path)
+    features = build_activity_features(parsed, activity_key=activity_key, fit_path=fit_path)
+    return ActivityStore(path).save_facts(activity_key, metrics=metrics, features=features)
 
 
 def upsert_activity_entry(entry: dict[str, Any], *, path: str | Path | None = None) -> dict[str, Any]:
