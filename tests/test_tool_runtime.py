@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from agent.main_agent.context import AgentContext
 from agent.main_agent.guard import guard_tool_call
-from agent.main_agent.intent import extract_route_signals, intent_tool_categories, route_intent
 from agent.main_agent.tools import TOOL_HANDLERS
 from agent.tools.agent_tools import MAIN_AGENT_TOOLS
 
@@ -78,78 +77,6 @@ def test_pure_sync_handler_does_not_start_activity_workflow(monkeypatch):
     assert calls == [{"count": 3}]
     assert result == {"status": "completed", "downloaded": 2, "skipped": 1, "failed": 0}
     assert "workflow_id" not in result
-
-
-def test_workflow_intent_is_available():
-    upload_intent = route_intent("重新上传本地的五个活动")
-    assert "workflow" in intent_tool_categories(upload_intent)
-
-
-def test_router_does_not_treat_negated_garmin_or_strava_as_requested_side_effects():
-    intent = route_intent("只汇总本地最近 1 条活动，不要下载 Garmin，也不要上传 Strava")
-
-    assert intent.kind.value == "analyze_range"
-    assert intent.allow_side_effects is False
-    assert "workflow" in intent_tool_categories(intent)
-
-
-def test_router_keeps_non_activity_conversation_in_chat_mode():
-    assert route_intent("我有一个朋友叫小a").kind.value == "chat"
-    assert route_intent("我有三个朋友").kind.value == "chat"
-    assert route_intent("我有个朋友他叫什么").kind.value == "chat"
-
-
-def test_router_still_recognizes_implicit_single_activity_question():
-    assert route_intent("这次骑行表现怎么样").kind.value == "analyze_single"
-
-
-def test_router_treats_sync_upload_as_one_mixed_goal():
-    intent = route_intent("同步最新三个活动并上传 Strava")
-
-    assert intent.kind.value == "mixed"
-    assert intent.allow_side_effects is True
-    assert {"operation", "workflow"}.issubset(intent_tool_categories(intent))
-
-
-def test_sync_intent_exposes_pure_sync_but_not_combined_workflow_category():
-    intent = route_intent("从 Garmin 同步最新三个活动，不需要分析")
-
-    assert intent.kind.value == "sync"
-    assert intent_tool_categories(intent) == {"operation"}
-    categories = {tool.name: tool.category for tool in MAIN_AGENT_TOOLS}
-    assert categories["sync_garmin_activities"] == "operation"
-    assert categories["sync_and_run_activity_workflow"] == "workflow"
-
-
-def test_router_distinguishes_latest_single_activity_from_recent_range():
-    assert route_intent("查看最近一次骑行的完整报告").kind.value == "analyze_single"
-    assert route_intent("分析最新一条跑步活动").kind.value == "analyze_single"
-    assert route_intent("分析最近三个上午的活动").kind.value == "analyze_range"
-    assert route_intent("比较最近几次骑行").kind.value == "compare"
-
-
-def test_rebuild_all_reports_exposes_background_report_tools():
-    intent = route_intent("重新分析所有活动，生成 V2 总结")
-
-    assert intent.kind.value == "analyze_range"
-    categories = intent_tool_categories(intent)
-    assert "workflow" in categories
-    exposed = {tool.name for tool in MAIN_AGENT_TOOLS if tool.category in categories}
-    assert {"rebuild_activity_reports", "get_activity_report_job"}.issubset(exposed)
-
-
-def test_router_treats_history_periods_and_trends_as_ranges():
-    assert route_intent("分析最近一个月的骑行趋势").kind.value == "analyze_range"
-    assert route_intent("最近一周跑步有进步吗").kind.value == "analyze_range"
-    assert route_intent("查看过去一月的活动变化").kind.value == "analyze_range"
-
-
-def test_route_signals_keep_negated_side_effects_out_of_mixed_intent():
-    signals = extract_route_signals("同步三个活动，不要上传，也不要分析")
-
-    assert signals.wants_sync is True
-    assert signals.wants_upload is False
-    assert signals.wants_analyze is False
 
 
 def test_guard_rejects_registered_tool_outside_the_current_category_allowlist():

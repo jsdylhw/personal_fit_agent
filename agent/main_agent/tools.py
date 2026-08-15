@@ -6,9 +6,43 @@ import json
 from typing import Any, Callable
 
 from agent.main_agent.context import AgentContext
-from agent.main_agent.tool_result import remember_failed_action
+from agent.main_agent.tool_result import is_failed_tool_output, remember_failed_action
+from agent.runtime.models import ToolExecution, TurnResult
 
 ToolHandler = Callable[[dict[str, Any], AgentContext], dict[str, Any]]
+
+
+def activate_skill(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    """Activate one registered Skill and return its complete bounded protocol."""
+    from agent.skills import get_skill, load_skill_instructions
+    from agent.main_agent.turn_policy import activation_note
+
+    skill_id = str(args.get("skill_id") or "").strip()
+    skill = get_skill(skill_id)
+    if skill is None:
+        return {
+            "status": "failed",
+            "error": "unknown_skill",
+            "message": f"Unknown skill: {skill_id}",
+        }
+    context.active_skill_id = skill.skill_id
+    context.active_skill_confidence = 1.0
+    context.active_skill_reason = "activated_by_main_agent"
+    latest_message = next((
+        str(item.get("content") or "") for item in reversed(context.messages)
+        if isinstance(item, dict) and item.get("role") == "user"
+    ), "")
+    note = activation_note(skill.skill_id, latest_message)
+    instructions = load_skill_instructions(skill)
+    if note:
+        instructions = f"{instructions}\n\n{note}"
+    return {
+        "status": "activated",
+        "skill_id": skill.skill_id,
+        "instructions": instructions,
+        "allowed_tools": list(skill.tool_names),
+        "allow_side_effects": skill.allow_side_effects,
+    }
 
 
 def casual_chat(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
@@ -216,6 +250,7 @@ def retry_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict
 
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
+    "activate_skill": activate_skill,
     "casual_chat": casual_chat,
     "ask_user_clarification": ask_user_clarification,
     "resolve_activities": resolve_activities,
@@ -258,7 +293,12 @@ def execute_saved_action(
     if not handler:
         answer = f"未知工具: {tool_name}"
         context.messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
-        return {"answer": answer, "status": "failed", "context": context, "intent": intent, "steps": []}
+        return TurnResult(
+            answer=answer, status="failed", context=context, intent=intent,
+            skill_id=context.active_skill_id,
+            selected_activities=context.selected_activities,
+            current_fit_file=str(context.current_fit_file) if context.current_fit_file else None,
+        ).to_dict()
 
     try:
         output = handler(tool_input, context)
@@ -268,6 +308,18 @@ def execute_saved_action(
     context.last_tool_result = {"step_name": tool_name, "result": output}
     remember_failed_action(context, tool_name, tool_input, output)
 
+    failed = is_failed_tool_output(output)
+    payload = output if isinstance(output, dict) else {"result": output}
+    execution = ToolExecution(
+        index=0,
+        tool=tool_name,
+        input=tool_input,
+        status=str(payload.get("status") or ("failed" if failed else "completed")),
+        message=str(payload["message"]) if payload.get("message") is not None else None,
+        error=str(payload["error"]) if payload.get("error") is not None else None,
+        result=output,
+    )
+    context.execution_trace = [execution.to_dict()]
     result_json = json.dumps(output, ensure_ascii=False, default=str)
     context.messages.append({"role": "user", "content": f"[{label}] {tool_name}"})
     context.messages.append({"role": "assistant", "content": [{"type": "text", "text": f"已执行 {tool_name}:\n{result_json[:300]}"}]})
@@ -275,10 +327,16 @@ def execute_saved_action(
         from agent.main_agent.hooks import _log
         _log(f"  [{label}] \033[1m{tool_name}\033[0m {result_json[:120]}")
 
-    return {
-        "answer": f"已执行 {tool_name}。\n{result_json[:200]}",
-        "status": "completed",
-        "context": context,
-        "intent": intent,
-        "steps": [{"tool": tool_name, "input": tool_input}],
-    }
+    return TurnResult(
+        answer=(
+            f"重试 {tool_name} 仍未完成。\n{result_json[:200]}"
+            if failed else f"已执行 {tool_name}。\n{result_json[:200]}"
+        ),
+        status="failed" if failed else "completed",
+        context=context,
+        intent=intent,
+        skill_id=context.active_skill_id,
+        executions=[execution],
+        selected_activities=context.selected_activities,
+        current_fit_file=str(context.current_fit_file) if context.current_fit_file else None,
+    ).to_dict()

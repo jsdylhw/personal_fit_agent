@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from agent.main_agent.context import AgentContext
+from domain.activity.models import ActivityHandle
 from agent.tools.handlers.activity_selection import lookup_activities, resolve_activities
 from domain.activity.selection import ActivitySelectionRequest
 from services.activity.catalog import replace_activity_entries
@@ -229,3 +230,12 @@ def test_invalid_request_does_not_replace_existing_context(tmp_path):
 
     assert result["error"] == "invalid_activity_selection"
     assert [item["activity_key"] for item in context.selected_activities] == ["a3", "a2"]
+
+def test_selecting_activity_without_fit_path_clears_previous_fit_shortcut():
+    context = AgentContext(session_id="stale-fit")
+    context.set_single_activity(ActivityHandle(activity_key="old", fit_path="/tmp/old.fit"))
+
+    context.set_single_activity(ActivityHandle(activity_key="new", fit_path=None))
+
+    assert context.current_activity_key == "new"
+    assert context.current_fit_file is None

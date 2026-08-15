@@ -16,7 +16,7 @@ class EvalCaseError(ValueError):
 class EvalCase:
     case_id: str
     input: str
-    mode: str = "router"
+    mode: str = "skill"
     tags: tuple[str, ...] = ()
     expected: dict[str, Any] = field(default_factory=dict)
     tool_outputs: dict[str, Any] = field(default_factory=dict)
@@ -27,10 +27,10 @@ class EvalCase:
             raise EvalCaseError(f"case must be an object: {source}")
         case_id = str(payload.get("case_id") or payload.get("id") or "").strip()
         user_input = str(payload.get("input") or "").strip()
-        mode = str(payload.get("mode") or "router").strip().lower()
+        mode = str(payload.get("mode") or "skill").strip().lower()
         if not case_id or not user_input:
             raise EvalCaseError(f"case_id and input are required: {source}")
-        if mode not in {"router", "skill", "live"}:
+        if mode not in {"skill", "live"}:
             raise EvalCaseError(f"unsupported mode {mode!r}: {source}")
         expected = payload.get("expected") or {}
         tool_outputs = payload.get("tool_outputs") or {}

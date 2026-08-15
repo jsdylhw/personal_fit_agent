@@ -12,6 +12,7 @@ class SkillSpec:
     skill_id: str
     description: str
     tool_names: tuple[str, ...]
+    public_intent: str
     allow_side_effects: bool = False
 
     def public_descriptor(self) -> dict[str, str]:

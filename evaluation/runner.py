@@ -7,10 +7,16 @@ from typing import Any, Callable, Iterable
 from agent.main_agent.context import AgentContext
 from integrations.llm import AnthropicMessagesClient, extract_text
 from agent.main_agent.hooks import ToolLoopHooks
-from agent.main_agent.intent import Intent, IntentKind, route_intent
-from agent.main_agent.loop import MAX_TOOL_STEPS, _build_system_prompt, _intent_for_skill, agent_loop
+from agent.main_agent.loop import (
+    MAX_TOOL_STEPS,
+    _build_system_prompt,
+    _skill_catalog_prompt,
+    agent_loop,
+)
+from agent.main_agent.tools import TOOL_HANDLERS
+from agent.main_agent.turn_policy import tools_for_skill
 from observability import capture_agent_trace
-from agent.skills import load_skill_instructions
+from agent.skills import get_skill
 from agent.skills.policy import validate_skill_selection
 from agent.skills.selector import select_skill
 from agent.tools import MAIN_AGENT_TOOLS, render_anthropic_tools
@@ -30,20 +36,12 @@ def run_case(
     cache_read_price_per_million: float | None = None,
 ) -> dict[str, Any]:
     with capture_agent_trace(metadata={"case_id": case.case_id, "mode": case.mode, "repeat": repeat}) as trace:
-        if case.mode == "router":
-            intent = route_intent(case.input)
-            result = {
-                "status": "completed",
-                "intent": intent.kind.value,
-                "answer": "",
-                "steps": [],
-            }
-        elif case.mode == "skill":
+        if case.mode == "skill":
             selection = select_skill(case.input, client=client or AnthropicMessagesClient())
             skill = validate_skill_selection(selection)
             result = {
                 "status": "completed",
-                "intent": _intent_for_skill(skill).kind.value if skill else "chat",
+                "intent": skill.public_intent if skill else "chat",
                 "skill_id": skill.skill_id if skill else None,
                 "answer": "",
                 "steps": [],
@@ -90,7 +88,7 @@ def run_suite(
     results: list[dict[str, Any]] = []
     for case in selected:
         for repeat in range(1, repeats + 1):
-            client = client_factory() if case.mode in {"router", "skill", "live"} and client_factory else None
+            client = client_factory() if case.mode in {"skill", "live"} and client_factory else None
             results.append(run_case(
                 case,
                 repeat=repeat,
@@ -104,24 +102,30 @@ def run_suite(
 
 
 def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) -> dict[str, Any]:
+    """Exercise the production progressive-disclosure protocol in a sandbox."""
     client = client or AnthropicMessagesClient()
-    selection = select_skill(case.input, client=client)
-    skill = validate_skill_selection(selection)
-    intent = _intent_for_skill(skill) if skill else Intent(IntentKind.CHAT)
-    allowed_tool_names = set(skill.tool_names) if skill else set()
-    allowed_categories = {
-        tool.category for tool in MAIN_AGENT_TOOLS if tool.name in allowed_tool_names
-    }
-    tools = [
-        render_anthropic_tools([tool])[0]
-        for tool in MAIN_AGENT_TOOLS
-        if tool.name in allowed_tool_names
-    ]
     context = AgentContext(
         session_id=f"eval-{case.case_id}",
         history_enabled=False,
         messages=[{"role": "user", "content": case.input}],
     )
+
+    def allowed_tool_names() -> set[str]:
+        skill = get_skill(context.active_skill_id)
+        return tools_for_skill(skill, case.input) if skill else {"activate_skill"}
+
+    def rendered_tools() -> list[dict[str, Any]]:
+        names = allowed_tool_names()
+        return [
+            render_anthropic_tools([tool])[0]
+            for tool in MAIN_AGENT_TOOLS
+            if tool.name in names
+        ]
+
+    initial_names = allowed_tool_names()
+    allowed_categories = {
+        tool.category for tool in MAIN_AGENT_TOOLS if tool.name in initial_names
+    }
     messages = list(context.messages)
     steps: list[dict[str, Any]] = []
     hooks = ToolLoopHooks(
@@ -129,24 +133,26 @@ def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) ->
         allowed_categories,
         {"value": False},
         steps,
-        allowed_tool_names=allowed_tool_names,
+        allowed_tool_names=initial_names,
+        allowed_tool_provider=allowed_tool_names,
         verbose=False,
     )
     sandbox = EvaluationSandbox(case)
+    handlers = sandbox.handlers()
+    # Skill activation is control-plane behavior, so keep the production
+    # handler while all business tools remain sandboxed.
+    handlers["activate_skill"] = TOOL_HANDLERS["activate_skill"]
     try:
         step_count = agent_loop(
             messages,
-            tools=tools,
-            handlers=sandbox.handlers(),
+            tools=rendered_tools,
+            handlers=handlers,
             hooks=hooks,
-            system=_build_system_prompt(
-                intent,
-                skill_instructions=load_skill_instructions(skill) if skill else "",
-            ),
-            max_steps=MAX_TOOL_STEPS,
+            system=_build_system_prompt(skill_catalog=_skill_catalog_prompt()),
+            max_steps=MAX_TOOL_STEPS + 1,
             client=client,
         )
-        status = "max_steps_exceeded" if step_count > MAX_TOOL_STEPS else "completed"
+        status = "max_steps_exceeded" if step_count > MAX_TOOL_STEPS + 1 else "completed"
         error = None
     except Exception as exc:
         status = "failed"
@@ -157,9 +163,11 @@ def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) ->
             text = extract_text(message)
             if text:
                 answer = text
+    skill = get_skill(context.active_skill_id)
+    intent = skill.public_intent if skill else "chat"
     result: dict[str, Any] = {
         "status": status,
-        "intent": intent.kind.value if hasattr(intent.kind, "value") else str(intent.kind),
+        "intent": intent,
         "skill_id": skill.skill_id if skill else None,
         "answer": answer,
         "steps": steps,

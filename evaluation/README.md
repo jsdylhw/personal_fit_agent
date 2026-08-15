@@ -2,9 +2,8 @@
 
 这套评测把 Main Agent 的 Skill 选择、工具选择、任务结果、回答约束、耗时和 Token 用量写成可重复比较的报告。
 
-## 三种模式
+## 两种模式
 
-- `router`：只运行旧 Intent Router，不调用模型；用于迁移期间的兼容回归，主聊天链路已不再依赖它。
 - `skill`：只评测第一阶段的 Skill 选择，不暴露或执行领域工具。
 - `live`：先选择 Skill，再只暴露该 Skill 的工具；所有 handler 替换为评测 Sandbox，不会同步 Garmin、写 Strava 或修改活动数据。
 

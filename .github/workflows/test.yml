@@ -33,8 +33,11 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-      - name: Run deterministic agent evaluation
-        run: python -m evaluation.cli run --mode router --output /tmp/personal-fit-agent-eval --fail-under 1.0
+      - name: Validate agent evaluation cases
+        # Skill/live evaluation calls the configured remote model and is not
+        # deterministic in CI.  Schema loading remains a local fail-fast check;
+        # behavioral evaluation runs explicitly with model credentials.
+        run: python -m evaluation.cli list-cases --cases evaluation/cases/skills.jsonl
 
       - name: Compile Python sources
         run: python -m compileall -q agent app core evaluation fit sinks demo

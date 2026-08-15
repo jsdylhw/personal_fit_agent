@@ -3,7 +3,7 @@ from __future__ import annotations
 from agent.main_agent.context import AgentContext
 from agent.main_agent.guard import guard_tool_call
 from agent.main_agent.turn_control import handle_control_turn
-from agent.main_agent.loop import _requires_raw_window_evidence, _tools_for_turn
+from agent.main_agent.turn_policy import requires_raw_window_evidence, tools_for_skill
 from agent.skills.catalog import get_skill, list_skill_descriptors
 from agent.skills.loader import load_skill_instructions, load_sport_references
 from agent.skills.models import SkillSelection
@@ -120,14 +120,14 @@ def test_analysis_skills_keep_established_and_unified_tool_entry_points():
 
 def test_explicit_window_hides_candidate_tools_but_keeps_targeted_query():
     skill = get_skill("analyze-activity")
-    tools = _tools_for_turn(skill, "这次 100–200 秒有没有连续冲刺？")
+    tools = tools_for_skill(skill, "这次 100–200 秒有没有连续冲刺？")
 
     assert "query_activity_detail" in tools
     assert "resolve_activities" in tools
     assert "find_segments" not in tools
     assert "analyze_selection" not in tools
-    assert _requires_raw_window_evidence("第 3–5 km 的爬坡怎么样？")
-    assert not _requires_raw_window_evidence("看看这次有没有冲刺")
+    assert requires_raw_window_evidence("第 3–5 km 的爬坡怎么样？")
+    assert not requires_raw_window_evidence("看看这次有没有冲刺")
 
 
 def test_every_skill_allowlist_name_has_a_registered_main_agent_tool():
@@ -148,7 +148,7 @@ def test_every_business_tool_is_reachable_from_at_least_one_skill():
         for tool_name in get_skill(descriptor["skill_id"]).tool_names
     }
 
-    assert registered - reachable == {"casual_chat", "ask_user_clarification"}
+    assert registered - reachable == {"activate_skill", "casual_chat", "ask_user_clarification"}
 
 
 def test_direct_retry_rejects_action_outside_previous_active_skill():
