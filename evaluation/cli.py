@@ -13,13 +13,13 @@ from evaluation.schema import load_cases
 
 
 app = typer.Typer(help="Run quantitative Personal FIT Agent evaluations.")
-DEFAULT_CASES = Path(__file__).parent / "cases" / "router.jsonl"
+DEFAULT_CASES = Path(__file__).parent / "cases" / "skills.jsonl"
 
 
 @app.command("run")
 def run_command(
     cases: Path = typer.Option(DEFAULT_CASES, exists=True, dir_okay=False, help="JSONL case file."),
-    mode: str = typer.Option("all", help="all, router, skill, or live."),
+    mode: str = typer.Option("all", help="all, skill, or live."),
     repeats: int = typer.Option(1, min=1, help="Repeat each selected case."),
     output: Optional[Path] = typer.Option(None, help="Artifact directory."),
     input_price: Optional[float] = typer.Option(None, help="USD per million input tokens."),
@@ -28,8 +28,8 @@ def run_command(
     cache_read_price: Optional[float] = typer.Option(None, help="USD per million cache-read tokens."),
     fail_under: Optional[float] = typer.Option(None, min=0.0, max=1.0, help="Exit 1 below pass rate."),
 ) -> None:
-    if mode not in {"all", "router", "skill", "live"}:
-        raise typer.BadParameter("mode must be all, router, skill, or live")
+    if mode not in {"all", "skill", "live"}:
+        raise typer.BadParameter("mode must be all, skill, or live")
     results = run_suite(
         str(cases),
         mode=mode,

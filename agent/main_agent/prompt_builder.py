@@ -11,13 +11,13 @@ from agent.skills import list_skill_descriptors
 
 
 def build_system_prompt(
-    intent: Any,
     *,
+    allow_side_effects: bool = False,
     skill_instructions: str = "",
     skill_catalog: str = "",
 ) -> str:
     """Build the stable system contract for one main-agent turn."""
-    side = "当前已激活 Skill 允许使用其明确暴露的副作用工具。" if getattr(intent, "allow_side_effects", False) else ""
+    side = "当前已激活 Skill 允许使用其明确暴露的副作用工具。" if allow_side_effects else ""
     local_today = datetime.now().astimezone().date().isoformat()
     skill_section = (
         f"\n当前已激活 Skill 的领域协议如下。只按该协议和已暴露工具完成任务：\n\n{skill_instructions}\n"

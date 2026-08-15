@@ -40,7 +40,7 @@ def build_completed_result(
     log_path = write_main_agent_markdown_log(
         context.session_id,
         user_message=message,
-        tool_plan={"intent": intent_kind(intent), "tool_groups": intent_groups(intent)},
+        tool_plan={"intent": intent_kind(intent), "skill_id": context.active_skill_id},
         execution={"status": "completed", "steps": steps, "step_results": context.execution_trace},
         selected_activities=context.selected_activities,
         selected_activity_range=context.selected_activity_range,
@@ -103,10 +103,6 @@ def build_turn_result(
 def intent_kind(intent: Any) -> str:
     """Return a stable public intent label from legacy or string inputs."""
     return intent.kind.value if hasattr(intent, "kind") else str(intent)
-
-
-def intent_groups(intent: Any) -> list[str]:
-    return list(getattr(intent, "tool_groups", []))
 
 
 def with_execution_header(

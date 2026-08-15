@@ -40,6 +40,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             "Use for locating one or more activities without analysis, Garmin sync, Strava publishing, or training advice."
         ),
         tool_names=_ACTIVITY_NAVIGATION_TOOLS,
+        public_intent="analyze_single",
     ),
     SkillSpec(
         skill_id="analyze-activity",
@@ -54,6 +55,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             "analyze_activity",
             "query_activity_detail",
         ),
+        public_intent="analyze_single",
     ),
     SkillSpec(
         skill_id="analyze-training-history",
@@ -66,6 +68,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             *_SELECTION_ANALYSIS_TOOLS,
             *_HISTORY_EVIDENCE_TOOLS,
         ),
+        public_intent="analyze_range",
     ),
     SkillSpec(
         skill_id="sync-garmin-activities",
@@ -74,6 +77,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             "Use only for pure sync or download requests that do not also request analysis, reports, summaries, or Strava upload."
         ),
         tool_names=("sync_garmin_activities",),
+        public_intent="sync",
         allow_side_effects=True,
     ),
     SkillSpec(
@@ -83,6 +87,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             "Use for upload, re-upload, or description-refresh requests involving activities already in the local library."
         ),
         tool_names=("resolve_activities", "run_activity_workflow"),
+        public_intent="upload",
         allow_side_effects=True,
     ),
     SkillSpec(
@@ -99,6 +104,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             "get_activity_workflow",
             "retry_activity_workflow",
         ),
+        public_intent="mixed",
         allow_side_effects=True,
     ),
     SkillSpec(
@@ -113,6 +119,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             *_HISTORY_EVIDENCE_TOOLS,
             "generate_training_advice",
         ),
+        public_intent="training_advice",
     ),
     SkillSpec(
         skill_id="plan-routes",
@@ -121,6 +128,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             "Use for route or riding-destination advice, not for activity analysis or Garmin and Strava operations."
         ),
         tool_names=("generate_route_advice",),
+        public_intent="route_advice",
     ),
 )
 

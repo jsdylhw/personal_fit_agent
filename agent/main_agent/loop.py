@@ -15,7 +15,6 @@ from fit.paths import resolve_fit_path as _resolve_fit_path
 from integrations.llm import AnthropicMessagesClient, LLMRequestError
 from agent.runtime.loop_engine import execute_tool_loop
 from agent.tools import MAIN_AGENT_TOOLS, render_anthropic_tools
-from agent.main_agent.intent import Intent, IntentKind
 from agent.main_agent.hooks import ToolLoopHooks
 from agent.main_agent.prompt_builder import (
     build_skill_catalog_prompt,
@@ -81,13 +80,14 @@ def run_tool_loop(
             client=client,
         )
     except LLMRequestError as exc:
-        intent = _intent_for_skill(get_skill(context.active_skill_id)) if context.active_skill_id else Intent(IntentKind.CHAT)
+        skill = get_skill(context.active_skill_id)
+        intent = skill.public_intent if skill else "chat"
         return build_llm_unavailable_result(
             intent, context, steps=getattr(exc, "steps_taken", []), error=exc,
         )
 
     skill = get_skill(context.active_skill_id)
-    intent = _intent_for_skill(skill) if skill else Intent(IntentKind.CHAT)
+    intent = skill.public_intent if skill else "chat"
     return build_completed_result(
         intent,
         context,
@@ -147,10 +147,7 @@ def _run_agent_turn(
     initial_names = allowed_tool_names()
     tool_categories = {tool.category for tool in MAIN_AGENT_TOOLS if tool.name in initial_names}
     handlers = TOOL_HANDLERS
-    system = build_system_prompt(
-        Intent(IntentKind.CHAT),
-        skill_catalog=build_skill_catalog_prompt(),
-    )
+    system = build_system_prompt(skill_catalog=build_skill_catalog_prompt())
     # A frozen multi-activity collection is also a resolved target.  Basing
     # this guard solely on current_fit_file incorrectly blocked navigation
     # until the model redundantly resolved one activity again.
@@ -173,7 +170,7 @@ def _run_agent_turn(
         verbose=verbose,
     )
     if verbose:
-        _log_hdr(message, Intent(IntentKind.CHAT), len(initial_names), bool(context.current_fit_file), active_skill=None)
+        _log_hdr(message, "chat", len(initial_names), bool(context.current_fit_file), active_skill=None)
 
     try:
         # Skill activation is a control-plane round and must not consume one
@@ -238,33 +235,12 @@ def _has_tool_use_block(message: dict[str, Any]) -> bool:
     )
 
 
-_SKILL_INTENT_KIND = {
-    "manage-activity-library": IntentKind.ANALYZE_SINGLE,
-    "analyze-activity": IntentKind.ANALYZE_SINGLE,
-    "analyze-training-history": IntentKind.ANALYZE_RANGE,
-    "sync-garmin-activities": IntentKind.SYNC,
-    "publish-to-strava": IntentKind.UPLOAD,
-    "run-activity-workflow": IntentKind.MIXED,
-    "coach-training": IntentKind.TRAINING_ADVICE,
-    "plan-routes": IntentKind.ROUTE_ADVICE,
-}
-
-
-def _intent_for_skill(skill) -> Intent:
-    """Keep the public intent field stable while the control plane migrates."""
-    return Intent(
-        kind=_SKILL_INTENT_KIND[skill.skill_id],
-        tool_groups={skill.skill_id},
-        allow_side_effects=skill.allow_side_effects,
-    )
-
-
 def _log_hdr(message, intent, tool_count, has_fit, *, active_skill=None):
     from agent.main_agent.hooks import _log
     _log("─" * 50)
     _log(
         f"skill: \033[1m{active_skill.skill_id if active_skill else 'none'}\033[0m | "
-        f"intent: {intent_kind(intent)} | side_effects: {getattr(intent, 'allow_side_effects', False)}"
+        f"intent: {intent_kind(intent)} | side_effects: {bool(active_skill and active_skill.allow_side_effects)}"
     )
     _log(f"context: fit={'✓' if has_fit else '✗'} | tools: {tool_count}")
     _log(f"message: {message[:100]}")

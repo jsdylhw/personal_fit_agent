@@ -22,7 +22,7 @@ def _activation_response(skill_id):
 
 
 def test_main_prompt_does_not_leak_unselected_skill_tools():
-    prompt = _build_system_prompt(type("Intent", (), {"allow_side_effects": False})())
+    prompt = _build_system_prompt()
     assert "run_activity_workflow" not in prompt
     assert "sync_and_run_activity_workflow" not in prompt
     assert "尚未激活领域 Skill" in prompt

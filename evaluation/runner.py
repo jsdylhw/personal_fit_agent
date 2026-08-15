@@ -7,11 +7,9 @@ from typing import Any, Callable, Iterable
 from agent.main_agent.context import AgentContext
 from integrations.llm import AnthropicMessagesClient, extract_text
 from agent.main_agent.hooks import ToolLoopHooks
-from agent.main_agent.intent import Intent, IntentKind, route_intent
 from agent.main_agent.loop import (
     MAX_TOOL_STEPS,
     _build_system_prompt,
-    _intent_for_skill,
     _skill_catalog_prompt,
     agent_loop,
 )
@@ -38,20 +36,12 @@ def run_case(
     cache_read_price_per_million: float | None = None,
 ) -> dict[str, Any]:
     with capture_agent_trace(metadata={"case_id": case.case_id, "mode": case.mode, "repeat": repeat}) as trace:
-        if case.mode == "router":
-            intent = route_intent(case.input)
-            result = {
-                "status": "completed",
-                "intent": intent.kind.value,
-                "answer": "",
-                "steps": [],
-            }
-        elif case.mode == "skill":
+        if case.mode == "skill":
             selection = select_skill(case.input, client=client or AnthropicMessagesClient())
             skill = validate_skill_selection(selection)
             result = {
                 "status": "completed",
-                "intent": _intent_for_skill(skill).kind.value if skill else "chat",
+                "intent": skill.public_intent if skill else "chat",
                 "skill_id": skill.skill_id if skill else None,
                 "answer": "",
                 "steps": [],
@@ -98,7 +88,7 @@ def run_suite(
     results: list[dict[str, Any]] = []
     for case in selected:
         for repeat in range(1, repeats + 1):
-            client = client_factory() if case.mode in {"router", "skill", "live"} and client_factory else None
+            client = client_factory() if case.mode in {"skill", "live"} and client_factory else None
             results.append(run_case(
                 case,
                 repeat=repeat,
@@ -158,10 +148,7 @@ def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) ->
             tools=rendered_tools,
             handlers=handlers,
             hooks=hooks,
-            system=_build_system_prompt(
-                Intent(IntentKind.CHAT),
-                skill_catalog=_skill_catalog_prompt(),
-            ),
+            system=_build_system_prompt(skill_catalog=_skill_catalog_prompt()),
             max_steps=MAX_TOOL_STEPS + 1,
             client=client,
         )
@@ -177,10 +164,10 @@ def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) ->
             if text:
                 answer = text
     skill = get_skill(context.active_skill_id)
-    intent = _intent_for_skill(skill) if skill else Intent(IntentKind.CHAT)
+    intent = skill.public_intent if skill else "chat"
     result: dict[str, Any] = {
         "status": status,
-        "intent": intent.kind.value if hasattr(intent.kind, "value") else str(intent.kind),
+        "intent": intent,
         "skill_id": skill.skill_id if skill else None,
         "answer": answer,
         "steps": steps,

@@ -10,7 +10,7 @@ from evaluation.schema import EvalCase, EvalCaseError, load_cases
 
 def test_load_cases_rejects_duplicate_ids(tmp_path):
     path = tmp_path / "cases.jsonl"
-    row = {"case_id": "same", "input": "你好", "mode": "router", "expected": {"intent": "chat"}}
+    row = {"case_id": "same", "input": "你好", "mode": "skill", "expected": {"intent": "chat"}}
     path.write_text(json.dumps(row, ensure_ascii=False) + "\n" + json.dumps(row, ensure_ascii=False), encoding="utf-8")
 
     try:
@@ -21,18 +21,26 @@ def test_load_cases_rejects_duplicate_ids(tmp_path):
         raise AssertionError("duplicate IDs must be rejected")
 
 
-def test_router_suite_loads_regression_cases_and_grader_reports_mismatch():
-    results = run_suite("evaluation/cases/router.jsonl", mode="router")
-    by_id = {result["case"]["case_id"]: result for result in results}
+def test_skill_grader_reports_match_and_mismatch():
+    class FakeClient:
+        def create_message(self, **kwargs):
+            return {
+                "content": [{"type": "text", "text": '{"skill_id":null,"confidence":0.99,"reason":"chat"}'}],
+                "stop_reason": "end_turn",
+            }
 
-    assert len(results) == 14
-    assert by_id["chat_friend_memory"]["grade"]["passed"] is True
+    matching = EvalCase.from_dict({
+        "case_id": "chat-match", "input": "你好", "mode": "skill",
+        "expected": {"skill_id": None, "intent": "chat"},
+    })
+    results = run_suite([matching], mode="skill", client_factory=FakeClient)
+    assert results[0]["grade"]["passed"] is True
     mismatch = run_case(EvalCase.from_dict({
         "case_id": "synthetic-mismatch",
         "input": "你好",
-        "mode": "router",
+        "mode": "skill",
         "expected": {"intent": "upload"},
-    }))
+    }), client=FakeClient())
     assert mismatch["grade"]["passed"] is False
     assert "intent expected" in mismatch["grade"]["failures"][0]
 
@@ -138,13 +146,24 @@ def test_live_runner_uses_sandbox_and_captures_tool_trace():
 
 
 def test_report_writes_jsonl_summary_and_markdown(tmp_path):
-    cases = load_cases("evaluation/cases/router.jsonl")[:2]
-    results = [run_case(case) for case in cases]
+    case = EvalCase.from_dict({
+        "case_id": "report-skill", "input": "你好", "mode": "skill",
+        "expected": {"skill_id": None, "intent": "chat"},
+    })
+
+    class FakeClient:
+        def create_message(self, **kwargs):
+            return {
+                "content": [{"type": "text", "text": '{"skill_id":null,"confidence":0.99,"reason":"chat"}'}],
+                "stop_reason": "end_turn",
+            }
+
+    results = [run_case(case, client=FakeClient())]
 
     artifact = write_report(results, output_dir=tmp_path / "report")
 
-    assert artifact["summary"]["case_runs"] == 2
-    assert artifact["summary"]["metric_coverage"]["intent_accuracy"] == 2
+    assert artifact["summary"]["case_runs"] == 1
+    assert artifact["summary"]["metric_coverage"]["intent_accuracy"] == 1
     assert (tmp_path / "report" / "results.jsonl").exists()
     assert (tmp_path / "report" / "summary.json").exists()
     report = (tmp_path / "report" / "report.md").read_text(encoding="utf-8")
