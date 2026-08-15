@@ -100,6 +100,13 @@ def test_live_runner_uses_sandbox_and_captures_tool_trace():
             self.responses = iter([
                 {
                     "content": [{
+                        "type": "tool_use", "id": "tu-activate", "name": "activate_skill",
+                        "input": {"skill_id": "sync-garmin-activities"},
+                    }],
+                    "stop_reason": "tool_use",
+                },
+                {
+                    "content": [{
                         "type": "tool_use", "id": "tu-sync", "name": "sync_garmin_activities", "input": {"count": 3},
                     }],
                     "stop_reason": "tool_use",
@@ -122,7 +129,10 @@ def test_live_runner_uses_sandbox_and_captures_tool_trace():
     result = run_case(case, client=FakeClient())
 
     assert result["grade"]["passed"] is True
-    call = result["trace"]["tool_calls"][0]
+    call = next(
+        item for item in result["trace"]["tool_calls"]
+        if item["name"] == "sync_garmin_activities"
+    )
     assert call["name"] == "sync_garmin_activities"
     assert call["output"]["downloaded"] == 2
 

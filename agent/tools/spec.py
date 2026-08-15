@@ -17,6 +17,7 @@ CATEGORY_ACTIVITY_SELECTION = "activity_selection"   # 活动定位
 CATEGORY_ANALYSIS = "analysis"             # 分析/汇总/对比
 CATEGORY_COACHING = "coaching"             # 训练建议/路线建议
 CATEGORY_WORKFLOW = "workflow"             # 持久化活动工作流
+CATEGORY_SKILL = "skill"                   # 仅用于本轮 Skill 激活
 
 
 @dataclass(frozen=True)

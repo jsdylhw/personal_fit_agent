@@ -6,7 +6,7 @@ def test_tool_logging_uses_business_labels_for_morning_range_summary():
     find_block = {"name": "resolve_activities", "input": {"kind": "recent", "limit": 3, "time_of_day": "morning"}}
 
     assert _format_tool_args(find_block) == "最近活动 · 3 条 · 上午"
-    assert _format_tool_args({"name": "summarize_activities", "input": {}}) == "读取已有报告，缺失时补齐后汇总"
+    assert _format_tool_args({"name": "summarize_activities", "input": {}}) == "只读汇总结构化事实和已有报告"
     assert _format_tool_args({"name": "calculate_history_metrics", "input": {"group_by": "month"}}) == "读取结构化指标 · 按 month 聚合"
     assert _format_tool_args({"name": "analyze_training_history", "input": {"group_by": "week", "sport_type": "cycling"}}) == "专业历史分析 · cycling · 按 week 对比"
 

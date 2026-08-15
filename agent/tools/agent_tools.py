@@ -8,11 +8,26 @@ from agent.tools.spec import (
     CATEGORY_COACHING,
     CATEGORY_CONVERSATION,
     CATEGORY_OPERATION,
+    CATEGORY_SKILL,
     CATEGORY_WORKFLOW,
     ToolDef,
 )
 
 MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
+    ToolDef(
+        name="activate_skill",
+        description=(
+            "Activate exactly one registered domain skill for this user turn. "
+            "Use it before any activity, Garmin, Strava, coaching or route task; "
+            "ordinary conversation needs no skill."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"skill_id": {"type": "string"}},
+            "required": ["skill_id"],
+        },
+        category=CATEGORY_SKILL,
+    ),
     # -- conversation --------------------------------------------------
     ToolDef(
         name="casual_chat",
@@ -207,13 +222,15 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
     ),
     ToolDef(
         name="summarize_activities",
-        description="汇总已定位的多条活动：优先读取已有 summary，仅对缺失 summary 的活动生成报告，然后一次性给出范围结论。",
+        description=(
+            "只读汇总已定位的多条活动，使用导入时 facts 和已有报告；"
+            "缺失完整报告时只标记覆盖率，不生成或刷新报告。"
+        ),
         input_schema={
             "type": "object",
             "properties": {
                 "response_mode": {"type": "string", "enum": ["ai_summary", "compact"], "default": "compact"},
                 "detail_level": {"type": "string", "enum": ["normal", "detailed"], "default": "normal"},
-                "force": {"type": "boolean", "default": False},
             },
         },
         category=CATEGORY_ANALYSIS,

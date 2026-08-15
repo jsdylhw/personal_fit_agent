@@ -8,9 +8,17 @@ from agent.main_agent.context import AgentContext
 from integrations.llm import AnthropicMessagesClient, extract_text
 from agent.main_agent.hooks import ToolLoopHooks
 from agent.main_agent.intent import Intent, IntentKind, route_intent
-from agent.main_agent.loop import MAX_TOOL_STEPS, _build_system_prompt, _intent_for_skill, agent_loop
+from agent.main_agent.loop import (
+    MAX_TOOL_STEPS,
+    _build_system_prompt,
+    _intent_for_skill,
+    _skill_catalog_prompt,
+    agent_loop,
+)
+from agent.main_agent.tools import TOOL_HANDLERS
+from agent.main_agent.turn_policy import tools_for_skill
 from observability import capture_agent_trace
-from agent.skills import load_skill_instructions
+from agent.skills import get_skill
 from agent.skills.policy import validate_skill_selection
 from agent.skills.selector import select_skill
 from agent.tools import MAIN_AGENT_TOOLS, render_anthropic_tools
@@ -104,24 +112,30 @@ def run_suite(
 
 
 def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) -> dict[str, Any]:
+    """Exercise the production progressive-disclosure protocol in a sandbox."""
     client = client or AnthropicMessagesClient()
-    selection = select_skill(case.input, client=client)
-    skill = validate_skill_selection(selection)
-    intent = _intent_for_skill(skill) if skill else Intent(IntentKind.CHAT)
-    allowed_tool_names = set(skill.tool_names) if skill else set()
-    allowed_categories = {
-        tool.category for tool in MAIN_AGENT_TOOLS if tool.name in allowed_tool_names
-    }
-    tools = [
-        render_anthropic_tools([tool])[0]
-        for tool in MAIN_AGENT_TOOLS
-        if tool.name in allowed_tool_names
-    ]
     context = AgentContext(
         session_id=f"eval-{case.case_id}",
         history_enabled=False,
         messages=[{"role": "user", "content": case.input}],
     )
+
+    def allowed_tool_names() -> set[str]:
+        skill = get_skill(context.active_skill_id)
+        return tools_for_skill(skill, case.input) if skill else {"activate_skill"}
+
+    def rendered_tools() -> list[dict[str, Any]]:
+        names = allowed_tool_names()
+        return [
+            render_anthropic_tools([tool])[0]
+            for tool in MAIN_AGENT_TOOLS
+            if tool.name in names
+        ]
+
+    initial_names = allowed_tool_names()
+    allowed_categories = {
+        tool.category for tool in MAIN_AGENT_TOOLS if tool.name in initial_names
+    }
     messages = list(context.messages)
     steps: list[dict[str, Any]] = []
     hooks = ToolLoopHooks(
@@ -129,24 +143,29 @@ def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) ->
         allowed_categories,
         {"value": False},
         steps,
-        allowed_tool_names=allowed_tool_names,
+        allowed_tool_names=initial_names,
+        allowed_tool_provider=allowed_tool_names,
         verbose=False,
     )
     sandbox = EvaluationSandbox(case)
+    handlers = sandbox.handlers()
+    # Skill activation is control-plane behavior, so keep the production
+    # handler while all business tools remain sandboxed.
+    handlers["activate_skill"] = TOOL_HANDLERS["activate_skill"]
     try:
         step_count = agent_loop(
             messages,
-            tools=tools,
-            handlers=sandbox.handlers(),
+            tools=rendered_tools,
+            handlers=handlers,
             hooks=hooks,
             system=_build_system_prompt(
-                intent,
-                skill_instructions=load_skill_instructions(skill) if skill else "",
+                Intent(IntentKind.CHAT),
+                skill_catalog=_skill_catalog_prompt(),
             ),
-            max_steps=MAX_TOOL_STEPS,
+            max_steps=MAX_TOOL_STEPS + 1,
             client=client,
         )
-        status = "max_steps_exceeded" if step_count > MAX_TOOL_STEPS else "completed"
+        status = "max_steps_exceeded" if step_count > MAX_TOOL_STEPS + 1 else "completed"
         error = None
     except Exception as exc:
         status = "failed"
@@ -157,6 +176,8 @@ def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) ->
             text = extract_text(message)
             if text:
                 answer = text
+    skill = get_skill(context.active_skill_id)
+    intent = _intent_for_skill(skill) if skill else Intent(IntentKind.CHAT)
     result: dict[str, Any] = {
         "status": status,
         "intent": intent.kind.value if hasattr(intent.kind, "value") else str(intent.kind),

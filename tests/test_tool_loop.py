@@ -10,15 +10,14 @@ from integrations.llm import LLMRequestError
 from agent.main_agent.loop import MAX_TOOL_STEPS, _build_state_preamble, _build_system_prompt, run_tool_loop
 
 
-def _selector_response(skill_id, confidence=0.95):
-    import json
+def _activation_response(skill_id):
     return {
-        "id": "msg-selector",
+        "id": "msg-activate",
         "content": [{
-            "type": "text",
-            "text": json.dumps({"skill_id": skill_id, "confidence": confidence, "reason": "test"}),
+            "type": "tool_use", "name": "activate_skill", "id": "tu-activate",
+            "input": {"skill_id": skill_id},
         }],
-        "stop_reason": "end_turn",
+        "stop_reason": "tool_use",
     }
 
 
@@ -26,8 +25,31 @@ def test_main_prompt_does_not_leak_unselected_skill_tools():
     prompt = _build_system_prompt(type("Intent", (), {"allow_side_effects": False})())
     assert "run_activity_workflow" not in prompt
     assert "sync_and_run_activity_workflow" not in prompt
-    assert "没有激活领域 Skill" in prompt
+    assert "尚未激活领域 Skill" in prompt
+    assert "每个用户回合最多激活一个 Skill" in prompt
+    assert "必须等到下一次模型调用" in prompt
+    assert "独立选择阶段决定" not in prompt
     assert "确认" not in prompt
+
+
+def test_ordinary_chat_answers_without_a_separate_selector_request():
+    context = AgentContext(session_id="one-call-chat")
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
+        client.return_value.create_messages.return_value = {
+            "id": "msg-chat",
+            "content": [{"type": "text", "text": "你好。"}],
+            "stop_reason": "end_turn",
+        }
+
+        result = run_tool_loop("你好", context=context)
+
+    assert result["status"] == "completed"
+    assert result["skill_id"] is None
+    assert result["answer"] == "你好。"
+    assert client.return_value.create_message.call_count == 0
+    assert client.return_value.create_messages.call_count == 1
+    tools = client.return_value.create_messages.call_args.kwargs["tools"]
+    assert [tool["name"] for tool in tools] == ["activate_skill"]
 
 
 def test_pure_sync_executes_without_starting_analysis_workflow(monkeypatch):
@@ -37,8 +59,8 @@ def test_pure_sync_executes_without_starting_analysis_workflow(monkeypatch):
         lambda **kwargs: {"status": "completed", "downloaded": 2, "skipped": 1, "failed": 0},
     )
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
-        client.return_value.create_message.return_value = _selector_response("sync-garmin-activities")
         client.return_value.create_messages.side_effect = [
+            _activation_response("sync-garmin-activities"),
             {"id": "msg-sync", "content": [
                 {"type": "tool_use", "name": "sync_garmin_activities", "id": "tu-sync", "input": {"count": 3}},
             ], "stop_reason": "tool_use"},
@@ -51,8 +73,37 @@ def test_pure_sync_executes_without_starting_analysis_workflow(monkeypatch):
     assert result["answer"].endswith("同步完成。")
     assert result["answer"].startswith("已处理：本次请求｜同步 Garmin 活动")
     first_tools = client.return_value.create_messages.call_args_list[0].kwargs["tools"]
-    assert [tool["name"] for tool in first_tools] == ["sync_garmin_activities"]
-    assert client.return_value.create_messages.call_args_list[1].kwargs["tools"] == []
+    assert [tool["name"] for tool in first_tools] == ["activate_skill"]
+    second_tools = client.return_value.create_messages.call_args_list[1].kwargs["tools"]
+    assert [tool["name"] for tool in second_tools] == ["sync_garmin_activities"]
+    assert client.return_value.create_messages.call_args_list[2].kwargs["tools"] == []
+
+
+def test_skill_activation_does_not_authorize_later_calls_in_the_same_response(monkeypatch):
+    context = AgentContext(session_id="activation-barrier")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "operations.activity.sync.sync_recent",
+        lambda **kwargs: calls.append(1) or {"status": "completed"},
+    )
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
+        client.return_value.create_messages.side_effect = [
+            {
+                "id": "msg-invalid-batch",
+                "content": [
+                    {"type": "tool_use", "name": "activate_skill", "id": "tu-activate", "input": {"skill_id": "sync-garmin-activities"}},
+                    {"type": "tool_use", "name": "sync_garmin_activities", "id": "tu-sync-early", "input": {"count": 3}},
+                ],
+                "stop_reason": "tool_use",
+            },
+            {"id": "msg-final", "content": [{"type": "text", "text": "未执行同步。"}], "stop_reason": "end_turn"},
+        ]
+
+        result = run_tool_loop("同步最近三条活动", context=context)
+
+    assert result["status"] == "completed"
+    assert calls == []
+    assert result["steps"] == []
 
 
 def test_completed_sync_workflow_hides_tools_before_final_response(monkeypatch):
@@ -62,8 +113,8 @@ def test_completed_sync_workflow_hides_tools_before_final_response(monkeypatch):
         lambda **kwargs: {"status": "completed", "workflow_id": "run-sync", "tasks": []},
     )
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
-        client.return_value.create_message.return_value = _selector_response("run-activity-workflow")
         client.return_value.create_messages.side_effect = [
+            _activation_response("run-activity-workflow"),
             {"id": "msg-sync", "content": [{
                 "type": "tool_use", "name": "sync_and_run_activity_workflow", "id": "tu-sync",
                 "input": {"count": 3, "goals": ["upload_strava"]},
@@ -77,7 +128,39 @@ def test_completed_sync_workflow_hides_tools_before_final_response(monkeypatch):
         "tool": "sync_and_run_activity_workflow",
         "input": {"count": 3, "goals": ["upload_strava"]},
     }]
-    assert client.return_value.create_messages.call_args_list[1].kwargs["tools"] == []
+    assert client.return_value.create_messages.call_args_list[2].kwargs["tools"] == []
+
+
+def test_terminal_tool_stops_later_calls_from_the_same_response(monkeypatch):
+    context = AgentContext(session_id="terminal-batch")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "operations.activity.workflow_service.sync_and_start_activity_workflow",
+        lambda **kwargs: calls.append("sync") or {
+            "status": "completed", "workflow_id": "run-sync", "tasks": [],
+        },
+    )
+    monkeypatch.setattr(
+        "operations.activity.workflow_service.start_local_activity_workflow",
+        lambda **kwargs: calls.append("local") or {
+            "status": "completed", "workflow_id": "run-local", "tasks": [],
+        },
+    )
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
+        client.return_value.create_messages.side_effect = [
+            _activation_response("run-activity-workflow"),
+            {"id": "msg-batch", "content": [
+                {"type": "tool_use", "name": "sync_and_run_activity_workflow", "id": "tu-sync", "input": {"count": 3}},
+                {"type": "tool_use", "name": "run_activity_workflow", "id": "tu-local", "input": {"limit": 3}},
+            ], "stop_reason": "tool_use"},
+            {"id": "msg-final", "content": [{"type": "text", "text": "完成。"}], "stop_reason": "end_turn"},
+        ]
+
+        result = run_tool_loop("同步三个活动，然后处理本地活动", context=context)
+
+    assert result["status"] == "completed"
+    assert calls == ["sync"]
+    assert result["steps"] == [{"tool": "sync_and_run_activity_workflow", "input": {"count": 3}}]
 
 
 def test_retry_executes_last_failed_workflow_action():
@@ -97,6 +180,23 @@ def test_retry_executes_last_failed_workflow_action():
     assert mock_retry.called
 
 
+def test_retry_reports_failure_when_saved_action_fails_again():
+    context = AgentContext(
+        session_id="test-retry-failed",
+        active_skill_id="run-activity-workflow",
+        last_failed_action={"tool": "retry_activity_workflow", "input": {"workflow_id": "run-1"}},
+    )
+    with patch("operations.activity.workflow_service.retry_activity_workflow") as mock_retry:
+        mock_retry.return_value = {"status": "failed", "error": "still_broken"}
+        result = run_tool_loop("重试", context=context)
+
+    assert result["status"] == "failed"
+    assert context.last_failed_action == {
+        "tool": "retry_activity_workflow", "input": {"workflow_id": "run-1"},
+    }
+    assert "仍未完成" in result["answer"]
+
+
 def test_llm_disconnect_keeps_completed_tool_state(monkeypatch):
     context = AgentContext(session_id="test-llm-disconnect")
 
@@ -106,8 +206,8 @@ def test_llm_disconnect_keeps_completed_tool_state(monkeypatch):
 
     monkeypatch.setitem(__import__("agent.main_agent.tools", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS, "resolve_activities", fake_find)
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
-        client.return_value.create_message.return_value = _selector_response("analyze-activity")
         client.return_value.create_messages.side_effect = [
+            _activation_response("analyze-activity"),
             {"id": "msg-find", "content": [{"type": "tool_use", "name": "resolve_activities", "id": "tu-find", "input": {"kind": "recent", "limit": 1}}], "stop_reason": "tool_use"},
             LLMRequestError("connection closed"),
         ]
@@ -132,8 +232,8 @@ def test_llm_disconnect_after_completed_workflow_reports_real_completion(monkeyp
         },
     )
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
-        client.return_value.create_message.return_value = _selector_response("run-activity-workflow")
         client.return_value.create_messages.side_effect = [
+            _activation_response("run-activity-workflow"),
             {"id": "msg-sync", "content": [
                 {"type": "tool_use", "name": "sync_and_run_activity_workflow", "id": "tu-sync", "input": {"count": 3}},
             ], "stop_reason": "tool_use"},
@@ -156,8 +256,11 @@ def test_max_steps_exceeded_returns_not_completed():
         "stop_reason": "tool_use",
     }
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
-        client.return_value.create_messages.return_value = response
-        client.return_value.create_message.return_value = _selector_response("analyze-activity")
+        calls = {"count": 0}
+        def respond(**kwargs):
+            calls["count"] += 1
+            return _activation_response("analyze-activity") if calls["count"] == 1 else response
+        client.return_value.create_messages.side_effect = respond
         result = run_tool_loop("分析最近活动", context=context)
 
     assert result["status"] == "max_steps_exceeded"
@@ -176,8 +279,8 @@ def test_resolve_activities_unblocks_analyze_activity_in_same_round(monkeypatch)
         "analyze_activity", lambda args, ctx: calls.append("analyze_activity") or {"status": "completed"},
     )
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
-        client.return_value.create_message.return_value = _selector_response("analyze-activity")
         client.return_value.create_messages.side_effect = [
+            _activation_response("analyze-activity"),
             {"id": "msg-tools", "content": [
                 {"type": "tool_use", "name": "resolve_activities", "id": "tu-find", "input": {"kind": "recent", "limit": 1}},
                 {"type": "tool_use", "name": "analyze_activity", "id": "tu-analyze", "input": {}},
@@ -202,8 +305,8 @@ def test_terminal_detail_query_hides_tools_before_final_response(monkeypatch):
         lambda args, ctx: {"status": "completed", "result": {"source": "targeted_query"}, "answer": "冲刺数据"},
     )
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
-        client.return_value.create_message.return_value = _selector_response("analyze-activity")
         client.return_value.create_messages.side_effect = [
+            _activation_response("analyze-activity"),
             {"id": "msg-query", "content": [{"type": "tool_use", "name": "query_activity_detail", "id": "tu-query", "input": {"question": "有冲刺吗"}}], "stop_reason": "tool_use"},
             {"id": "msg-final", "content": [{"type": "text", "text": "冲刺表现良好。"}], "stop_reason": "end_turn"},
         ]
@@ -211,4 +314,4 @@ def test_terminal_detail_query_hides_tools_before_final_response(monkeypatch):
 
     assert result["status"] == "completed"
     assert result["steps"] == [{"tool": "query_activity_detail", "input": {"question": "有冲刺吗"}}]
-    assert client.return_value.create_messages.call_args_list[1].kwargs["tools"] == []
+    assert client.return_value.create_messages.call_args_list[2].kwargs["tools"] == []

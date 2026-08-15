@@ -9,6 +9,7 @@ from agent.main_agent.context import AgentContext
 from agent.main_agent.tools import TOOL_HANDLERS, execute_saved_action
 from agent.skills import get_skill
 from agent.skills.policy import skill_allows_tool
+from agent.runtime.models import ToolExecution, TurnResult
 
 RETRY_WORDS = {"再试一次", "重试", "再试", "retry", "try again", "再来一次", "重新试一下"}
 BACK_WORDS = {"返回", "回退", "上一层", "返回上一层", "回到列表", "返回列表", "back"}
@@ -29,13 +30,12 @@ def handle_control_turn(message: str, context: AgentContext, *, verbose: bool = 
             if not skill_allows_tool(skill, tool_name):
                 answer = "上次失败操作不属于当前有效 Skill，已拒绝直接重放。请重新说明要重试的活动任务。"
                 context.last_failed_action = None
-                return {
-                    "answer": answer,
-                    "status": "retry_rejected",
-                    "context": context,
-                    "intent": "retry",
-                    "steps": [],
-                }
+                return TurnResult(
+                    answer=answer, status="retry_rejected", context=context,
+                    intent="retry", skill_id=context.active_skill_id,
+                    selected_activities=context.selected_activities,
+                    current_fit_file=str(context.current_fit_file) if context.current_fit_file else None,
+                ).to_dict()
             return execute_saved_action(context.last_failed_action, context, verbose=verbose, intent="retry", label="重试执行")
         if context.last_llm_error:
             # 不复放可能有副作用的工具，只重新进入 LLM 规划循环；已完成的
@@ -44,13 +44,12 @@ def handle_control_turn(message: str, context: AgentContext, *, verbose: bool = 
             return None
         answer = "当前没有可重试的失败操作。请重新说明你想执行的操作。"
         context.messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
-        return {
-            "answer": answer,
-            "status": "no_retryable_action",
-            "context": context,
-            "intent": "retry",
-            "steps": [],
-        }
+        return TurnResult(
+            answer=answer, status="no_retryable_action", context=context,
+            intent="retry", skill_id=context.active_skill_id,
+            selected_activities=context.selected_activities,
+            current_fit_file=str(context.current_fit_file) if context.current_fit_file else None,
+        ).to_dict()
 
     return None
 
@@ -103,19 +102,28 @@ def _execute_navigation(
         status = "completed"
 
     context.last_tool_result = {"step_name": "navigate_selection", "result": output}
+    execution = ToolExecution(
+        index=0,
+        tool="navigate_selection",
+        input=tool_input,
+        status="failed" if failed else "completed",
+        message=str(output.get("message")) if isinstance(output, dict) and output.get("message") else None,
+        error=str(output.get("error")) if isinstance(output, dict) and output.get("error") else None,
+        result=output,
+    )
+    context.execution_trace = [execution.to_dict()]
     context.messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
     if verbose:
         from agent.main_agent.hooks import _log
 
         suffix = f" · 第 {ordinal} 个" if ordinal is not None else ""
         _log(f"  [导航] navigate_selection：{action}{suffix}")
-    return {
-        "answer": answer,
-        "status": status,
-        "context": context,
-        "intent": "navigate",
-        "steps": [{"tool": "navigate_selection", "input": tool_input}],
-    }
+    return TurnResult(
+        answer=answer, status=status, context=context, intent="navigate",
+        skill_id=context.active_skill_id, executions=[execution],
+        selected_activities=context.selected_activities,
+        current_fit_file=str(context.current_fit_file) if context.current_fit_file else None,
+    ).to_dict()
 
 
 def _navigation_answer(action: str, ordinal: int | None, context: AgentContext) -> str:
