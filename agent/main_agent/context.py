@@ -97,6 +97,8 @@ class AgentContext:
     # -- 内部 ------------------------------------------------------------
 
     def _sync_single_activity_fields(self, handle: ActivityHandle) -> None:
-        if handle.fit_path:
-            self.current_fit_file = Path(handle.fit_path).expanduser()
+        # Never retain the previous activity's FIT path when the newly selected
+        # catalogue row has no local file.  The activity ID and FIT shortcut
+        # must always describe the same immutable activity.
+        self.current_fit_file = Path(handle.fit_path).expanduser() if handle.fit_path else None
         self.current_activity_key = handle.activity_key

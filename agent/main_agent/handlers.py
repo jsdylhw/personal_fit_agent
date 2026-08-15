@@ -7,7 +7,6 @@ from typing import Any
 
 from agent.main_agent.context import AgentContext
 from integrations.llm import AnthropicMessagesClient, extract_text
-from operations.activity.service import analyze_fit_file_tool
 from domain.analysis.artifacts import get_analysis_summary, get_index_load_label
 from storage.repositories.activity import ActivityStore
 
@@ -39,12 +38,6 @@ def execute_summarize_activity_range(
             },
         }
 
-    force = bool(args.get("force"))
-    summary_generation = _ensure_summaries_for_activities(activities, force=force)
-
-    activities = _reload_activities_from_index(activities)
-    context.selected_activities = activities
-
     normalized = [_compact_range_activity(activity) for activity in activities]
     total_distance = round(sum(float(item.get("distance_km") or 0) for item in normalized), 2)
     total_duration = round(sum(float(item.get("duration_min") or 0) for item in normalized), 1)
@@ -57,7 +50,13 @@ def execute_summarize_activity_range(
             "duration_min": total_duration,
         },
         "activities": normalized,
-        "summary_generation": summary_generation,
+        # Range inspection is intentionally read-only.  Missing full reports
+        # remain visible in this coverage block; explicit report generation is
+        # owned by rebuild_activity_reports / activity workflows.
+        "report_coverage": {
+            "available_count": sum(1 for item in normalized if item.get("has_summary")),
+            "missing_count": sum(1 for item in normalized if not item.get("has_summary")),
+        },
     }
     answer = (
         _generate_range_ai_summary(result, activities, context, args, reason=reason)
@@ -92,69 +91,6 @@ def empty_activity_selection_answer(selection_mode: str, result: dict[str, Any])
     if selection_mode == "recent":
         return "没有找到已索引的最近活动。你可以先重建索引或同步 Garmin 活动。"
     return "没有找到符合条件的活动。你可以先重建索引，或确认日期、序号、活动名称是否正确。"
-
-
-def _ensure_summaries_for_activities(activities: list[dict[str, Any]], *, force: bool = False) -> dict[str, Any]:
-    generated: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    failed: list[dict[str, Any]] = []
-    for activity in activities:
-        fit_path = activity.get("fit_path")
-        if not fit_path:
-            continue
-        activity_key = str(activity.get("activity_key") or "")
-        report = ActivityStore().get_report_for_activity(activity) if activity_key else None
-        if report is not None and not force:
-            skipped.append(_summary_generation_item(activity, status="skipped_existing_summary"))
-            continue
-        try:
-            result = analyze_fit_file_tool(str(fit_path), force=force)
-        except Exception as exc:
-            failed.append({
-                **_summary_generation_item(activity, status="failed"),
-                "error": type(exc).__name__,
-                "message": str(exc),
-            })
-            continue
-        generated.append(_summary_generation_item({**activity, **result}, status=str(result.get("status") or "analyzed")))
-    return {
-        "generated_count": len(generated),
-        "skipped_count": len(skipped),
-        "failed_count": len(failed),
-        "generated": generated,
-        "skipped": skipped,
-        "failed": failed,
-    }
-
-
-def _summary_generation_item(activity: dict[str, Any], *, status: str) -> dict[str, Any]:
-    return {
-        "activity_index": activity.get("activity_index"),
-        "activity_key": activity.get("activity_key"),
-        "fit_path": activity.get("fit_path"),
-        "report_schema_version": activity.get("summary_schema_version"),
-        "status": status,
-    }
-
-
-def _reload_activities_from_index(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    from services.activity.catalog import load_activity_index
-
-    index = load_activity_index()
-    index_map: dict[str, dict[str, Any]] = {}
-    for entry in index.get("activities") or []:
-        key = entry.get("activity_key")
-        if key:
-            index_map[key] = entry
-
-    refreshed: list[dict[str, Any]] = []
-    for activity in activities:
-        key = activity.get("activity_key")
-        if key and key in index_map:
-            refreshed.append(index_map[key])
-        else:
-            refreshed.append(activity)
-    return refreshed
 
 
 def _should_generate_ai_range_summary(args: dict[str, Any], *, reason: str = "") -> bool:
