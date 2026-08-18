@@ -23,6 +23,10 @@ def project_presentations(executions: list[ToolExecution]) -> list[PresentationB
             blocks.extend(_training_history_blocks(execution, payload))
         elif schema_version == "activity_report.v1":
             blocks.extend(_activity_report_blocks(execution, payload))
+        elif schema_version == "analysis_result.v1":
+            blocks.extend(_inspection_blocks(execution, payload))
+        elif schema_version == "activity_comparison.v1":
+            blocks.extend(_activity_comparison_blocks(execution, payload))
         elif (
             schema_version == "activity_selection.v2"
             and execution.tool == "resolve_activities"
@@ -188,6 +192,84 @@ def _resolved_activity_blocks(
             type="line_chart",
             title="活动过程曲线",
             data=profile,
+            source=source,
+        ))
+    return blocks
+
+
+def _inspection_blocks(
+    execution: ToolExecution,
+    payload: dict[str, Any],
+) -> list[PresentationBlock]:
+    """Project a single deterministic inspection without parsing its answer."""
+    if execution.tool != "inspect_selection":
+        return []
+    analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
+    metrics = analysis.get("metrics") if isinstance(analysis.get("metrics"), dict) else {}
+    if metrics.get("schema_version") != "activity_metrics.v2":
+        return []
+
+    identity = metrics.get("identity") if isinstance(metrics.get("identity"), dict) else {}
+    scale = metrics.get("scale") if isinstance(metrics.get("scale"), dict) else {}
+    summary = {**identity, **scale}
+    source = _source(execution, payload)
+    blocks: list[PresentationBlock] = []
+    cards = _activity_metric_cards(summary)
+    if cards:
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-inspection-metrics",
+            type="metric_cards",
+            title="活动概览",
+            data={"items": cards},
+            source=source,
+        ))
+    profile = build_activity_profile(metrics.get("fit_path"))
+    if profile.get("series"):
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-inspection-profile",
+            type="line_chart",
+            title="活动过程曲线",
+            data=profile,
+            source=source,
+        ))
+    return blocks
+
+
+def _activity_comparison_blocks(
+    execution: ToolExecution,
+    payload: dict[str, Any],
+) -> list[PresentationBlock]:
+    activities = [item for item in payload.get("activities") or [] if isinstance(item, dict)]
+    if not activities:
+        return []
+    source = _source(execution, payload)
+    blocks: list[PresentationBlock] = []
+    totals = payload.get("totals") if isinstance(payload.get("totals"), dict) else {}
+    cards = [{"metric": "activity_count", "value": len(activities), "unit": "条"}]
+    cards.extend(_activity_metric_cards(totals))
+    blocks.append(PresentationBlock(
+        presentation_id=f"execution-{execution.index}-comparison-totals",
+        type="metric_cards",
+        title="活动对比总览",
+        data={"items": cards},
+        source=source,
+    ))
+
+    candidate_columns = [
+        "start_time_local", "summary_label", "sport_type", "duration_min", "distance_km",
+        "tss", "intensity_factor", "main_stimulus", "load_label",
+    ]
+    columns = [
+        column for column in candidate_columns
+        if any(row.get(column) is not None and row.get(column) != "" for row in activities)
+    ]
+    rows = [{column: activity.get(column) for column in columns} for activity in activities]
+    if columns:
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-comparison-table",
+            type="table",
+            title="活动逐项对比",
+            data={"columns": columns, "rows": rows},
             source=source,
         ))
     return blocks

@@ -607,6 +607,10 @@ function presentationColumnLabel(value) {
     heart_rate_bpm: "心率",
     power_w: "功率",
     summary_label: "活动标签",
+    activity_count: "活动数量",
+    intensity_factor: "强度因子",
+    main_stimulus: "主要刺激",
+    load_label: "负荷标签",
   }[value] || String(value || "-");
 }
 

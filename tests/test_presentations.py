@@ -220,3 +220,81 @@ def test_activity_report_replaces_resolved_activity_preview(monkeypatch):
     blocks = project_presentations([resolved, report])
 
     assert [block.type for block in blocks] == ["markdown"]
+
+
+def test_inspect_selection_projects_single_activity_facts_and_profile(monkeypatch):
+    monkeypatch.setattr(
+        "agent.runtime.presentation_projector.build_activity_profile",
+        lambda path: {
+            "x_label": "经过时间",
+            "labels": ["0:00", "30:00"],
+            "series": [{"metric": "heart_rate_bpm", "unit": "bpm", "values": [110, 145]}],
+        },
+    )
+    execution = ToolExecution(
+        index=4,
+        tool="inspect_selection",
+        result={"result": {
+            "schema_version": "analysis_result.v1",
+            "analysis": {
+                "source": "activity_facts",
+                "metrics": {
+                    "schema_version": "activity_metrics.v2",
+                    "fit_path": "/private/selected.fit",
+                    "identity": {
+                        "sport_type": "cycling",
+                        "start_time_local": "2026-08-18T08:00:00+08:00",
+                    },
+                    "scale": {"duration_min": 30, "distance_km": 12.5},
+                },
+            },
+        }},
+    )
+
+    blocks = project_presentations([execution])
+
+    assert [block.type for block in blocks] == ["metric_cards", "line_chart"]
+    assert blocks[0].data["items"][-1] == {"metric": "distance_km", "value": 12.5, "unit": "km"}
+    assert blocks[1].data["series"][0]["metric"] == "heart_rate_bpm"
+    assert "/private/selected.fit" not in str([block.to_dict() for block in blocks])
+
+
+def test_activity_comparison_projects_totals_and_nonempty_columns():
+    execution = ToolExecution(
+        index=5,
+        tool="compare_activities",
+        result={"result": {
+            "schema_version": "activity_comparison.v1",
+            "count": 2,
+            "totals": {"duration_min": 90, "distance_km": 42.5},
+            "activities": [
+                {
+                    "activity_key": "internal-a",
+                    "fit_path": "/private/a.fit",
+                    "start_time_local": "2026-08-17T08:00:00",
+                    "summary_label": "恢复骑",
+                    "duration_min": 30,
+                    "distance_km": 12.5,
+                    "tss": None,
+                },
+                {
+                    "activity_key": "internal-b",
+                    "fit_path": "/private/b.fit",
+                    "start_time_local": "2026-08-18T08:00:00",
+                    "summary_label": "耐力骑",
+                    "duration_min": 60,
+                    "distance_km": 30,
+                    "tss": None,
+                },
+            ],
+        }},
+    )
+
+    blocks = project_presentations([execution])
+
+    assert [block.type for block in blocks] == ["metric_cards", "table"]
+    assert blocks[0].data["items"][0] == {"metric": "activity_count", "value": 2, "unit": "条"}
+    assert "tss" not in blocks[1].data["columns"]
+    public_blocks = str([block.to_dict() for block in blocks])
+    assert "internal-a" not in public_blocks
+    assert "/private/a.fit" not in public_blocks

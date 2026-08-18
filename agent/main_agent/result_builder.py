@@ -116,19 +116,29 @@ def with_execution_header(
 ) -> str:
     """Prefix the answer with a concise account of actual business tools."""
     text = str(answer).strip()
-    if not steps or text.startswith("已处理："):
+    if not steps:
         return text
+    if text.startswith("已处理："):
+        # The model may echo an obsolete header containing an internal key.
+        # Execution headers are owned by this deterministic result builder.
+        _, separator, remainder = text.partition("\n")
+        text = remainder.lstrip() if separator else ""
     activity_labels: list[str] = []
     for activity in context.selected_activities[:3]:
         if not isinstance(activity, dict):
             continue
         started = activity.get("start_time_local") or activity.get("date_local")
-        label = activity.get("summary_label") or activity.get("file_name") or activity.get("activity_key")
-        activity_labels.append(" ".join(str(value) for value in (started, label) if value))
+        # activity_key is an internal content identifier, not a user-facing name.
+        label = activity.get("summary_label") or activity.get("file_name")
+        display_label = " ".join(str(value) for value in (started, label) if value)
+        if display_label:
+            activity_labels.append(display_label)
     if activity_labels:
         target = "；".join(activity_labels)
         if len(context.selected_activities) > len(activity_labels):
             target += f" 等 {len(context.selected_activities)} 条"
+    elif context.selected_activities:
+        target = "当前活动" if len(context.selected_activities) == 1 else f"当前 {len(context.selected_activities)} 条活动"
     else:
         target = "本次请求"
     labels = {
@@ -155,7 +165,8 @@ def with_execution_header(
     for operation in operations:
         if operation and operation not in compact_operations:
             compact_operations.append(operation)
-    return f"已处理：{target}｜{' → '.join(compact_operations)}\n\n{text}"
+    header = f"已处理：{target}｜{' → '.join(compact_operations)}"
+    return f"{header}\n\n{text}" if text else header
 
 
 def completed_workflow_fallback(context: AgentContext) -> str | None:
