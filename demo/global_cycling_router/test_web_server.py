@@ -7,7 +7,7 @@ from urllib.request import ProxyHandler, build_opener
 
 import pytest
 
-from demo.global_cycling_router.graphhopper import WgsPoint
+from demo.global_cycling_router.google_routes import WgsPoint
 from demo.global_cycling_router.web_server import create_server, parse_wgs_point
 
 
@@ -28,6 +28,7 @@ class FakePlaces:
                 "address": "Kyoto, Japan",
                 "location": {"latitude": 34.8908, "longitude": 135.8009},
                 "types": ["train_station"],
+                "country_code": "JP",
             }],
         }
 
@@ -40,8 +41,9 @@ class FakeRouter:
         self.calls.append((points, kwargs))
         return {
             "schema_version": "cycling_route.v1",
-            "provider": "graphhopper",
-            "profile": "bike",
+            "provider": "google_routes",
+            "requested_mode": "BICYCLE",
+            "travel_mode": "DRIVE",
             "coordinate_system": "wgs84",
             "distance_m": 1000,
             "duration_s": 300,
@@ -85,10 +87,10 @@ def test_health_and_place_search(running_server):
 
 def test_route_accepts_repeated_wgs_points(running_server):
     base_url, _, router = running_server
-    status, result = get_json(f"{base_url}/api/route?point=34.8908,135.8009&point=34.9671,135.7727")
+    status, result = get_json(f"{base_url}/api/route?point=34.8908,135.8009&point=34.9671,135.7727&country=JP")
     assert status == 200
-    assert result["provider"] == "graphhopper"
-    assert router.calls == [([WgsPoint(34.8908, 135.8009), WgsPoint(34.9671, 135.7727)], {"profile": "bike"})]
+    assert result["provider"] == "google_routes"
+    assert router.calls == [([WgsPoint(34.8908, 135.8009), WgsPoint(34.9671, 135.7727)], {"country_code": "JP"})]
 
 
 def test_bad_route_input_returns_400_without_provider_call(running_server):

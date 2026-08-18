@@ -94,19 +94,25 @@ function selectPlace(kind, place) {
 async function generateRoute() {
   if (!state.origin || !state.destination) return;
   elements.routeButton.disabled = true;
-  setStatus("正在调用 GraphHopper 生成骑行路线……");
+  setStatus("正在调用 Google Routes 生成路线……");
   clearRoute();
   const points = [state.origin, state.destination].map((place) =>
     `${place.location.latitude},${place.location.longitude}`
   );
-  const params = new URLSearchParams({ profile: "bike" });
+  const params = new URLSearchParams();
   points.forEach((point) => params.append("point", point));
+  const sharedCountry = state.origin.country_code && state.origin.country_code === state.destination.country_code
+    ? state.origin.country_code
+    : "";
+  if (sharedCountry) params.set("country", sharedCountry);
   try {
     const route = await api(`/api/route?${params}`);
     state.routeLayer = L.geoJSON(route.geometry, { style: { color: "#087f6c", weight: 6, opacity: 0.9 } }).addTo(map);
     map.fitBounds(state.routeLayer.getBounds().pad(0.08));
     elements.routeSummary.hidden = false;
-    elements.routeSummary.textContent = `${formatDistance(route.distance_m)} · ${formatDuration(route.duration_s)} · GraphHopper bike`;
+    const modeLabel = route.travel_mode === "DRIVE" ? "Google 驾车降级路线" : "Google 骑行路线";
+    elements.routeSummary.textContent = `${formatDistance(route.distance_m)} · ${formatDuration(route.duration_s)} · ${modeLabel}`;
+    if (route.warning) elements.routeSummary.textContent += ` · ${route.warning}`;
     setStatus("国外骑行路线已生成。", "ready");
   } catch (error) {
     setStatus(error.message, "error");

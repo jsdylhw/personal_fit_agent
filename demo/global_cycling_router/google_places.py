@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -16,6 +17,7 @@ GOOGLE_PLACES_FIELD_MASK = ",".join((
     "places.formattedAddress",
     "places.location",
     "places.types",
+    "places.addressComponents",
 ))
 
 JsonTransport = Callable[[Request, float], dict[str, Any]]
@@ -28,6 +30,8 @@ class GooglePlacesClient:
         *,
         base_url: str = GOOGLE_PLACES_TEXT_SEARCH_URL,
         timeout_s: float = 20.0,
+        retries: int = 2,
+        retry_delay_s: float = 0.4,
         transport: JsonTransport | None = None,
     ) -> None:
         if not api_key or api_key.startswith("replace-with-"):
@@ -35,6 +39,8 @@ class GooglePlacesClient:
         self.api_key = api_key
         self.base_url = base_url
         self.timeout_s = timeout_s
+        self.retries = retries
+        self.retry_delay_s = retry_delay_s
         self.transport = transport or _read_json
 
     def search(
@@ -79,7 +85,7 @@ class GooglePlacesClient:
             },
             method="POST",
         )
-        response = self.transport(request, self.timeout_s)
+        response = self._send(request)
         places = []
         for raw_place in response.get("places") or []:
             normalized = _normalize_place(raw_place)
@@ -92,6 +98,20 @@ class GooglePlacesClient:
             "query": text_query,
             "places": places,
         }
+
+    def _send(self, request: Request) -> dict[str, Any]:
+        for attempt in range(self.retries + 1):
+            try:
+                return self.transport(request, self.timeout_s)
+            except TransientProviderError:
+                if attempt >= self.retries:
+                    raise
+                time.sleep(self.retry_delay_s * (attempt + 1))
+        raise RuntimeError("Google Places retry loop ended unexpectedly")  # pragma: no cover
+
+
+class TransientProviderError(RuntimeError):
+    """Retryable transport failure after no provider response was received."""
 
 
 def _normalize_place(value: Any) -> dict[str, Any] | None:
@@ -116,7 +136,16 @@ def _normalize_place(value: Any) -> dict[str, Any] | None:
         "address": str(value.get("formattedAddress") or ""),
         "location": {"latitude": latitude, "longitude": longitude},
         "types": [str(item) for item in value.get("types") or []],
+        "country_code": _country_code(value.get("addressComponents")),
     }
+
+
+def _country_code(value: Any) -> str:
+    for component in value if isinstance(value, list) else []:
+        if not isinstance(component, dict) or "country" not in (component.get("types") or []):
+            continue
+        return str(component.get("shortText") or "").upper()
+    return ""
 
 
 def _validate_point(latitude: float, longitude: float) -> None:
@@ -141,7 +170,7 @@ def _read_json(request: Request, timeout_s: float) -> dict[str, Any]:
         detail = _http_error_detail(exc)
         raise RuntimeError(f"Google Places returned HTTP {exc.code}: {detail}") from exc
     except (TimeoutError, URLError, OSError) as exc:
-        raise RuntimeError(f"Google Places request failed: {_safe_reason(exc)}") from exc
+        raise TransientProviderError(f"Google Places request failed: {_safe_reason(exc)}") from exc
     if not isinstance(payload, dict):
         raise RuntimeError("Google Places returned an invalid JSON object")
     if isinstance(payload.get("error"), dict):

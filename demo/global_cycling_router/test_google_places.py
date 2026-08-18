@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from demo.global_cycling_router.google_places import GOOGLE_PLACES_FIELD_MASK, GooglePlacesClient
+from demo.global_cycling_router.google_places import GOOGLE_PLACES_FIELD_MASK, GooglePlacesClient, TransientProviderError
 
 
 def test_search_builds_text_request_and_normalizes_places():
@@ -21,6 +21,9 @@ def test_search_builds_text_request_and_normalizes_places():
                     "formattedAddress": "日本京都府宇治市",
                     "location": {"latitude": 34.8908, "longitude": 135.8009},
                     "types": ["train_station", "point_of_interest"],
+                    "addressComponents": [
+                        {"longText": "日本", "shortText": "JP", "types": ["country"]},
+                    ],
                 },
                 {"id": "missing-coordinate", "displayName": {"text": "无坐标"}},
             ]
@@ -49,6 +52,7 @@ def test_search_builds_text_request_and_normalizes_places():
             "address": "日本京都府宇治市",
             "location": {"latitude": 34.8908, "longitude": 135.8009},
             "types": ["train_station", "point_of_interest"],
+            "country_code": "JP",
         }],
     }
 
@@ -63,3 +67,34 @@ def test_search_rejects_empty_query(query):
 def test_client_rejects_placeholder_key():
     with pytest.raises(ValueError, match="not configured"):
         GooglePlacesClient("replace-with-google-maps-api-key")
+
+
+def test_search_retries_transient_transport_failure_only():
+    calls = 0
+
+    def transport(request, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TransientProviderError("temporary SSL EOF")
+        return {"places": []}
+
+    client = GooglePlacesClient("test-google-key", retries=2, retry_delay_s=0, transport=transport)
+    result = client.search("Louvre Museum Paris")
+
+    assert calls == 2
+    assert result["places"] == []
+
+
+def test_search_does_not_retry_provider_error():
+    calls = 0
+
+    def transport(request, timeout):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("Google Places returned HTTP 403")
+
+    client = GooglePlacesClient("test-google-key", retry_delay_s=0, transport=transport)
+    with pytest.raises(RuntimeError, match="403"):
+        client.search("Louvre Museum Paris")
+    assert calls == 1

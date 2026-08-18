@@ -15,10 +15,10 @@ from urllib.parse import parse_qs, urlsplit
 
 try:
     from .google_places import GooglePlacesClient
-    from .graphhopper import GraphHopperCyclingRouter, WgsPoint
+    from .google_routes import GoogleRoutesClient, WgsPoint
 except ImportError:  # pragma: no cover - direct script invocation
     from google_places import GooglePlacesClient
-    from graphhopper import GraphHopperCyclingRouter, WgsPoint
+    from google_routes import GoogleRoutesClient, WgsPoint
 
 
 def load_local_env(path: Path) -> None:
@@ -44,15 +44,14 @@ def load_provider_settings(demo_dir: Path) -> dict[str, str]:
             configured = load_config(config_path)
         except (ImportError, ValueError):
             configured = {}
-    google_config = configured.get("google_maps") if isinstance(configured, dict) else {}
-    graphhopper_config = configured.get("graphhopper") if isinstance(configured, dict) else {}
+    legacy_google_config = configured.get("google_maps") if isinstance(configured, dict) else {}
+    google_config = configured.get("google") if isinstance(configured, dict) else {}
+    if not isinstance(google_config, dict) or not google_config.get("api_key"):
+        google_config = legacy_google_config
     if isinstance(google_config, dict) and google_config.get("api_key"):
         os.environ.setdefault("GOOGLE_MAPS_API_KEY", str(google_config["api_key"]))
-    if isinstance(graphhopper_config, dict) and graphhopper_config.get("api_key"):
-        os.environ.setdefault("GRAPHHOPPER_API_KEY", str(graphhopper_config["api_key"]))
     return {
-        "google_maps_api_key": os.getenv("GOOGLE_MAPS_API_KEY", ""),
-        "graphhopper_api_key": os.getenv("GRAPHHOPPER_API_KEY", ""),
+        "google_api_key": os.getenv("GOOGLE_MAPS_API_KEY", ""),
     }
 
 
@@ -82,7 +81,7 @@ def create_server(
     port: int,
     static_dir: Path,
     places: GooglePlacesClient,
-    router: GraphHopperCyclingRouter,
+    router: GoogleRoutesClient,
 ) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         server_version = "GlobalCyclingRouterDemo/1.0"
@@ -129,7 +128,7 @@ def create_server(
                     self.send_json({
                         "status": "ok",
                         "place_provider": "google_places",
-                        "route_provider": "graphhopper",
+                        "route_provider": "google_routes",
                         "coordinate_system": "wgs84",
                     })
                 elif parsed.path == "/api/places":
@@ -153,7 +152,7 @@ def create_server(
                     ))
                 elif parsed.path == "/api/route":
                     points = [parse_wgs_point(value) for value in query.get("point") or []]
-                    self.send_json(router.route(points, profile=(query.get("profile") or ["bike"])[0]))
+                    self.send_json(router.route(points, country_code=(query.get("country") or [""])[0]))
                 elif parsed.path == "/" or parsed.path.startswith("/static/"):
                     self.serve_static(parsed.path)
                 else:
@@ -179,8 +178,8 @@ def main() -> None:
         host=args.host,
         port=args.port,
         static_dir=demo_dir / "web",
-        places=GooglePlacesClient(settings["google_maps_api_key"]),
-        router=GraphHopperCyclingRouter(settings["graphhopper_api_key"]),
+        places=GooglePlacesClient(settings["google_api_key"]),
+        router=GoogleRoutesClient(settings["google_api_key"]),
     )
     print(f"Global cycling route demo: http://{args.host}:{server.server_port}")
     try:

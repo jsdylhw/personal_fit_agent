@@ -3,23 +3,20 @@
 这个独立 Demo 验证两项能力：
 
 - 使用 Google Places Text Search 检索国外城市、车站、景点和 POI。
-- 使用 GraphHopper 托管 Directions API 的 `bike` profile 生成骑行路线。
+- 使用 Google Routes API 生成路线：支持地区请求 `BICYCLE`，日本降级为避开高速、收费和轮渡的 `DRIVE`。
 
-它不下载国外 OSM/PBF，不依赖本地 GraphHopper，也不检查街景。浏览器地图使用 Leaflet 和在线 OpenStreetMap 瓦片；Google 与 GraphHopper Key 只保留在本地 Python 进程。
+它不下载国外 OSM/PBF，也不检查街景。浏览器地图使用 Leaflet 和在线 OpenStreetMap 瓦片；Google Key 只保留在本地 Python 进程。日本的驾车降级路线仅供虚拟骑行画面使用，不能作为户外骑行导航。
 
 ## 配置
 
 推荐复制根目录配置示例并填写：
 
 ```yaml
-google_maps:
+google:
   api_key: "your-google-maps-api-key"
-
-graphhopper:
-  api_key: "your-graphhopper-api-key"
 ```
 
-Google Cloud 项目需要启用 Places API (New)。也可以在 Demo 目录创建 `.env`：
+Google Cloud 项目需要启用 Places API (New) 和 Routes API。也可以在 Demo 目录创建 `.env`：
 
 ```bash
 cp demo/global_cycling_router/.env.example demo/global_cycling_router/.env
