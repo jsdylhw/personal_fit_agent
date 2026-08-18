@@ -75,7 +75,7 @@ def build_activation_unavailable_result(context: AgentContext, *, error: Excepti
     context.last_llm_error = {"type": type(error).__name__, "message": str(error)}
     context.active_skill_id = None
     answer = "LLM 服务连接暂时不可用，尚未选择领域 Skill，因此本轮没有暴露或执行任何活动工具。请稍后重试。"
-    return build_turn_result("llm_unavailable", "selector", context, [], answer)
+    return build_turn_result("llm_unavailable", "skill_activation", context, [], answer)
 
 
 def build_turn_result(

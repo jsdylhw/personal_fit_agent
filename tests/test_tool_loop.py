@@ -32,7 +32,7 @@ def test_main_prompt_does_not_leak_unselected_skill_tools():
     assert "确认" not in prompt
 
 
-def test_ordinary_chat_answers_without_a_separate_selector_request():
+def test_ordinary_chat_answers_in_one_main_model_request():
     context = AgentContext(session_id="one-call-chat")
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
         client.return_value.create_messages.return_value = {

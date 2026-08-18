@@ -7,8 +7,7 @@ from typing import Any
 
 from agent.main_agent.context import AgentContext
 from agent.main_agent.tools import TOOL_HANDLERS, execute_saved_action
-from agent.skills import get_skill
-from agent.skills.policy import skill_allows_tool
+from agent.skills import get_skill, skill_allows_tool
 from agent.runtime.models import ToolExecution, TurnResult
 
 RETRY_WORDS = {"再试一次", "重试", "再试", "retry", "try again", "再来一次", "重新试一下"}

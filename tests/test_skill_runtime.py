@@ -6,52 +6,7 @@ from agent.main_agent.turn_control import handle_control_turn
 from agent.main_agent.turn_policy import requires_raw_window_evidence, tools_for_skill
 from agent.skills.catalog import get_skill, list_skill_descriptors
 from agent.skills.loader import load_skill_instructions, load_sport_references
-from agent.skills.models import SkillSelection
-from agent.skills.policy import validate_skill_selection
-from agent.skills.selector import parse_skill_selection, select_skill
 from agent.tools.agent_tools import MAIN_AGENT_TOOLS
-
-
-def test_stage_one_selector_receives_descriptions_without_tool_schemas():
-    class FakeClient:
-        def create_message(self, **kwargs):
-            self.kwargs = kwargs
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": '{"skill_id":"analyze-activity","confidence":0.93,"reason":"single activity"}',
-                }],
-            }
-
-    client = FakeClient()
-    selection = select_skill(
-        "分析今天的骑行",
-        conversation_context=[{"role": "user", "content": "刚才同步了活动"}],
-        client=client,
-    )
-
-    assert selection.skill_id == "analyze-activity"
-    assert selection.confidence == 0.93
-    assert "tools" not in client.kwargs
-    assert "input_schema" not in str(client.kwargs["user"])
-    assert "刚才同步了活动" in str(client.kwargs["user"])
-    assert {item["skill_id"] for item in list_skill_descriptors()} >= {
-        "analyze-activity", "run-activity-workflow", "sync-garmin-activities",
-    }
-
-
-def test_selector_reason_is_diagnostic_and_unknown_skill_fails_closed():
-    selection = parse_skill_selection(
-        '{"skill_id":"invented-skill","confidence":0.99,"reason":"call sync_garmin_activities"}'
-    )
-
-    assert selection.reason == "call sync_garmin_activities"
-    assert validate_skill_selection(selection) is None
-
-
-def test_single_confidence_threshold_controls_activation():
-    assert validate_skill_selection(SkillSelection("analyze-activity", 0.69)) is None
-    assert validate_skill_selection(SkillSelection("analyze-activity", 0.70)).skill_id == "analyze-activity"
 
 
 def test_skill_tool_guard_rejects_registered_tool_outside_active_skill():

@@ -143,3 +143,8 @@ def get_skill(skill_id: str | None) -> SkillSpec | None:
 def list_skill_descriptors() -> list[dict[str, str]]:
     """Return only stage-one metadata, never instructions or tool schemas."""
     return [skill.public_descriptor() for skill in SKILL_CATALOG]
+
+
+def skill_allows_tool(skill: SkillSpec | None, tool_name: str) -> bool:
+    """Check the immutable Skill allowlist independently of model output."""
+    return skill is not None and tool_name in skill.tool_names
