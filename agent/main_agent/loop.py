@@ -72,7 +72,7 @@ def run_tool_loop(
         return build_activation_unavailable_result(context, error=exc)
 
     try:
-        step_count, steps_taken = _run_agent_turn(
+        step_count, steps_taken = _execute_main_agent_turn(
             message,
             context,
             verbose,
@@ -127,7 +127,7 @@ def _prepare_context(
     return context
 
 
-def _run_agent_turn(
+def _execute_main_agent_turn(
     message,
     context,
     verbose,
