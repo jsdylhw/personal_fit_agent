@@ -445,7 +445,7 @@ function renderLineCharts(data) {
   const series = Array.isArray(data.series) ? data.series : [];
   series.forEach((item) => {
     const values = Array.isArray(item.values) ? item.values : [];
-    const numeric = values.map((value) => Number(value));
+    const numeric = values.map((value) => value === null || value === undefined ? Number.NaN : Number(value));
     const valid = numeric.filter(Number.isFinite);
     if (!valid.length) return;
 
@@ -455,19 +455,25 @@ function renderLineCharts(data) {
     heading.className = "chart-title";
     heading.textContent = `${presentationColumnLabel(item.metric)}${item.unit ? ` (${item.unit})` : ""}`;
     card.appendChild(heading);
-    card.appendChild(buildLineSvg(labels, numeric, item.unit));
+    const summary = document.createElement("div");
+    summary.className = "chart-summary";
+    summary.textContent = chartSeriesSummary(numeric, item.unit);
+    card.appendChild(summary);
+    card.appendChild(buildLineSvg(labels, numeric, item.unit, data.x_label));
     container.appendChild(card);
   });
   return container;
 }
 
-function buildLineSvg(labels, values, unit) {
+function buildLineSvg(labels, values, unit, xLabel) {
   const namespace = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(namespace, "svg");
   const width = 640;
-  const height = 180;
-  const padX = 42;
-  const padY = 24;
+  const height = 220;
+  const padLeft = 58;
+  const padRight = 20;
+  const padTop = 28;
+  const padBottom = 42;
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("role", "img");
   svg.setAttribute("aria-label", "训练周期折线图");
@@ -476,43 +482,105 @@ function buildLineSvg(labels, values, unit) {
   const min = Math.min(...valid);
   const max = Math.max(...valid);
   const span = max - min || 1;
-  const x = (index) => padX + (values.length <= 1 ? 0 : index * (width - 2 * padX) / (values.length - 1));
-  const y = (value) => height - padY - (value - min) * (height - 2 * padY) / span;
-  const points = values
-    .map((value, index) => Number.isFinite(value) ? `${x(index)},${y(value)}` : null)
-    .filter(Boolean)
-    .join(" ");
+  const x = (index) => padLeft + (values.length <= 1 ? 0 : index * (width - padLeft - padRight) / (values.length - 1));
+  const y = (value) => height - padBottom - (value - min) * (height - padTop - padBottom) / span;
 
-  const line = document.createElementNS(namespace, "polyline");
-  line.setAttribute("points", points);
+  [min, min + span / 2, max].forEach((tickValue) => {
+    const tickY = y(tickValue);
+    const grid = document.createElementNS(namespace, "line");
+    grid.setAttribute("x1", padLeft);
+    grid.setAttribute("x2", width - padRight);
+    grid.setAttribute("y1", tickY);
+    grid.setAttribute("y2", tickY);
+    grid.setAttribute("class", "chart-grid");
+    svg.appendChild(grid);
+
+    const tick = document.createElementNS(namespace, "text");
+    tick.setAttribute("x", padLeft - 8);
+    tick.setAttribute("y", tickY + 4);
+    tick.setAttribute("class", "chart-y-label");
+    tick.textContent = formatChartNumber(tickValue);
+    svg.appendChild(tick);
+  });
+  let pathData = "";
+  let drawing = false;
+  values.forEach((value, index) => {
+    if (!Number.isFinite(value)) {
+      drawing = false;
+      return;
+    }
+    pathData += `${drawing ? " L" : " M"} ${x(index)} ${y(value)}`;
+    drawing = true;
+  });
+
+  const line = document.createElementNS(namespace, "path");
+  line.setAttribute("d", pathData.trim());
   line.setAttribute("class", "chart-line");
   svg.appendChild(line);
 
-  values.forEach((value, index) => {
+  if (values.length <= 40) {
+    values.forEach((value, index) => {
+      if (!Number.isFinite(value)) return;
+      const point = document.createElementNS(namespace, "circle");
+      point.setAttribute("cx", x(index));
+      point.setAttribute("cy", y(value));
+      point.setAttribute("r", "4");
+      point.setAttribute("class", "chart-point");
+      const tooltip = document.createElementNS(namespace, "title");
+      tooltip.textContent = `${labels[index] || index + 1}: ${value}${unit ? ` ${unit}` : ""}`;
+      point.appendChild(tooltip);
+      svg.appendChild(point);
+    });
+  }
+
+  const valueLabelIndices = values.length <= 8
+    ? values.map((_, index) => index)
+    : [];
+  valueLabelIndices.forEach((index) => {
+    const value = values[index];
     if (!Number.isFinite(value)) return;
-    const point = document.createElementNS(namespace, "circle");
-    point.setAttribute("cx", x(index));
-    point.setAttribute("cy", y(value));
-    point.setAttribute("r", "4");
-    point.setAttribute("class", "chart-point");
-    const tooltip = document.createElementNS(namespace, "title");
-    tooltip.textContent = `${labels[index] || index + 1}: ${value}${unit ? ` ${unit}` : ""}`;
-    point.appendChild(tooltip);
-    svg.appendChild(point);
+    const label = document.createElementNS(namespace, "text");
+    label.setAttribute("x", x(index));
+    label.setAttribute("y", Math.max(14, y(value) - 9));
+    label.setAttribute("class", "chart-value-label");
+    label.textContent = formatChartNumber(value);
+    svg.appendChild(label);
   });
 
   const labelIndices = values.length <= 6
     ? values.map((_, index) => index)
-    : [0, values.length - 1];
+    : [0, Math.floor((values.length - 1) / 2), values.length - 1];
   labelIndices.forEach((index) => {
     const label = document.createElementNS(namespace, "text");
     label.setAttribute("x", x(index));
-    label.setAttribute("y", height - 5);
+    label.setAttribute("y", height - 20);
     label.setAttribute("class", "chart-label");
     label.textContent = labels[index] || "";
     svg.appendChild(label);
   });
+  if (xLabel) {
+    const axisTitle = document.createElementNS(namespace, "text");
+    axisTitle.setAttribute("x", (padLeft + width - padRight) / 2);
+    axisTitle.setAttribute("y", height - 4);
+    axisTitle.setAttribute("class", "chart-axis-title");
+    axisTitle.textContent = xLabel;
+    svg.appendChild(axisTitle);
+  }
   return svg;
+}
+
+function chartSeriesSummary(values, unit) {
+  const valid = values.filter(Number.isFinite);
+  const first = valid[0];
+  const last = valid[valid.length - 1];
+  const suffix = unit ? ` ${unit}` : "";
+  return `起点 ${formatChartNumber(first)}${suffix} → 终点 ${formatChartNumber(last)}${suffix} · 范围 ${formatChartNumber(Math.min(...valid))}–${formatChartNumber(Math.max(...valid))}${suffix}`;
+}
+
+function formatChartNumber(value) {
+  if (!Number.isFinite(Number(value))) return "-";
+  const numeric = Number(value);
+  return Math.abs(numeric) >= 100 ? numeric.toFixed(0) : numeric.toFixed(1);
 }
 
 function presentationColumnLabel(value) {
@@ -535,6 +603,10 @@ function presentationColumnLabel(value) {
     tss: "TSS",
     sport_type: "运动类型",
     start_time_local: "开始时间",
+    cumulative_distance_km: "累计距离",
+    heart_rate_bpm: "心率",
+    power_w: "功率",
+    summary_label: "活动标签",
   }[value] || String(value || "-");
 }
 

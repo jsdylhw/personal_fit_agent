@@ -50,12 +50,25 @@ def test_history_projector_uses_deterministic_result_values():
         "confidence": "medium",
     }]
     assert blocks[1].data == {
+        "x_label": "训练周期",
         "labels": ["2026-W19", "2026-W20"],
         "series": [
             {"metric": "duration_min", "unit": "min", "values": [120, 150]},
             {"metric": "tss", "unit": "TSS", "values": [80, 110]},
         ],
     }
+
+
+def test_history_projector_omits_dimensions_without_evidence():
+    execution = _history_execution()
+    execution.result["result"]["dimensions"].append({
+        "name": "recovery", "confidence": "low", "evidence": [],
+    })
+
+    blocks = project_presentations([execution])
+
+    assert len(blocks[0].data["rows"]) == 1
+    assert all(row["dimension"] != "recovery" for row in blocks[0].data["rows"])
 
 
 def test_public_turn_result_excludes_internal_state_and_raw_tool_values():
@@ -111,3 +124,99 @@ def test_activity_report_projects_markdown_without_exposing_report_metadata():
     ]}
     assert blocks[1].data == {"markdown": "# 骑行报告\n\n状态良好。"}
     assert "/private/activity.fit" not in str([block.to_dict() for block in blocks])
+
+
+def test_activity_report_projects_local_profile_after_llm_execution(monkeypatch):
+    monkeypatch.setattr(
+        "agent.runtime.presentation_projector.build_activity_profile",
+        lambda path: {
+            "x_label": "经过时间",
+            "labels": ["0:00", "30:00"],
+            "series": [{
+                "metric": "cumulative_distance_km", "unit": "km", "values": [0.0, 12.5],
+            }],
+        },
+    )
+    execution = ToolExecution(
+        index=3,
+        tool="analyze_activity",
+        result={
+            "answer": "活动完成。",
+            "result": {
+                "schema_version": "activity_report.v1",
+                "fit_path": "/private/activity.fit",
+            },
+        },
+    )
+
+    blocks = project_presentations([execution])
+
+    assert [block.type for block in blocks] == ["line_chart", "markdown"]
+    assert blocks[0].title == "活动过程曲线"
+    assert blocks[0].data["series"][0]["values"] == [0.0, 12.5]
+
+
+def test_single_resolved_activity_projects_details_without_analyze_tool(monkeypatch):
+    monkeypatch.setattr(
+        "agent.runtime.presentation_projector.build_activity_profile",
+        lambda path: {
+            "x_label": "经过时间",
+            "labels": ["0:00", "1:00:00"],
+            "series": [
+                {"metric": "cumulative_distance_km", "unit": "km", "values": [0.0, 52.8]},
+                {"metric": "heart_rate_bpm", "unit": "bpm", "values": [118.0, 152.0]},
+            ],
+        },
+    )
+    execution = ToolExecution(
+        index=0,
+        tool="resolve_activities",
+        result={"result": {
+            "schema_version": "activity_selection.v2",
+            "count": 1,
+            "activities": [{
+                "summary_label": "长距离骑行",
+                "sport_type": "cycling",
+                "start_time_local": "2026-08-01T18:45:13",
+                "duration_min": 105.5,
+                "distance_km": 52.8,
+                "fit_path": "/private/long.fit",
+            }],
+        }},
+    )
+
+    blocks = project_presentations([execution])
+
+    assert [block.type for block in blocks] == ["metric_cards", "line_chart"]
+    assert blocks[0].data["items"][0] == {
+        "metric": "summary_label", "value": "长距离骑行", "unit": "",
+    }
+    assert blocks[1].data["series"][1]["metric"] == "heart_rate_bpm"
+    assert "/private/long.fit" not in str([block.to_dict() for block in blocks])
+
+
+def test_activity_report_replaces_resolved_activity_preview(monkeypatch):
+    monkeypatch.setattr(
+        "agent.runtime.presentation_projector.build_activity_profile",
+        lambda path: {},
+    )
+    resolved = ToolExecution(
+        index=0,
+        tool="resolve_activities",
+        result={"result": {
+            "schema_version": "activity_selection.v2",
+            "activities": [{"summary_label": "长距离骑行", "duration_min": 105.5}],
+        }},
+    )
+    report = ToolExecution(
+        index=1,
+        tool="analyze_activity",
+        result={
+            "answer": "# 完整报告",
+            "result": {"schema_version": "activity_report.v1"},
+        },
+    )
+
+    blocks = project_presentations([resolved, report])
+
+    assert [block.type for block in blocks] == ["markdown"]

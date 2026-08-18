@@ -207,6 +207,17 @@ p,
   color: var(--muted);
 }
 
+.chart-title {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.chart-summary {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .chat-body {
   margin-top: 5px;
   white-space: pre-wrap;
@@ -331,9 +342,16 @@ p,
 .chart-line {
   fill: none;
   stroke: var(--accent);
-  stroke-width: 3;
+  stroke-width: 2.25;
   stroke-linecap: round;
   stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-grid {
+  stroke: #e4e7ec;
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
 }
 
 .chart-point {
@@ -346,6 +364,27 @@ p,
   fill: var(--muted);
   font-size: 11px;
   text-anchor: middle;
+}
+
+.chart-y-label,
+.chart-value-label,
+.chart-axis-title {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.chart-y-label {
+  text-anchor: end;
+}
+
+.chart-value-label,
+.chart-axis-title {
+  text-anchor: middle;
+}
+
+.chart-value-label {
+  fill: var(--text);
+  font-weight: 700;
 }
 
 .chat-empty {

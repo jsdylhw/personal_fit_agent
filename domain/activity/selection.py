@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 
 
 SELECTION_KINDS = {"current", "recent", "date", "range", "all", "key", "index", "name"}
-SELECTION_ORDERS = {"latest", "earliest"}
+SELECTION_ORDERS = {"latest", "earliest", "longest"}
 RELATIVE_RANGES = {"this_week", "this_month", "last_week", "last_month"}
 
 
@@ -79,7 +79,7 @@ class ActivitySelectionRequest:
 
     def _validate(self) -> None:
         if self.order not in SELECTION_ORDERS:
-            raise ValueError("order must be latest or earliest")
+            raise ValueError("order must be latest, earliest, or longest")
         if self.limit is not None and self.limit > 50:
             raise ValueError("limit must be between 1 and 50")
         if self.days is not None and self.days > 3650:

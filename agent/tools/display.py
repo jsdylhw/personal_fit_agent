@@ -19,6 +19,8 @@ def format_tool_args(block: dict[str, Any]) -> str:
         parts = [
             "全库最早活动"
             if kind == "all" and args.get("order") == "earliest" and args.get("limit") == 1
+            else "全库最长活动"
+            if kind == "all" and args.get("order") == "longest" and args.get("limit") == 1
             else labels.get(kind, kind or "未指定范围")
         ]
         if args.get("limit"):

@@ -6,11 +6,16 @@ from typing import Any
 
 from agent.runtime.models import ToolExecution
 from agent.runtime.presentations import PresentationBlock
+from services.activity.presentation import build_activity_profile
 
 
 def project_presentations(executions: list[ToolExecution]) -> list[PresentationBlock]:
     """Return deterministic UI blocks for the tool schemas understood by the UI."""
     blocks: list[PresentationBlock] = []
+    has_activity_report = any(
+        str(_schema_payload(execution.result).get("schema_version") or "") == "activity_report.v1"
+        for execution in executions
+    )
     for execution in executions:
         payload = _schema_payload(execution.result)
         schema_version = str(payload.get("schema_version") or "")
@@ -18,6 +23,12 @@ def project_presentations(executions: list[ToolExecution]) -> list[PresentationB
             blocks.extend(_training_history_blocks(execution, payload))
         elif schema_version == "activity_report.v1":
             blocks.extend(_activity_report_blocks(execution, payload))
+        elif (
+            schema_version == "activity_selection.v2"
+            and execution.tool == "resolve_activities"
+            and not has_activity_report
+        ):
+            blocks.extend(_resolved_activity_blocks(execution, payload))
     return blocks
 
 
@@ -35,18 +46,21 @@ def _training_history_blocks(
     payload: dict[str, Any],
 ) -> list[PresentationBlock]:
     source = _source(execution, payload)
-    blocks = [PresentationBlock(
-        presentation_id=f"execution-{execution.index}-history-table",
-        type="table",
-        title="训练趋势对比",
-        data={
-            "columns": [
-                "dimension", "metric", "baseline", "current", "change", "unit", "confidence",
-            ],
-            "rows": _history_rows(payload.get("dimensions")),
-        },
-        source=source,
-    )]
+    blocks = []
+    rows = _history_rows(payload.get("dimensions"))
+    if rows:
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-history-table",
+            type="table",
+            title="训练趋势对比",
+            data={
+                "columns": [
+                    "dimension", "metric", "baseline", "current", "change", "unit", "confidence",
+                ],
+                "rows": rows,
+            },
+            source=source,
+        ))
 
     chart = _history_chart(payload)
     if chart["series"]:
@@ -67,19 +81,10 @@ def _history_rows(value: Any) -> list[dict[str, Any]]:
             continue
         evidence = dimension.get("evidence")
         evidence_items = evidence if isinstance(evidence, list) else []
-        if not evidence_items:
-            rows.append({
-                "dimension": dimension.get("name"),
-                "metric": None,
-                "baseline": None,
-                "current": None,
-                "change": None,
-                "unit": None,
-                "confidence": dimension.get("confidence"),
-            })
-            continue
         for item in evidence_items:
             if not isinstance(item, dict):
+                continue
+            if not item.get("metric"):
                 continue
             rows.append({
                 "dimension": dimension.get("name"),
@@ -115,7 +120,7 @@ def _history_chart(payload: dict[str, Any]) -> dict[str, Any]:
                 "unit": _metric_unit(metric_name),
                 "values": values,
             })
-    return {"labels": labels, "series": series}
+    return {"x_label": "训练周期", "labels": labels, "series": series}
 
 
 def _activity_report_blocks(
@@ -134,6 +139,15 @@ def _activity_report_blocks(
             data={"items": cards},
             source=_source(execution, payload),
         ))
+    profile = build_activity_profile(payload.get("fit_path"))
+    if profile.get("series"):
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-activity-profile",
+            type="line_chart",
+            title="活动过程曲线",
+            data=profile,
+            source=_source(execution, payload),
+        ))
     markdown = result.get("answer") or payload.get("markdown_report")
     if isinstance(markdown, str) and markdown.strip():
         blocks.append(PresentationBlock(
@@ -146,15 +160,54 @@ def _activity_report_blocks(
     return blocks
 
 
+def _resolved_activity_blocks(
+    execution: ToolExecution,
+    payload: dict[str, Any],
+) -> list[PresentationBlock]:
+    activities = [item for item in payload.get("activities") or [] if isinstance(item, dict)]
+    if len(activities) != 1:
+        return []
+    activity = activities[0]
+    source = _source(execution, payload)
+    blocks = []
+    cards = _activity_metric_cards(activity)
+    if activity.get("summary_label"):
+        cards.insert(0, {"metric": "summary_label", "value": activity["summary_label"], "unit": ""})
+    if cards:
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-resolved-activity-metrics",
+            type="metric_cards",
+            title="活动概览",
+            data={"items": cards},
+            source=source,
+        ))
+    profile = build_activity_profile(activity.get("fit_path"))
+    if profile.get("series"):
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-resolved-activity-profile",
+            type="line_chart",
+            title="活动过程曲线",
+            data=profile,
+            source=source,
+        ))
+    return blocks
+
+
 def _activity_metric_cards(fit_summary: dict[str, Any]) -> list[dict[str, Any]]:
     cards = []
     duration_s = _number(fit_summary.get("duration_s"))
     distance_m = _number(fit_summary.get("distance_m"))
+    duration_min = _number(fit_summary.get("duration_min"))
+    distance_km = _number(fit_summary.get("distance_km"))
+    if duration_min is None and duration_s is not None:
+        duration_min = duration_s / 60
+    if distance_km is None and distance_m is not None:
+        distance_km = distance_m / 1000
     values = [
         ("sport_type", fit_summary.get("sport_type"), ""),
         ("start_time_local", fit_summary.get("start_time_local"), ""),
-        ("duration_min", round(duration_s / 60, 1) if duration_s is not None else None, "min"),
-        ("distance_km", round(distance_m / 1000, 2) if distance_m is not None else None, "km"),
+        ("duration_min", round(duration_min, 1) if duration_min is not None else None, "min"),
+        ("distance_km", round(distance_km, 2) if distance_km is not None else None, "km"),
     ]
     for metric, value, unit in values:
         if value is not None and value != "":

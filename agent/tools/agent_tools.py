@@ -66,7 +66,12 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "activity_key": {"type": "string"},
                 "activity_index": {"type": "integer"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 1},
-                "order": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
+                "order": {
+                    "type": "string",
+                    "enum": ["latest", "earliest", "longest"],
+                    "default": "latest",
+                    "description": "longest 按活动时长从长到短排序。",
+                },
                 "date": {"type": "string", "description": "相对或 ISO 日期,如 today/yesterday/2026-05-18"},
                 "name": {"type": "string"},
                 "sport_type": {"type": "string", "description": "可传 cycling/running/walking，也接受 Ride、骑行、run、跑步等常见别名。"},
@@ -94,7 +99,7 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         name="lookup_activities",
         description=(
             "按显式 kind 只读查询本地 SQLite 活动目录，不改变当前活动集合或导航焦点。"
-            "用于在已建立的活动范围外补充查询、对照或查找全库最早/最新活动；参数规则与 resolve_activities 相同。"
+            "用于在已建立的活动范围外补充查询、对照或查找全库最早/最新/最长活动；参数规则与 resolve_activities 相同。"
         ),
         input_schema={
             "type": "object",
@@ -107,7 +112,12 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "activity_key": {"type": "string"},
                 "activity_index": {"type": "integer"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 1},
-                "order": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
+                "order": {
+                    "type": "string",
+                    "enum": ["latest", "earliest", "longest"],
+                    "default": "latest",
+                    "description": "longest 按活动时长从长到短排序。",
+                },
                 "date": {"type": "string", "description": "相对或 ISO 日期,如 today/yesterday/2026-05-18"},
                 "name": {"type": "string"},
                 "sport_type": {"type": "string", "description": "可传 cycling/running/walking，也接受常见别名。"},

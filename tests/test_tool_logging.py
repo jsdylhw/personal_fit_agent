@@ -23,6 +23,12 @@ def test_tool_logging_distinguishes_an_auxiliary_oldest_lookup():
     assert _format_tool_args(block) == "全库最早活动 · 1 条"
 
 
+def test_tool_logging_renders_longest_activity_scope():
+    block = {"name": "resolve_activities", "input": {"kind": "all", "order": "longest", "limit": 1}}
+
+    assert _format_tool_args(block) == "全库最长活动 · 1 条"
+
+
 def test_tool_logging_identifies_report_source_and_activities():
     find_output = {
         "result": {

@@ -8,6 +8,7 @@ description: Read or generate one activity report and answer focused FIT questio
 Resolve exactly one activity with a typed `resolve_activities` request before analysis and let successful resolution freeze the navigation focus.
 
 - Use `kind=recent, limit=1` for the latest activity and `kind=date, limit=1` for a single activity on a specified day.
+- Use `kind=all, order=longest, limit=1` when the user asks for the longest-duration activity. If the user says show, view, or inspect that activity, continue with `analyze_activity` after resolving it instead of only describing the lookup result.
 - If a frozen collection already exists and the user says “the second one”, use `navigate_selection`; do not resolve it by date or description again.
 
 - For a general request, call `inspect_selection`; it reuses the lightweight FIT overview and does not create a report.

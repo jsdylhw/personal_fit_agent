@@ -48,3 +48,8 @@ def test_web_ui_renders_presentations_without_injecting_markdown_html():
     assert 'block.type === "markdown"' in source
     assert 'markdown.textContent = block.data?.markdown || ""' in source
     assert "createElementNS(namespace, \"svg\")" in source
+    assert 'summary.className = "chart-summary"' in source
+    assert 'grid.setAttribute("class", "chart-grid")' in source
+    assert 'label.setAttribute("class", "chart-value-label")' in source
+    assert "if (values.length <= 40)" in source
+    assert 'createElementNS(namespace, "path")' in source
