@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.analysis.agent import run_activity_analysis_agent
+from agent.analysis.query import run_activity_query_agent
 from agent.main_agent.context import AgentContext
 from domain.analysis.artifacts import build_history_view, get_analysis_summary
 from services.activity.reporting import read_activity_report
@@ -112,31 +113,27 @@ def _answer_targeted_question(
             "message": "A focused activity question requires the original FIT file.",
         }
 
-    analysis = run_activity_analysis_agent(
-        str(fit_path),
-        user_request=user_request,
-        persist=False,
-    )
-    report = str(analysis.get("markdown_report") or "").strip()
-    if not report:
+    analysis = run_activity_query_agent(str(fit_path), question=user_request)
+    answer = str(analysis.get("answer") or "").strip()
+    if not answer:
         return {
-            "error": "missing_markdown_report",
-            "message": "Focused analysis did not return markdown_report.",
+            "error": "missing_query_answer",
+            "message": "Focused analysis did not return an answer.",
             "analysis": analysis,
         }
     return {
         "step": name,
         "status": "completed",
-        "answer": report,
+        "answer": answer,
         "result": {
             "schema_version": "activity_report.v1",
             "activity_key": analysis.get("activity_key") or activity.get("activity_key"),
             "fit_path": analysis.get("fit_path") or fit_path,
             "source": "targeted_query",
             "status": analysis.get("status"),
-            "agent": analysis.get("agent"),
-            "analysis_error": analysis.get("analysis_error") if isinstance(analysis.get("analysis_error"), dict) else None,
-            "analysis_summary": analysis.get("analysis_summary") if isinstance(analysis.get("analysis_summary"), dict) else {},
+            "agent": "ActivityQueryAgent",
+            "evidence": analysis.get("evidence") if isinstance(analysis.get("evidence"), list) else [],
+            "limitations": analysis.get("limitations") if isinstance(analysis.get("limitations"), list) else [],
         },
     }
 

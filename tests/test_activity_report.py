@@ -29,24 +29,26 @@ def test_detail_query_uses_read_only_child_agent(tmp_path, monkeypatch):
     activity = store_report(tmp_path, {"activity_key": "a1", "markdown_report": "# 通用报告"})
     calls = []
 
-    def fake_analyze(fit_path: str, **kwargs):
+    def fake_query(fit_path: str, **kwargs):
         calls.append((fit_path, kwargs))
         return {
             "activity_key": "a1",
             "fit_path": fit_path,
-            "markdown_report": "# 短冲刺检查",
-            "status": "analyzed_query",
-            "agent": "ActivityAnalysisAgent",
+            "answer": "# 短冲刺检查",
+            "status": "answered_query",
+            "evidence": [{"label": "窗口", "value": "100-200s"}],
+            "limitations": [],
         }
 
-    monkeypatch.setattr("agent.tools.handlers.activity_reporting.run_activity_analysis_agent", fake_analyze)
+    monkeypatch.setattr("agent.tools.handlers.activity_reporting.run_activity_query_agent", fake_query)
     context = AgentContext(session_id="query-test", selected_activities=[activity])
 
     result = query_selected_activity_detail_tool(context, question="检查 100-200 秒是否有短冲刺")
 
     assert result["answer"] == "# 短冲刺检查"
-    assert calls[0][1] == {"user_request": "检查 100-200 秒是否有短冲刺", "persist": False}
+    assert calls[0][1] == {"question": "检查 100-200 秒是否有短冲刺"}
     assert result["result"]["source"] == "targeted_query"
+    assert result["result"]["agent"] == "ActivityQueryAgent"
 
 
 def test_detail_query_does_not_generate_full_report_when_missing(tmp_path, monkeypatch):
@@ -55,17 +57,16 @@ def test_detail_query_does_not_generate_full_report_when_missing(tmp_path, monke
     fit.write_bytes(b"fit")
     calls = []
 
-    def fake_analyze(fit_path: str, **kwargs):
+    def fake_query(fit_path: str, **kwargs):
         calls.append(kwargs)
         return {
             "activity_key": "a1",
             "fit_path": fit_path,
-            "markdown_report": "# 定向回答",
-            "status": "analyzed_query",
-            "agent": "ActivityAnalysisAgent",
+            "answer": "# 定向回答",
+            "status": "answered_query",
         }
 
-    monkeypatch.setattr("agent.tools.handlers.activity_reporting.run_activity_analysis_agent", fake_analyze)
+    monkeypatch.setattr("agent.tools.handlers.activity_reporting.run_activity_query_agent", fake_query)
     context = AgentContext(
         session_id="focused-without-report",
         selected_activities=[{"activity_key": "a1", "fit_path": str(fit)}],
@@ -74,7 +75,7 @@ def test_detail_query_does_not_generate_full_report_when_missing(tmp_path, monke
     result = query_selected_activity_detail_tool(context, question="看心率漂移")
 
     assert result["answer"] == "# 定向回答"
-    assert calls == [{"user_request": "看心率漂移", "persist": False}]
+    assert calls == [{"question": "看心率漂移"}]
     assert ActivityStore().get_report("a1") is None
 
 

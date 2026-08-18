@@ -89,13 +89,14 @@ activity_set -> activity -> segment_set -> segment
 精确时间或距离窗口
   -> turn_policy 收窄工具面
   -> query_activity_detail(原始问题)
-  -> ActivityAnalysisAgent
-  -> 原始窗口工具 + submit_analysis
-  -> persist=False，不覆盖完整报告
+  -> ActivityQueryAgent
+  -> 代码解析窗口并执行原始 FIT 查询
+  -> 单次模型综合 + submit_query_answer
+  -> 仅返回 answer / evidence / limitations，不生成报告或 Strava 文案
 
 显式完整报告
   -> analyze_activity
-  -> 已有 V2 报告直接读取；缺失时才生成
+  -> 已有 V2 报告直接读取；缺失时由 ActivityAnalysisAgent + submit_analysis 生成
 ```
 
 ## 多活动与历史分析

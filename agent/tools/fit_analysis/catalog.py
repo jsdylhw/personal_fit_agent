@@ -90,6 +90,45 @@ SUBMIT_ANALYSIS_TOOL = ToolDef(
 )
 
 
+SUBMIT_QUERY_ANSWER_TOOL = ToolDef(
+    name="submit_query_answer",
+    description=(
+        "Submit a focused answer to one activity question and end the query session. "
+        "This is not a full activity report and must not contain a Strava summary."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Concise Chinese Markdown that directly answers the user's question.",
+            },
+            "evidence": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "value": {"type": "string"},
+                        "source": {"type": "string"},
+                    },
+                    "required": ["label", "value"],
+                },
+                "description": "Small set of objective facts supporting the answer.",
+            },
+            "limitations": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Missing data or scope limits that materially affect the conclusion.",
+            },
+        },
+        "required": ["answer", "evidence", "limitations"],
+    },
+    category=CATEGORY_ANALYSIS,
+)
+
+
 # The child agent receives both read-only FIT tools and the explicit completion
 # tool. Keeping FIT_DATA_TOOLS separate preserves its read-only data contract.
 FIT_ANALYSIS_TOOLS = (*FIT_DATA_TOOLS, SUBMIT_ANALYSIS_TOOL)
