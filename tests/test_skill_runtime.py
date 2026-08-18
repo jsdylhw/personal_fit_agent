@@ -151,6 +151,11 @@ def test_short_ordinal_and_back_commands_mutate_persisted_navigation(tmp_path):
         assert [item["activity_key"] for item in context.selected_activities] == ["a3", "a2", "a1"]
         assert service.current_focus(context)["type"] == "activity_set"
 
+        qualified = handle_control_turn("看第二个，只查看轻量概览，不生成报告。", context)
+        assert qualified["status"] == "completed"
+        assert context.current_activity_key == "a2"
+        assert service.current_focus(context) == {"type": "activity", "id": "a2"}
+
 
 def test_long_ordinal_analysis_request_is_not_consumed_as_navigation():
     context = AgentContext(

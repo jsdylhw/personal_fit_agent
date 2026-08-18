@@ -7,6 +7,7 @@ does not promote heterogeneous aggregate changes into fitness/fatigue claims.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Iterable
 
 from services.activity.history import calculate_history_metrics
@@ -20,6 +21,7 @@ def analyze_training_history(
     sport_type: str | None = None,
     combine_sports_for_volume: bool = False,
     name: str = "analyze_training_history",
+    today: date | None = None,
 ) -> dict[str, Any]:
     """Build a UI-ready history assessment with explicit evidence limits."""
     selected = [item for item in activities if isinstance(item, dict)]
@@ -51,6 +53,7 @@ def analyze_training_history(
         metrics,
         sport_type=normalized_sport or (sports[0] if len(sports) == 1 else "combined_volume"),
         combine_sports_for_volume=combine_sports_for_volume,
+        today=today or date.today(),
     )
     return {
         "step": name,
@@ -61,6 +64,7 @@ def analyze_training_history(
 
 def _analysis_document(
     metrics: dict[str, Any], *, sport_type: str, combine_sports_for_volume: bool,
+    today: date,
 ) -> dict[str, Any]:
     periods = metrics.get("periods") if isinstance(metrics.get("periods"), list) else []
     comparison = metrics.get("comparison") if isinstance(metrics.get("comparison"), dict) else None
@@ -102,14 +106,22 @@ def _analysis_document(
         warnings.append("尚无匹配路线或标准化课表证据；不能据此宣称体能提升或下降。")
     if coverage["missing_metrics"]:
         warnings.append("部分分析维度缺少传感器数据：" + "、".join(coverage["missing_metrics"]))
+    current_scope = _period_scope(current, today=today)
+    if current_scope and current_scope["status"] == "closed":
+        warnings.append(
+            f"最新有数据的周期 {current_scope['label']} 已于 {current_scope['end']} 结束；"
+            "不得将它描述为‘当前周期仍在进行’。"
+        )
 
     return {
         "schema_version": "training_history_analysis.v1",
         "scope": {
             "sport_type": sport_type,
             "group_by": metrics.get("group_by"),
-            "current_period": _period_scope(current),
-            "baseline_period": _period_scope(previous),
+            # ``current_period`` means the latest observed data bucket, not
+            # necessarily the calendar period containing today's date.
+            "current_period": current_scope,
+            "baseline_period": _period_scope(previous, today=today),
             "requested_scope": metrics.get("scope") or {},
         },
         "coverage": coverage,
@@ -215,13 +227,18 @@ def _threshold_or_method_changes(consistency: dict[str, Any]) -> list[dict[str, 
     return changes
 
 
-def _period_scope(period: dict[str, Any] | None) -> dict[str, Any] | None:
+def _period_scope(period: dict[str, Any] | None, *, today: date) -> dict[str, Any] | None:
     if not period:
         return None
+    end = date.fromisoformat(str(period.get("period_end")))
     return {
         "label": period.get("period"),
         "start": period.get("period_start"),
         "end": period.get("period_end"),
+        "status": "open" if today <= end else "closed",
+        "as_of": today.isoformat(),
+        "activity_count": period.get("activity_count", 0),
+        "active_days": period.get("active_days", 0),
     }
 
 

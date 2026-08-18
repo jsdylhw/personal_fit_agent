@@ -14,6 +14,21 @@ RETRY_WORDS = {"再试一次", "重试", "再试", "retry", "try again", "再来
 BACK_WORDS = {"返回", "回退", "上一层", "返回上一层", "回到列表", "返回列表", "back"}
 ROOT_WORDS = {"回到最初", "回到根范围", "返回根范围", "回到最初范围", "root"}
 
+# These suffixes only constrain presentation.  They do not add a domain
+# analysis objective, so the ordinal selection can still be performed by the
+# deterministic navigation layer instead of trusting the model to mutate it.
+_NAVIGATION_ONLY_SUFFIXES = {
+    "只看概览",
+    "只查看概览",
+    "只看轻量概览",
+    "只查看轻量概览",
+    "不生成报告",
+    "只看概览不生成报告",
+    "只查看概览不生成报告",
+    "只看轻量概览不生成报告",
+    "只查看轻量概览不生成报告",
+}
+
 
 def handle_control_turn(message: str, context: AgentContext, *, verbose: bool = False) -> dict[str, Any] | None:
     """Handle short control replies before routing the message through the LLM."""
@@ -73,8 +88,15 @@ def _navigation_command(message: str, context: AgentContext) -> tuple[str, int |
     if normalized in ROOT_WORDS:
         return "root", None
 
-    match = re.fullmatch(r"(?:看|查看|选择|选中|打开|进入)?第([一二两三四五六七八九十]|\d+)个(?:活动|片段)?", normalized)
+    match = re.fullmatch(
+        r"(?:看|查看|选择|选中|打开|进入)?"
+        r"第([一二两三四五六七八九十]|\d+)个(?:活动|片段)?(.*)",
+        normalized,
+    )
     if not match:
+        return None
+    suffix = match.group(2)
+    if suffix and suffix not in _NAVIGATION_ONLY_SUFFIXES:
         return None
     ordinal = _ordinal(match.group(1))
     return ("select", ordinal) if ordinal is not None else None
