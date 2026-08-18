@@ -28,16 +28,16 @@ python -m app.debug_cli storage-status
 The main path is native tool use:
 
 ```text
-User message -> metadata-only Skill selector -> Skill Guard/loader -> main_agent loop with one Skill tool whitelist -> TOOL_HANDLERS[name] -> direct local handler -> tool_result
+User message -> main_agent loop with only activate_skill -> Skill Guard/loader -> next model round with one Skill tool whitelist -> TOOL_HANDLERS[name] -> direct local handler -> tool_result
 ```
 
-There is no planner stack. A small first-stage selector sees only Skill names and descriptions; the second stage loads one Skill and exposes only its tool allowlist. Local runtime checks both the selected Skill and every tool call, while existing services and workflows keep their deterministic behavior.
+There is no planner stack or separate selector request. The main model initially sees only Skill names, descriptions, and `activate_skill`; activation loads one Skill and exposes only its immutable tool allowlist on the next model round. Local runtime checks both the active Skill and every tool call, while existing services and workflows keep their deterministic behavior.
 
 Key boundaries:
 
 - `agent/main_agent/`: tool-use loop, context, guard and dispatch.
 - `agent/analysis/`: focused FIT child agent, prompts and persisted navigation workspace.
-- `agent/skills/`: project Skill catalogue, metadata-only selector, loader and runtime policy.
+- `agent/skills/`: project Skill catalogue, immutable tool allowlists, loader and Skill library.
 - `agent/tools/`: ToolDef contracts plus thin AgentContext adapters.
 - `services/activity/`: context-free activity catalogue, analysis, comparison, history and report use cases.
 - `fit/analysis/`: deterministic FIT metrics and time-series scanners.
