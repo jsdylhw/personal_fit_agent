@@ -14,8 +14,11 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from agent.main_agent.loop import run_tool_loop
+from agent.runtime.models import public_turn_dict
+from app.chat_sessions import ChatSessionStore
 from settings import cfg_get, load_config
 from domain.analysis.artifacts import get_analysis_summary, summary_schema_version
 from operations.activity.service import (
@@ -30,6 +33,7 @@ from fit.parser import parse_fit
 
 
 app = FastAPI(title="Personal FIT Agent API")
+chat_sessions = ChatSessionStore()
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -49,6 +53,12 @@ class UploadStravaRequest(BaseModel):
     title: str | None = None
     wait: bool = True
     force: bool = False
+
+
+class ChatRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    message: str = Field(min_length=1, max_length=20_000)
 
 
 @app.get("/")
@@ -162,6 +172,24 @@ def strava_upload_endpoint(request: UploadStravaRequest, http_request: Request) 
         wait=request.wait,
         force=request.force,
     )
+
+
+@app.post("/api/chat")
+def chat_endpoint(request: ChatRequest, http_request: Request) -> dict[str, Any]:
+    """Run one serialized, idempotent turn in an in-process chat session."""
+    _require_api_access(http_request)
+    session = chat_sessions.get_or_create(request.session_id)
+    with session.lock:
+        try:
+            cached = session.cached_response(request.request_id, request.message)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if cached is not None:
+            return cached
+        result = run_tool_loop(request.message, context=session.context)
+        response = public_turn_dict(result)
+        session.cache_response(request.request_id, request.message, response)
+        return response
 
 
 def _fit_output_dir(config: dict[str, Any]) -> Path:

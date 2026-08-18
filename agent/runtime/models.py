@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from agent.runtime.presentations import PresentationBlock
+
 
 @dataclass(frozen=True)
 class ToolExecution:
@@ -41,6 +43,7 @@ class TurnResult:
     intent: str
     skill_id: str | None = None
     executions: list[ToolExecution] = field(default_factory=list)
+    presentations: list[PresentationBlock] = field(default_factory=list)
     selected_activities: list[dict[str, Any]] = field(default_factory=list)
     current_fit_file: str | None = None
     log_path: str = ""
@@ -54,12 +57,17 @@ class TurnResult:
             "skill_id": self.skill_id,
             "steps": [execution.to_step() for execution in self.executions],
             "executions": [execution.to_dict() for execution in self.executions],
+            "presentations": [presentation.to_dict() for presentation in self.presentations],
             "selected_activities": self.selected_activities,
             "current_fit_file": self.current_fit_file,
         }
         if self.log_path:
             value["log_path"] = self.log_path
         return value
+
+    def to_public_dict(self) -> dict[str, Any]:
+        """Serialize a turn without process state, tool inputs, paths or raw results."""
+        return public_turn_dict(self.to_dict())
 
 
 def executions_from_trace(
@@ -93,3 +101,30 @@ def executions_from_trace(
                 input=step.get("input") if isinstance(step.get("input"), dict) else {},
             ))
     return executions
+
+
+def public_turn_dict(value: dict[str, Any]) -> dict[str, Any]:
+    """Sanitize the legacy dictionary result for an untrusted HTTP client."""
+    executions = []
+    for item in value.get("executions") or []:
+        if not isinstance(item, dict):
+            continue
+        executions.append({
+            "index": item.get("index"),
+            "tool": item.get("tool"),
+            "status": item.get("status"),
+            "message": item.get("message"),
+            "error": item.get("error"),
+        })
+    presentations = [
+        item for item in value.get("presentations") or []
+        if isinstance(item, dict)
+    ]
+    return {
+        "answer": str(value.get("answer") or ""),
+        "status": str(value.get("status") or ""),
+        "intent": str(value.get("intent") or ""),
+        "skill_id": value.get("skill_id"),
+        "executions": executions,
+        "presentations": presentations,
+    }

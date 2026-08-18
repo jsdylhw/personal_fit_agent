@@ -1,9 +1,12 @@
 const state = {
   files: [],
   selectedPath: null,
+  chatSessionId: null,
+  chatPending: false,
 };
 
 const API_TOKEN_STORAGE_KEY = "personal-fit-agent.api-token";
+const CHAT_SESSION_STORAGE_KEY = "personal-fit-agent.chat-session";
 
 const els = {
   status: document.getElementById("status"),
@@ -23,6 +26,12 @@ const els = {
   viewReportBtn: document.getElementById("viewReportBtn"),
   uploadStravaBtn: document.getElementById("uploadStravaBtn"),
   apiToken: document.getElementById("apiToken"),
+  chatMessages: document.getElementById("chatMessages"),
+  chatForm: document.getElementById("chatForm"),
+  chatInput: document.getElementById("chatInput"),
+  sendChatBtn: document.getElementById("sendChatBtn"),
+  clearChatBtn: document.getElementById("clearChatBtn"),
+  presentations: document.getElementById("presentations"),
 };
 
 function setStatus(text) {
@@ -55,6 +64,17 @@ function persistApiToken() {
   } else {
     sessionStorage.removeItem(API_TOKEN_STORAGE_KEY);
   }
+}
+
+function randomId(prefix) {
+  const value = globalThis.crypto?.randomUUID?.()
+    || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${value}`;
+}
+
+function restoreChatSession() {
+  state.chatSessionId = sessionStorage.getItem(CHAT_SESSION_STORAGE_KEY) || randomId("session");
+  sessionStorage.setItem(CHAT_SESSION_STORAGE_KEY, state.chatSessionId);
 }
 
 async function fetchJson(url, options = {}) {
@@ -270,6 +290,270 @@ async function uploadStrava() {
   }
 }
 
+async function sendChat(message) {
+  if (state.chatPending) return;
+  const text = String(message || "").trim();
+  if (!text) return;
+
+  state.chatPending = true;
+  els.sendChatBtn.disabled = true;
+  els.chatInput.disabled = true;
+  appendChatMessage("user", text);
+  els.chatInput.value = "";
+  setStatus("Agent 处理中");
+
+  try {
+    const result = await fetchJson("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: state.chatSessionId,
+        request_id: randomId("request"),
+        message: text,
+      }),
+    });
+    appendChatMessage("assistant", result.answer || "已完成。", result.executions || []);
+    renderPresentations(result.presentations || []);
+    setStatus("准备就绪");
+  } catch (error) {
+    appendChatMessage("error", `请求失败：${error.message}`);
+    setStatus("Agent 请求失败");
+  } finally {
+    state.chatPending = false;
+    els.sendChatBtn.disabled = false;
+    els.chatInput.disabled = false;
+    els.chatInput.focus();
+  }
+}
+
+function appendChatMessage(role, text, executions = []) {
+  els.chatMessages.querySelector(".chat-empty")?.remove();
+  const article = document.createElement("article");
+  article.className = `chat-message ${role}`;
+
+  const label = document.createElement("div");
+  label.className = "chat-role";
+  label.textContent = role === "user" ? "你" : role === "assistant" ? "Agent" : "错误";
+  article.appendChild(label);
+
+  const body = document.createElement("div");
+  body.className = "chat-body";
+  body.textContent = text;
+  article.appendChild(body);
+
+  const completedTools = executions
+    .filter((item) => item && item.tool)
+    .map((item) => item.tool);
+  if (completedTools.length) {
+    const trace = document.createElement("div");
+    trace.className = "chat-trace";
+    trace.textContent = `已执行：${completedTools.join(" → ")}`;
+    article.appendChild(trace);
+  }
+  els.chatMessages.appendChild(article);
+  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+}
+
+function renderPresentations(blocks) {
+  els.presentations.replaceChildren();
+  if (!blocks.length) {
+    const empty = document.createElement("div");
+    empty.className = "chat-empty";
+    empty.textContent = "本轮没有结构化展示结果。";
+    els.presentations.appendChild(empty);
+    return;
+  }
+
+  blocks.forEach((block) => {
+    const section = document.createElement("section");
+    section.className = "presentation-card";
+    const title = document.createElement("h3");
+    title.textContent = block.title || "结构化结果";
+    section.appendChild(title);
+
+    if (block.type === "metric_cards") {
+      section.appendChild(renderMetricCards(block.data || {}));
+    } else if (block.type === "table") {
+      section.appendChild(renderPresentationTable(block.data || {}));
+    } else if (block.type === "line_chart") {
+      section.appendChild(renderLineCharts(block.data || {}));
+    } else if (block.type === "markdown") {
+      const markdown = document.createElement("pre");
+      markdown.className = "presentation-markdown";
+      markdown.textContent = block.data?.markdown || "";
+      section.appendChild(markdown);
+    }
+    els.presentations.appendChild(section);
+  });
+}
+
+function renderMetricCards(data) {
+  const grid = document.createElement("div");
+  grid.className = "presentation-metrics";
+  const items = Array.isArray(data.items) ? data.items : [];
+  items.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "presentation-metric";
+    const label = document.createElement("div");
+    label.className = "metric-label";
+    label.textContent = presentationColumnLabel(item.metric);
+    const value = document.createElement("div");
+    value.className = "metric-value";
+    value.textContent = `${item.value ?? "-"}${item.unit ? ` ${item.unit}` : ""}`;
+    card.append(label, value);
+    grid.appendChild(card);
+  });
+  return grid;
+}
+
+function renderPresentationTable(data) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "presentation-table-wrap";
+  const table = document.createElement("table");
+  table.className = "presentation-table";
+  const columns = Array.isArray(data.columns) ? data.columns : [];
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  columns.forEach((column) => {
+    const cell = document.createElement("th");
+    cell.textContent = presentationColumnLabel(column);
+    headRow.appendChild(cell);
+  });
+  head.appendChild(headRow);
+  table.appendChild(head);
+
+  const body = document.createElement("tbody");
+  rows.forEach((row) => {
+    const tableRow = document.createElement("tr");
+    columns.forEach((column) => {
+      const cell = document.createElement("td");
+      cell.textContent = formatPresentationValue(row?.[column], column);
+      tableRow.appendChild(cell);
+    });
+    body.appendChild(tableRow);
+  });
+  table.appendChild(body);
+  wrapper.appendChild(table);
+  return wrapper;
+}
+
+function renderLineCharts(data) {
+  const container = document.createElement("div");
+  container.className = "line-charts";
+  const labels = Array.isArray(data.labels) ? data.labels : [];
+  const series = Array.isArray(data.series) ? data.series : [];
+  series.forEach((item) => {
+    const values = Array.isArray(item.values) ? item.values : [];
+    const numeric = values.map((value) => Number(value));
+    const valid = numeric.filter(Number.isFinite);
+    if (!valid.length) return;
+
+    const card = document.createElement("div");
+    card.className = "chart-series";
+    const heading = document.createElement("div");
+    heading.className = "chart-title";
+    heading.textContent = `${presentationColumnLabel(item.metric)}${item.unit ? ` (${item.unit})` : ""}`;
+    card.appendChild(heading);
+    card.appendChild(buildLineSvg(labels, numeric, item.unit));
+    container.appendChild(card);
+  });
+  return container;
+}
+
+function buildLineSvg(labels, values, unit) {
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(namespace, "svg");
+  const width = 640;
+  const height = 180;
+  const padX = 42;
+  const padY = 24;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "训练周期折线图");
+
+  const valid = values.filter(Number.isFinite);
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  const span = max - min || 1;
+  const x = (index) => padX + (values.length <= 1 ? 0 : index * (width - 2 * padX) / (values.length - 1));
+  const y = (value) => height - padY - (value - min) * (height - 2 * padY) / span;
+  const points = values
+    .map((value, index) => Number.isFinite(value) ? `${x(index)},${y(value)}` : null)
+    .filter(Boolean)
+    .join(" ");
+
+  const line = document.createElementNS(namespace, "polyline");
+  line.setAttribute("points", points);
+  line.setAttribute("class", "chart-line");
+  svg.appendChild(line);
+
+  values.forEach((value, index) => {
+    if (!Number.isFinite(value)) return;
+    const point = document.createElementNS(namespace, "circle");
+    point.setAttribute("cx", x(index));
+    point.setAttribute("cy", y(value));
+    point.setAttribute("r", "4");
+    point.setAttribute("class", "chart-point");
+    const tooltip = document.createElementNS(namespace, "title");
+    tooltip.textContent = `${labels[index] || index + 1}: ${value}${unit ? ` ${unit}` : ""}`;
+    point.appendChild(tooltip);
+    svg.appendChild(point);
+  });
+
+  const labelIndices = values.length <= 6
+    ? values.map((_, index) => index)
+    : [0, values.length - 1];
+  labelIndices.forEach((index) => {
+    const label = document.createElementNS(namespace, "text");
+    label.setAttribute("x", x(index));
+    label.setAttribute("y", height - 5);
+    label.setAttribute("class", "chart-label");
+    label.textContent = labels[index] || "";
+    svg.appendChild(label);
+  });
+  return svg;
+}
+
+function presentationColumnLabel(value) {
+  return {
+    dimension: "维度",
+    metric: "指标",
+    baseline: "基准期",
+    current: "当前期",
+    change: "变化",
+    unit: "单位",
+    confidence: "置信度",
+    volume: "训练量",
+    intensity: "强度",
+    consistency: "规律性",
+    performance: "表现",
+    efficiency: "效率",
+    recovery: "恢复",
+    duration_min: "时长",
+    distance_km: "距离",
+    tss: "TSS",
+    sport_type: "运动类型",
+    start_time_local: "开始时间",
+  }[value] || String(value || "-");
+}
+
+function formatPresentationValue(value, column) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (column === "dimension" || column === "metric") return presentationColumnLabel(value);
+  if (column === "change" && Number.isFinite(Number(value))) return `${Number(value).toFixed(1)}%`;
+  return String(value);
+}
+
+function clearChat() {
+  state.chatSessionId = randomId("session");
+  sessionStorage.setItem(CHAT_SESSION_STORAGE_KEY, state.chatSessionId);
+  els.chatMessages.innerHTML = '<div class="chat-empty">已开始新会话。</div>';
+  els.presentations.innerHTML = '<div class="chat-empty">表格、趋势图和活动报告会显示在这里。</div>';
+  els.chatInput.value = "";
+  els.chatInput.focus();
+}
+
 function formatDate(value) {
   if (!value) return "-";
   const date = new Date(value);
@@ -309,8 +593,20 @@ els.refreshBtn.addEventListener("click", refreshFiles);
 els.analyzeBtn.addEventListener("click", analyzeSelected);
 els.viewReportBtn.addEventListener("click", viewReport);
 els.uploadStravaBtn.addEventListener("click", uploadStrava);
+els.chatForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  sendChat(els.chatInput.value);
+});
+els.chatInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    els.chatForm.requestSubmit();
+  }
+});
+els.clearChatBtn.addEventListener("click", clearChat);
 
 restoreApiToken();
+restoreChatSession();
 els.apiToken.addEventListener("change", persistApiToken);
 
 refreshFiles().catch((error) => {

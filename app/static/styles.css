@@ -21,7 +21,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -60,6 +61,7 @@ button.primary:hover:not(:disabled) {
 .topbar,
 .controls,
 .panel,
+.chat-panel,
 .log-panel {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -147,6 +149,208 @@ p,
   grid-template-columns: minmax(320px, 420px) 1fr;
   gap: 12px;
   align-items: start;
+}
+
+.chat-panel {
+  margin-bottom: 12px;
+}
+
+.chat-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(420px, 1.1fr);
+  min-height: 420px;
+}
+
+.conversation-column,
+.presentation-column {
+  min-width: 0;
+  padding: 14px;
+}
+
+.conversation-column {
+  display: grid;
+  grid-template-rows: minmax(260px, 1fr) auto;
+  border-right: 1px solid var(--border);
+}
+
+.chat-messages {
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.chat-message {
+  max-width: 92%;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #f8fafc;
+}
+
+.chat-message.user {
+  margin-left: auto;
+  border-color: #99d5cf;
+  background: #effcf9;
+}
+
+.chat-message.error {
+  border-color: #fda29b;
+  background: #fff5f4;
+}
+
+.chat-role,
+.presentation-heading,
+.chart-title {
+  font-size: 12px;
+  font-weight: 750;
+  color: var(--muted);
+}
+
+.chat-body {
+  margin-top: 5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.chat-trace {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: end;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-form textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 76px;
+  max-height: 180px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: var(--text);
+}
+
+.presentations {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.presentation-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.presentation-metric {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px;
+  background: var(--surface);
+}
+
+.presentation-metric .metric-value {
+  font-size: 15px;
+}
+
+.presentation-card,
+.chart-series {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.presentation-card {
+  padding: 12px;
+}
+
+.presentation-table-wrap,
+.presentation-markdown {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.presentation-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.presentation-table th,
+.presentation-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.presentation-table th {
+  position: sticky;
+  top: 0;
+  background: #f2f4f7;
+  color: var(--muted);
+}
+
+.presentation-markdown {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.line-charts {
+  display: grid;
+  gap: 10px;
+}
+
+.chart-series {
+  padding: 9px;
+}
+
+.chart-series svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 5px;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-point {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.chart-label {
+  fill: var(--muted);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+.chat-empty {
+  color: var(--muted);
+  padding: 18px 4px;
 }
 
 .panel {
@@ -294,8 +498,14 @@ p,
 }
 
 @media (max-width: 900px) {
-  .layout {
+  .layout,
+  .chat-layout {
     grid-template-columns: 1fr;
+  }
+
+  .conversation-column {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
   }
 
   .summary-grid {

@@ -8,6 +8,7 @@ from agent.main_agent.context import AgentContext
 from agent.main_agent.prompt_builder import last_workflow_result
 from agent.runtime.chat_logger import write_main_agent_markdown_log
 from agent.runtime.models import TurnResult, executions_from_trace
+from agent.runtime.presentation_projector import project_presentations
 
 
 def build_completed_result(
@@ -87,13 +88,15 @@ def build_turn_result(
     log_path: str = "",
 ) -> dict[str, Any]:
     """Create the typed result while preserving the legacy dictionary API."""
+    executions = executions_from_trace(context.execution_trace, steps=steps)
     return TurnResult(
         answer=answer,
         status=status,
         context=context,
         intent=intent_kind(intent),
         skill_id=context.active_skill_id,
-        executions=executions_from_trace(context.execution_trace, steps=steps),
+        executions=executions,
+        presentations=project_presentations(executions),
         selected_activities=context.selected_activities,
         current_fit_file=str(context.current_fit_file) if context.current_fit_file else None,
         log_path=log_path,
