@@ -53,7 +53,7 @@ def load_amap_settings(demo_dir: Path) -> dict[str, str]:
     config_path = demo_dir.parents[1] / "config.yaml"
     if config_path.is_file():
         try:
-            from core.config import load_config
+            from settings import load_config
             configured = load_config(config_path).get("amap") or {}
         except (ImportError, ValueError):
             configured = {}

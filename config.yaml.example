@@ -47,6 +47,14 @@ amap:
   js_key: "replace-with-amap-js-key"
   security_js_code: "replace-with-amap-security-js-code"
 
+# Optional: required only by demo/global_cycling_router. Both keys stay in
+# the local Python process and are never sent to the browser.
+google_maps:
+  api_key: "replace-with-google-maps-api-key"
+
+graphhopper:
+  api_key: "replace-with-graphhopper-api-key"
+
 # Leave blank for local-only Web UI access. Set a long random value before
 # exposing the Web UI through a LAN or reverse proxy.
 web_api_token: ""
