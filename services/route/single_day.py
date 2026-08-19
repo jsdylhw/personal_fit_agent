@@ -42,7 +42,7 @@ def create_single_day_plan(
         raise ValueError("at most three route candidates are supported")
     config = load_config()
     routed = [
-        _route_candidate(
+        route_candidate(
             candidate,
             index=index,
             country_code=normalized_country,
@@ -93,7 +93,7 @@ def replace_candidate(
         ),
         "candidate_id": selected_id,
     }
-    updated = _route_candidate(
+    updated = route_candidate(
         spec,
         index=selected_index + 1,
         country_code=str(plan.get("country_code") or ""),
@@ -103,41 +103,142 @@ def replace_candidate(
     return {**plan, "candidates": [updated if index == selected_index else item for index, item in enumerate(candidates)]}
 
 
+def edit_candidate_waypoints(
+    plan: dict[str, Any],
+    *,
+    candidate_id: str | None,
+    operation: str,
+    waypoint_index: int | None = None,
+    new_waypoint: str | None = None,
+    include_elevation: bool = True,
+) -> dict[str, Any]:
+    """Deterministically reverse or edit one saved single-day candidate."""
+    candidates = [item for item in plan.get("candidates") or [] if isinstance(item, dict)]
+    selected_id = str(candidate_id or plan.get("active_candidate_id") or "")
+    selected = next(
+        (item for item in candidates if str(item.get("candidate_id") or "") == selected_id),
+        None,
+    )
+    if selected is None:
+        raise ValueError("route candidate does not exist")
+    queries = saved_waypoint_queries(selected)
+    if operation == "reverse":
+        queries = reverse_waypoint_queries(queries, str(selected.get("route_type") or "point_to_point"))
+    elif operation == "replace_waypoint":
+        if waypoint_index is None:
+            raise ValueError("waypoint_index is required")
+        index = int(waypoint_index) - 1
+        if not 0 <= index < len(queries):
+            raise ValueError(f"waypoint_index must be between 1 and {len(queries)}")
+        replacement = str(new_waypoint or "").strip()
+        if not replacement:
+            raise ValueError("new_waypoint is required")
+        queries[index] = replacement
+    else:
+        raise ValueError("operation must be reverse or replace_waypoint")
+    return replace_candidate(
+        plan,
+        candidate_id=selected_id,
+        name=str(selected.get("name") or ""),
+        waypoint_queries=queries,
+        route_type=str(selected.get("route_type") or "point_to_point"),
+        target_distance_km=_optional_float(selected.get("target_distance_km")),
+        include_elevation=include_elevation,
+    )
+
+
+def saved_waypoint_queries(route: dict[str, Any]) -> list[str]:
+    queries = [str(value).strip() for value in route.get("waypoint_queries") or [] if str(value).strip()]
+    if not queries:
+        queries = [
+            str(point.get("query") or point.get("name") or "").strip()
+            for point in route.get("waypoints") or [] if isinstance(point, dict)
+        ]
+        queries = [value for value in queries if value]
+        if route.get("route_type") == "loop" and len(queries) > 1 and queries[-1] == queries[0]:
+            queries.pop()
+    if len(queries) < 2:
+        raise ValueError("saved route does not contain enough waypoint queries")
+    return queries
+
+
+def reverse_waypoint_queries(queries: list[str], route_type: str) -> list[str]:
+    if str(route_type).lower() == "loop":
+        return [queries[0], *reversed(queries[1:])]
+    return list(reversed(queries))
+
+
 def compact_route_plan(plan: dict[str, Any]) -> dict[str, Any]:
     """Return the model-facing plan without route/elevation coordinate arrays."""
     candidates = []
     for item in plan.get("candidates") or []:
         if not isinstance(item, dict):
             continue
-        elevation = item.get("elevation") if isinstance(item.get("elevation"), dict) else {}
-        candidates.append({
-            "candidate_id": item.get("candidate_id"),
-            "name": item.get("name"),
-            "route_type": item.get("route_type"),
-            "waypoints": item.get("waypoints") or [],
-            "distance_km": item.get("distance_km"),
-            "duration_min": item.get("duration_min"),
-            "provider": item.get("provider"),
-            "travel_mode": item.get("travel_mode"),
-            "target_distance_km": item.get("target_distance_km"),
-            "distance_delta_km": item.get("distance_delta_km"),
-            "elevation_summary": elevation.get("summary") or {},
-            "warnings": item.get("warnings") or [],
-        })
+        stages = [stage for stage in item.get("stages") or [] if isinstance(stage, dict)]
+        if stages:
+            candidates.append({
+                "candidate_id": item.get("candidate_id"),
+                "name": item.get("name"),
+                "distance_km": item.get("distance_km"),
+                "duration_min": item.get("duration_min"),
+                "day_summaries": item.get("day_summaries") or [],
+                "maximum_day_distance_deviation_ratio": item.get("maximum_day_distance_deviation_ratio"),
+                "warnings": item.get("warnings") or [],
+                "stages": [_compact_route_segment(stage, id_key="stage_id") for stage in stages],
+            })
+        else:
+            candidates.append(_compact_route_segment(item, id_key="candidate_id"))
     return {
         "schema_version": "route_plan.v1",
         "plan_id": plan.get("plan_id"),
         "workspace_id": plan.get("workspace_id"),
         "revision": plan.get("revision"),
         "title": plan.get("title"),
-        "day_count": 1,
+        "schedule_type": plan.get("schedule_type") or "single_day",
+        "day_count": plan.get("day_count") or 1,
         "country_code": plan.get("country_code"),
+        "handoff_tolerance_km": plan.get("handoff_tolerance_km"),
+        "segment_strategy": plan.get("segment_strategy") or "ignore",
+        "segment_preferences": plan.get("segment_preferences") or [],
+        "segment_aware_summary": plan.get("segment_aware_summary") or {},
         "active_candidate_id": plan.get("active_candidate_id"),
         "candidates": candidates,
     }
 
 
-def _route_candidate(
+def _compact_route_segment(item: dict[str, Any], *, id_key: str) -> dict[str, Any]:
+    elevation = item.get("elevation") if isinstance(item.get("elevation"), dict) else {}
+    result = {
+        id_key: item.get(id_key),
+        "name" if id_key == "candidate_id" else "label": (
+            item.get("name") if id_key == "candidate_id" else item.get("label")
+        ),
+        "route_type": item.get("route_type"),
+        "waypoints": item.get("waypoints") or [],
+        "distance_km": item.get("distance_km"),
+        "duration_min": item.get("duration_min"),
+        "provider": item.get("provider"),
+        "travel_mode": item.get("travel_mode"),
+        "target_distance_km": item.get("target_distance_km"),
+        "distance_delta_km": item.get("distance_delta_km"),
+        "elevation_summary": elevation.get("summary") or {},
+        "warnings": item.get("warnings") or [],
+        "strava_segments": [
+            {key: value for key, value in segment.items() if key != "geometry"}
+            for segment in item.get("strava_segments") or [] if isinstance(segment, dict)
+        ],
+        "segment_evidence": item.get("segment_evidence") or {},
+    }
+    if id_key == "stage_id":
+        result.update({
+            "day": item.get("day"),
+            "period": item.get("period"),
+            "handoff_from_previous_km": item.get("handoff_from_previous_km"),
+        })
+    return result
+
+
+def route_candidate(
     candidate: dict[str, Any],
     *,
     index: int,

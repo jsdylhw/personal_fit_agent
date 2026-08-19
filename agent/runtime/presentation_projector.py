@@ -29,6 +29,8 @@ def project_presentations(executions: list[ToolExecution]) -> list[PresentationB
             blocks.extend(_activity_comparison_blocks(execution, payload))
         elif schema_version == "route_plan.v1":
             blocks.extend(_route_plan_blocks(execution, payload))
+        elif schema_version == "route_segment_discovery.v1":
+            blocks.extend(_route_segment_blocks(execution, payload))
         elif (
             schema_version == "activity_selection.v2"
             and execution.tool == "resolve_activities"
@@ -51,49 +53,66 @@ def _route_plan_blocks(
     active_id = str(plan.get("active_candidate_id") or "")
     source = _source(execution, payload)
     blocks: list[PresentationBlock] = []
-    rows = [{
-        "candidate": item.get("name"),
-        "waypoints": " → ".join(
-            str(point.get("name") or point.get("query") or "")
-            for point in item.get("waypoints") or [] if isinstance(point, dict)
-        ),
-        "distance_km": item.get("distance_km"),
-        "duration_min": item.get("duration_min"),
-        "provider": item.get("provider"),
-        "mode": item.get("travel_mode"),
-        "active": item.get("candidate_id") == active_id,
-    } for item in candidates]
+    has_stages = any(isinstance(item.get("stages"), list) for item in candidates)
+    rows = []
+    for item in candidates:
+        segments = [stage for stage in item.get("stages") or [] if isinstance(stage, dict)] or [item]
+        for segment in segments:
+            rows.append({
+                "candidate": item.get("name"),
+                "stage": segment.get("label") if segment is not item else None,
+                "waypoints": " → ".join(
+                    str(point.get("name") or point.get("query") or "")
+                    for point in segment.get("waypoints") or [] if isinstance(point, dict)
+                ),
+                "distance_km": segment.get("distance_km"),
+                "duration_min": segment.get("duration_min"),
+                "handoff_km": segment.get("handoff_from_previous_km") if segment is not item else None,
+                "provider": segment.get("provider"),
+                "mode": segment.get("travel_mode"),
+                "active": item.get("candidate_id") == active_id,
+            })
     if rows:
         blocks.append(PresentationBlock(
             presentation_id=f"execution-{execution.index}-route-candidates",
             type="table",
             title=str(plan.get("title") or "路线候选"),
             data={
-                "columns": ["candidate", "waypoints", "distance_km", "duration_min", "provider", "mode", "active"],
+                "columns": (
+                    ["candidate", "stage", "waypoints", "distance_km", "duration_min", "handoff_km", "provider", "mode", "active"]
+                    if has_stages
+                    else ["candidate", "waypoints", "distance_km", "duration_min", "provider", "mode", "active"]
+                ),
                 "rows": rows,
             },
             source=source,
         ))
     routes = []
     for item in candidates:
-        geometry = item.get("geometry") if isinstance(item.get("geometry"), dict) else {}
-        coordinates = geometry.get("coordinates") if isinstance(geometry.get("coordinates"), list) else []
-        if len(coordinates) < 2:
-            continue
-        routes.append({
-            "candidate_id": item.get("candidate_id"),
-            "name": item.get("name"),
-            "active": item.get("candidate_id") == active_id,
-            "geometry": {"type": "LineString", "coordinates": _bounded_coordinates(coordinates)},
-            "waypoints": [
-                {
-                    "name": point.get("name") or point.get("query"),
-                    "latitude": point.get("display_latitude", point.get("latitude")),
-                    "longitude": point.get("display_longitude", point.get("longitude")),
-                }
-                for point in item.get("waypoints") or [] if isinstance(point, dict)
-            ],
-        })
+        segments = [stage for stage in item.get("stages") or [] if isinstance(stage, dict)] or [item]
+        for segment in segments:
+            geometry = segment.get("geometry") if isinstance(segment.get("geometry"), dict) else {}
+            coordinates = geometry.get("coordinates") if isinstance(geometry.get("coordinates"), list) else []
+            if len(coordinates) < 2:
+                continue
+            routes.append({
+                "candidate_id": item.get("candidate_id"),
+                "stage_id": segment.get("stage_id"),
+                "name": (
+                    f"{item.get('name')} · {segment.get('label')}"
+                    if segment is not item else item.get("name")
+                ),
+                "active": item.get("candidate_id") == active_id,
+                "geometry": {"type": "LineString", "coordinates": _bounded_coordinates(coordinates)},
+                "waypoints": [
+                    {
+                        "name": point.get("name") or point.get("query"),
+                        "latitude": point.get("display_latitude", point.get("latitude")),
+                        "longitude": point.get("display_longitude", point.get("longitude")),
+                    }
+                    for point in segment.get("waypoints") or [] if isinstance(point, dict)
+                ],
+            })
     if routes:
         blocks.append(PresentationBlock(
             presentation_id=f"execution-{execution.index}-route-map",
@@ -103,19 +122,131 @@ def _route_plan_blocks(
             source=source,
         ))
     active = next((item for item in candidates if item.get("candidate_id") == active_id), None)
-    elevation = active.get("elevation") if isinstance(active, dict) and isinstance(active.get("elevation"), dict) else {}
-    labels = elevation.get("labels") if isinstance(elevation.get("labels"), list) else []
-    values = elevation.get("elevations_m") if isinstance(elevation.get("elevations_m"), list) else []
-    if labels and values:
+    segments = (
+        [stage for stage in active.get("stages") or [] if isinstance(stage, dict)]
+        if isinstance(active, dict) and isinstance(active.get("stages"), list)
+        else [active] if isinstance(active, dict) else []
+    )
+    for segment_index, segment in enumerate(segments):
+        elevation = segment.get("elevation") if isinstance(segment.get("elevation"), dict) else {}
+        labels = elevation.get("labels") if isinstance(elevation.get("labels"), list) else []
+        values = elevation.get("elevations_m") if isinstance(elevation.get("elevations_m"), list) else []
+        if labels and values:
+            blocks.append(PresentationBlock(
+                presentation_id=f"execution-{execution.index}-route-elevation-{segment_index}",
+                type="line_chart",
+                title=(
+                    f"{segment.get('label')}参考海拔"
+                    if segment.get("label") else "参考海拔剖面"
+                ),
+                data={
+                    "x_label": "距离 (km)",
+                    "labels": labels,
+                    "series": [{"metric": "elevation_m", "unit": "m", "values": values}],
+                },
+                source=source,
+            ))
+    return blocks
+
+
+def _route_segment_blocks(
+    execution: ToolExecution,
+    payload: dict[str, Any],
+) -> list[PresentationBlock]:
+    from storage.repositories.route import RoutePlanStore
+
+    plan = RoutePlanStore().get(str(payload.get("plan_id") or ""))
+    if not plan:
+        return []
+    candidate_id = str(payload.get("candidate_id") or plan.get("active_candidate_id") or "")
+    candidate = next(
+        (
+            item for item in plan.get("candidates") or []
+            if isinstance(item, dict) and str(item.get("candidate_id") or "") == candidate_id
+        ),
+        None,
+    )
+    if not candidate:
+        return []
+    stage_id = str(payload.get("stage_id") or "")
+    stages = [item for item in candidate.get("stages") or [] if isinstance(item, dict)]
+    targets = stages or [candidate]
+    if stage_id:
+        targets = [item for item in targets if str(item.get("stage_id") or "") == stage_id]
+    rows = []
+    routes = []
+    seen_segment_ids: set[int] = set()
+    for target in targets:
+        geometry = target.get("geometry") if isinstance(target.get("geometry"), dict) else {}
+        coordinates = geometry.get("coordinates") if isinstance(geometry.get("coordinates"), list) else []
+        target_label = str(target.get("label") or candidate.get("name") or "当前路线")
+        if len(coordinates) >= 2:
+            routes.append({
+                "name": target_label,
+                "kind": "planned_route",
+                "active": True,
+                "geometry": {"type": "LineString", "coordinates": _bounded_coordinates(coordinates)},
+                "waypoints": [],
+            })
+        for segment in target.get("strava_segments") or []:
+            if not isinstance(segment, dict):
+                continue
+            try:
+                segment_id = int(segment.get("segment_id"))
+            except (TypeError, ValueError):
+                continue
+            if segment_id in seen_segment_ids:
+                continue
+            seen_segment_ids.add(segment_id)
+            rows.append({
+                "stage": target_label if stages else None,
+                "segment_name": segment.get("name"),
+                "distance_km": segment.get("distance_km"),
+                "average_grade_percent": segment.get("average_grade_percent"),
+                "elevation_difference_m": segment.get("elevation_difference_m"),
+                "climb_category": segment.get("climb_category"),
+                "distance_to_route_km": segment.get("distance_to_route_km"),
+                "route_overlap_ratio": segment.get("route_overlap_ratio"),
+            })
+            segment_geometry = segment.get("geometry") if isinstance(segment.get("geometry"), dict) else {}
+            segment_coordinates = (
+                segment_geometry.get("coordinates")
+                if isinstance(segment_geometry.get("coordinates"), list) else []
+            )
+            if len(segment_coordinates) >= 2:
+                routes.append({
+                    "name": f"Strava · {segment.get('name') or segment_id}",
+                    "kind": "strava_segment",
+                    "active": False,
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": _bounded_coordinates(segment_coordinates),
+                    },
+                    "waypoints": [],
+                })
+    source = _source(execution, payload)
+    blocks: list[PresentationBlock] = []
+    if rows:
+        columns = [
+            "segment_name", "distance_km", "average_grade_percent",
+            "elevation_difference_m", "climb_category", "distance_to_route_km",
+            "route_overlap_ratio",
+        ]
+        if stages:
+            columns.insert(0, "stage")
         blocks.append(PresentationBlock(
-            presentation_id=f"execution-{execution.index}-route-elevation",
-            type="line_chart",
-            title="参考海拔剖面",
-            data={
-                "x_label": "距离 (km)",
-                "labels": labels,
-                "series": [{"metric": "elevation_m", "unit": "m", "values": values}],
-            },
+            presentation_id=f"execution-{execution.index}-route-segments",
+            type="table",
+            title="Strava 热门骑行路段",
+            data={"columns": columns, "rows": rows},
+            source=source,
+        ))
+    if routes:
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-route-segment-map",
+            type="route_map",
+            title="计划路线与 Strava 路段",
+            data={"routes": routes},
             source=source,
         ))
     return blocks

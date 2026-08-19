@@ -343,6 +343,14 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "title": {"type": "string"},
                 "country_code": {"type": "string", "description": "ISO 两字母国家代码，如 CN、FR、JP"},
                 "include_elevation": {"type": "boolean", "default": True},
+                "segment_strategy": {
+                    "type": "string", "enum": ["auto", "ignore", "require"], "default": "auto",
+                    "description": "国内路线默认查询 Strava 路段；auto 失败时保留高德基准路线。",
+                },
+                "segment_preferences": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "例如热门、湖景、少爬坡、经典爬坡。",
+                },
                 "candidates": {
                     "type": "array", "minItems": 1, "maxItems": 3,
                     "items": {
@@ -365,23 +373,101 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         category=CATEGORY_COACHING,
     ),
     ToolDef(
+        name="create_itinerary_plan",
+        description=(
+            "创建并持久化经过地图服务验证的多日或单日上下午分段行程。"
+            "每个候选由按顺序排列的 stages 组成，并校验相邻阶段的衔接距离。"
+        ),
+        input_schema={
+            "type": "object",
+            "required": ["title", "country_code", "schedule_type", "candidates"],
+            "properties": {
+                "title": {"type": "string"},
+                "country_code": {"type": "string", "description": "ISO 两字母国家代码"},
+                "schedule_type": {"type": "string", "enum": ["multi_day", "day_parts"]},
+                "include_elevation": {"type": "boolean", "default": True},
+                "segment_strategy": {
+                    "type": "string", "enum": ["auto", "ignore", "require"], "default": "auto",
+                },
+                "segment_preferences": {"type": "array", "items": {"type": "string"}},
+                "handoff_tolerance_km": {"type": "number", "minimum": 0, "default": 5},
+                "balance_warning_ratio": {"type": "number", "minimum": 0, "default": 0.3},
+                "candidates": {
+                    "type": "array", "minItems": 1, "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "stages"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "stages": {
+                                "type": "array", "minItems": 2, "maxItems": 7,
+                                "items": {
+                                    "type": "object",
+                                    "required": ["label", "day", "period", "waypoints"],
+                                    "properties": {
+                                        "label": {"type": "string"},
+                                        "day": {"type": "integer", "minimum": 1, "maximum": 7},
+                                        "period": {
+                                            "type": "string",
+                                            "enum": ["full_day", "morning", "afternoon", "evening"],
+                                        },
+                                        "waypoints": {
+                                            "type": "array", "minItems": 2, "maxItems": 12,
+                                            "items": {"type": "string"},
+                                        },
+                                        "route_type": {
+                                            "type": "string",
+                                            "enum": ["point_to_point", "loop"],
+                                            "default": "point_to_point",
+                                        },
+                                        "target_distance_km": {"type": "number"},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
         name="update_route_plan",
         description=(
-            "更新最近或指定单日路线计划。replace_waypoints 会重新检索地点并算路；"
-            "select_candidate 只切换当前候选。"
+            "更新最近或指定路线计划。replace_waypoints 更新单日路线，replace_stage "
+            "更新完整阶段，replace_waypoint 替换一个途经点；reverse_candidate/reverse_stage "
+            "确定性反转路线方向，undo 恢复上一版本，select_candidate 切换当前候选。"
         ),
         input_schema={
             "type": "object",
             "required": ["operation"],
             "properties": {
                 "plan_id": {"type": "string"},
-                "operation": {"type": "string", "enum": ["replace_waypoints", "select_candidate"]},
+                "operation": {
+                    "type": "string",
+                    "enum": [
+                        "replace_waypoints", "replace_stage", "replace_waypoint",
+                        "reverse_candidate", "reverse_stage", "select_candidate", "undo",
+                    ],
+                },
                 "candidate_id": {"type": "string"},
                 "candidate_name": {"type": "string"},
+                "stage_id": {"type": "string"},
+                "stage_label": {"type": "string"},
+                "waypoint_index": {
+                    "type": "integer", "minimum": 1,
+                    "description": "replace_waypoint 使用，按用户可见顺序从 1 开始",
+                },
+                "new_waypoint": {"type": "string", "description": "replace_waypoint 的新地点检索词"},
                 "waypoints": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 12},
                 "route_type": {"type": "string", "enum": ["point_to_point", "loop"]},
                 "target_distance_km": {"type": "number"},
                 "include_elevation": {"type": "boolean", "default": True},
+                "segment_strategy": {
+                    "type": "string", "enum": ["auto", "ignore", "require"],
+                    "description": "缺省时沿用当前路线计划的策略。",
+                },
+                "segment_preferences": {"type": "array", "items": {"type": "string"}},
             },
         },
         category=CATEGORY_COACHING,
@@ -392,6 +478,29 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         input_schema={
             "type": "object",
             "properties": {"plan_id": {"type": "string"}},
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
+        name="explore_route_segments",
+        description=(
+            "读取最近或指定的已保存路线，通过 Strava Segment Explorer 查询路线附近的热门骑行路段样本，"
+            "并保存名称、距离、平均坡度、爬升分类和地图几何。不会自动改变已验证路线。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "plan_id": {"type": "string"},
+                "candidate_id": {"type": "string", "description": "缺省时使用当前候选"},
+                "stage_id": {"type": "string", "description": "多日或上下午行程可只查询一个阶段"},
+                "corridor_km": {
+                    "type": "number", "minimum": 0.1, "maximum": 20, "default": 5,
+                    "description": "路段几何到计划路线的最大接近距离",
+                },
+                "max_segments": {
+                    "type": "integer", "minimum": 1, "maximum": 20, "default": 12,
+                },
+            },
         },
         category=CATEGORY_COACHING,
     ),

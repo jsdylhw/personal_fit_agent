@@ -14,7 +14,7 @@ class RoutePlanStore:
     def __init__(self, path: str | Path | None = None):
         self.path = path
 
-    def save(self, plan: dict[str, Any]) -> dict[str, Any]:
+    def save(self, plan: dict[str, Any], *, archive: bool = True) -> dict[str, Any]:
         plan_id = str(plan.get("plan_id") or "").strip()
         workspace_id = str(plan.get("workspace_id") or "").strip()
         if not plan_id or not workspace_id:
@@ -26,7 +26,7 @@ class RoutePlanStore:
             # silently overwrite one another before either UPSERT commits.
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT revision, created_at FROM route_plans WHERE id = ?",
+                "SELECT revision, plan_json, created_at FROM route_plans WHERE id = ?",
                 (plan_id,),
             ).fetchone()
             revision = int(existing["revision"] or 0) + 1 if existing else 1
@@ -38,6 +38,15 @@ class RoutePlanStore:
                 "created_at": created_at,
                 "updated_at": updated_at,
             }
+            if existing and archive:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO route_plan_revisions (
+                        plan_id, revision, plan_json, archived_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (plan_id, int(existing["revision"]), str(existing["plan_json"]), now),
+                )
             connection.execute(
                 """
                 INSERT INTO route_plans (
@@ -62,6 +71,60 @@ class RoutePlanStore:
                 ),
             )
         return stored
+
+    def undo(self, plan_id: str) -> dict[str, Any] | None:
+        """Restore and consume the latest prior snapshot as a new revision."""
+        normalized_id = str(plan_id or "").strip()
+        if not normalized_id:
+            raise ValueError("plan_id is required")
+        now = _now()
+        with connect_database(self.path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT workspace_id, revision, created_at FROM route_plans WHERE id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if not current:
+                return None
+            previous = connection.execute(
+                """
+                SELECT revision, plan_json FROM route_plan_revisions
+                WHERE plan_id = ? ORDER BY revision DESC LIMIT 1
+                """,
+                (normalized_id,),
+            ).fetchone()
+            if not previous:
+                return None
+            restored = _json_object(previous["plan_json"])
+            revision = int(current["revision"] or 0) + 1
+            workspace_id = str(current["workspace_id"])
+            updated_at = _next_workspace_timestamp(connection, workspace_id, now)
+            restored.update({
+                "plan_id": normalized_id,
+                "workspace_id": workspace_id,
+                "revision": revision,
+                "created_at": str(current["created_at"]),
+                "updated_at": updated_at,
+            })
+            connection.execute(
+                "DELETE FROM route_plan_revisions WHERE plan_id = ? AND revision = ?",
+                (normalized_id, int(previous["revision"])),
+            )
+            connection.execute(
+                """
+                UPDATE route_plans SET
+                    revision = ?, active_candidate_id = ?, plan_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    revision,
+                    restored.get("active_candidate_id"),
+                    json.dumps(restored, ensure_ascii=False, default=str),
+                    updated_at,
+                    normalized_id,
+                ),
+            )
+        return restored
 
     def get(self, plan_id: str) -> dict[str, Any] | None:
         with connect_database(self.path) as connection:

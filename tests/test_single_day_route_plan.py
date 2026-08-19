@@ -10,7 +10,7 @@ from agent.runtime.models import ToolExecution
 from agent.runtime.presentation_projector import project_presentations
 from agent.main_agent.context import AgentContext
 from agent.tools.handlers.route import create_route_plan_tool, update_route_plan_tool
-from services.route.single_day import compact_route_plan, create_single_day_plan
+from services.route.single_day import compact_route_plan, create_single_day_plan, edit_candidate_waypoints
 from storage.repositories.route import RoutePlanStore
 
 
@@ -128,6 +128,66 @@ def test_route_plan_store_serializes_concurrent_revision_updates(tmp_path):
     assert store.get("route_shared")["revision"] == workers + 1
 
 
+def test_route_plan_store_undoes_multiple_persisted_edits(tmp_path):
+    store = RoutePlanStore(tmp_path / "routes.db")
+    first = store.save({"plan_id": "route_test", "workspace_id": "workspace", "title": "第一版", "candidates": []})
+    second = store.save({**first, "title": "第二版"})
+    store.save({**second, "title": "第三版"})
+
+    undone_once = store.undo("route_test")
+    undone_twice = store.undo("route_test")
+
+    assert undone_once["title"] == "第二版"
+    assert undone_once["revision"] == 4
+    assert undone_twice["title"] == "第一版"
+    assert undone_twice["revision"] == 5
+    assert store.undo("route_test") is None
+    assert store.get("route_test")["title"] == "第一版"
+
+
+def test_non_edit_enrichment_does_not_consume_an_undo_step(tmp_path):
+    store = RoutePlanStore(tmp_path / "routes.db")
+    first = store.save({"plan_id": "route_test", "workspace_id": "workspace", "title": "第一版", "candidates": []})
+    second = store.save({**first, "title": "第二版"})
+    store.save({**second, "strava_segments": [101]}, archive=False)
+
+    restored = store.undo("route_test")
+
+    assert restored["title"] == "第一版"
+    assert "strava_segments" not in restored
+
+
+def test_reverse_candidate_preserves_loop_anchor_and_replaces_one_waypoint():
+    captured = []
+    plan = {
+        "active_candidate_id": "candidate_1",
+        "candidates": [{
+            "candidate_id": "candidate_1",
+            "name": "环线",
+            "route_type": "loop",
+            "waypoint_queries": ["A", "B", "C"],
+            "waypoints": _places(["A", "B", "C", "A"]),
+        }],
+    }
+
+    def route_google(queries, country_code, route_type, config):
+        captured.append(list(queries))
+        return _places(queries), _route_result()
+
+    with patch("services.route.single_day.load_config", return_value={}), patch(
+        "services.route.single_day._route_google", side_effect=route_google,
+    ):
+        reversed_plan = edit_candidate_waypoints(
+            plan, candidate_id=None, operation="reverse", include_elevation=False,
+        )
+        edit_candidate_waypoints(
+            reversed_plan, candidate_id=None, operation="replace_waypoint",
+            waypoint_index=2, new_waypoint="D", include_elevation=False,
+        )
+
+    assert captured == [["A", "C", "B"], ["A", "D", "B"]]
+
+
 def test_route_plan_presentation_loads_full_geometry(monkeypatch):
     full = {
         "plan_id": "route_test",
@@ -226,6 +286,60 @@ def test_create_route_plan_tool_persists_but_returns_compact_result(monkeypatch)
     assert "geometry" not in output["result"]["candidates"][0]
 
 
+def test_create_domestic_route_defers_elevation_until_segment_composition(monkeypatch):
+    plan = {
+        "schema_version": "route_plan.v1",
+        "plan_id": "route_cn",
+        "workspace_id": "workspace",
+        "revision": 0,
+        "title": "国内路线",
+        "country_code": "CN",
+        "active_candidate_id": "candidate_1",
+        "candidates": [{
+            "candidate_id": "candidate_1",
+            "name": "候选一",
+            "route_type": "point_to_point",
+            "waypoints": _places(["起点", "终点"]),
+            "waypoint_queries": ["起点", "终点"],
+            **_route_result(),
+            "distance_km": 42.0,
+            "duration_min": 120,
+            "warnings": [],
+        }],
+    }
+    calls = {}
+
+    def create(**kwargs):
+        calls["baseline_include_elevation"] = kwargs["include_elevation"]
+        return plan
+
+    def enrich(value, **kwargs):
+        calls["segment_strategy"] = kwargs["strategy"]
+        calls["final_include_elevation"] = kwargs["include_elevation"]
+        return {**value, "segment_strategy": kwargs["strategy"]}
+
+    monkeypatch.setattr("agent.tools.handlers.route.create_single_day_plan", create)
+    monkeypatch.setattr("agent.tools.handlers.route._apply_segment_strategy", enrich)
+    monkeypatch.setattr(RoutePlanStore, "save", lambda self, value: {**value, "revision": 1})
+
+    output = create_route_plan_tool(
+        AgentContext(session_id="session", workspace_id="workspace"),
+        args={
+            "title": "国内路线",
+            "country_code": "CN",
+            "include_elevation": True,
+            "candidates": [{"name": "候选一", "waypoints": ["起点", "终点"], "route_type": "point_to_point"}],
+        },
+    )
+
+    assert calls == {
+        "baseline_include_elevation": False,
+        "segment_strategy": "auto",
+        "final_include_elevation": True,
+    }
+    assert output["result"]["segment_strategy"] == "auto"
+
+
 def test_select_candidate_updates_latest_persisted_plan_without_rerouting(monkeypatch):
     plan = {
         "schema_version": "route_plan.v1",
@@ -249,6 +363,29 @@ def test_select_candidate_updates_latest_persisted_plan_without_rerouting(monkey
 
     assert output["result"]["active_candidate_id"] == "candidate_2"
     assert output["result"]["revision"] == 2
+
+
+def test_update_route_plan_undo_uses_persisted_history(monkeypatch):
+    plan = {
+        "schema_version": "route_plan.v1",
+        "plan_id": "route_test",
+        "workspace_id": "workspace",
+        "revision": 2,
+        "title": "第二版",
+        "active_candidate_id": "candidate_1",
+        "candidates": [{"candidate_id": "candidate_1", "name": "路线", "distance_km": 40, "duration_min": 100}],
+    }
+    restored = {**plan, "revision": 3, "title": "第一版"}
+    monkeypatch.setattr(RoutePlanStore, "get_latest", lambda self, workspace_id: plan)
+    monkeypatch.setattr(RoutePlanStore, "undo", lambda self, plan_id: restored)
+
+    output = update_route_plan_tool(
+        AgentContext(session_id="session", workspace_id="workspace"),
+        args={"operation": "undo"},
+    )
+
+    assert output["result"]["revision"] == 3
+    assert output["result"]["title"] == "第一版"
 
 
 def test_get_or_update_rejects_plan_from_another_workspace(monkeypatch):

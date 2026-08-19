@@ -407,9 +407,16 @@ function renderRouteMap(data, presentationId) {
     routes.forEach((route, index) => {
       const coordinates = route.geometry?.coordinates;
       if (!Array.isArray(coordinates) || coordinates.length < 2) return;
-      const color = route.active ? "#087f6c" : ["#d97706", "#2563eb", "#9333ea"][index % 3];
+      const palette = ["#087f6c", "#d97706", "#2563eb", "#9333ea", "#dc2626", "#0891b2", "#65a30d"];
+      const isStravaSegment = route.kind === "strava_segment";
+      const color = isStravaSegment ? "#d7438d" : palette[index % palette.length];
       const line = L.geoJSON(route.geometry, {
-        style: { color, weight: route.active ? 6 : 4, opacity: route.active ? 0.95 : 0.65 },
+        style: {
+          color,
+          weight: route.active ? 6 : isStravaSegment ? 4 : 4,
+          opacity: route.active ? 0.95 : isStravaSegment ? 0.85 : 0.65,
+          dashArray: isStravaSegment ? "7 5" : null,
+        },
       }).addTo(map).bindPopup(route.name || "路线候选");
       layers.push(line);
       (Array.isArray(route.waypoints) ? route.waypoints : []).forEach((point, pointIndex) => {
@@ -653,8 +660,16 @@ function presentationColumnLabel(value) {
     power_w: "功率",
     summary_label: "活动标签",
     candidate: "候选路线",
+    stage: "行程阶段",
+    segment_name: "Strava 路段",
     waypoints: "途经点",
+    handoff_km: "衔接距离",
     provider: "算路服务",
+    average_grade_percent: "平均坡度",
+    elevation_difference_m: "海拔差",
+    climb_category: "爬坡分类",
+    distance_to_route_km: "距计划路线",
+    route_overlap_ratio: "走廊内比例",
     mode: "模式",
     active: "当前使用",
     elevation_m: "海拔",

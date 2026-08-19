@@ -30,8 +30,9 @@ garmin_tokenstore: ".garmin_cn_tokens"
 # garmin_proxy: "http://127.0.0.1:7890"
 disable_curl_cffi: false
 
-# Optional: required only when uploading to Strava. Refresh-token OAuth is
-# recommended; generated tokens are stored locally in token_store.
+# Optional: required when uploading to Strava or enriching routes with public
+# Strava Segments. Refresh-token OAuth is recommended; generated tokens are
+# stored locally in token_store. Authorize read for public Segment access.
 strava:
   client_id: "your-strava-client-id"
   client_secret: "your-strava-client-secret"

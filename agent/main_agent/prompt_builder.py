@@ -76,14 +76,29 @@ def build_state_preamble(context: AgentContext) -> str:
             candidates = [item for item in route_plan.get("candidates") or [] if isinstance(item, dict)]
             active_id = route_plan.get("active_candidate_id")
             active = next((item for item in candidates if item.get("candidate_id") == active_id), None)
-            waypoint_names = [
-                str(point.get("name") or point.get("query") or "")
-                for point in (active.get("waypoints") or [] if isinstance(active, dict) else [])
-                if isinstance(point, dict)
+            stages = [
+                stage for stage in (active.get("stages") or [] if isinstance(active, dict) else [])
+                if isinstance(stage, dict)
             ]
+            if stages:
+                route_state = "；".join(_compact_route_stage_state(stage) for stage in stages)
+                segment_count = sum(
+                    len(stage.get("strava_segments") or []) for stage in stages
+                )
+            else:
+                waypoint_names = [
+                    str(point.get("name") or point.get("query") or "")
+                    for point in (active.get("waypoints") or [] if isinstance(active, dict) else [])
+                    if isinstance(point, dict)
+                ]
+                route_state = f"途经 {' → '.join(waypoint_names) or '-'}"
+                segment_count = len(active.get("strava_segments") or []) if isinstance(active, dict) else 0
+            if segment_count:
+                route_state += f"；已保存 {segment_count} 个 Strava 路段样本"
             parts.append(
                 f"当前路线计划: {route_plan.get('plan_id')} rev{route_plan.get('revision')}；"
-                f"当前候选 {active_id or '-'}；途经 {' → '.join(waypoint_names) or '-'}"
+                f"当前候选 {active_id or '-'}；Strava策略 {route_plan.get('segment_strategy') or 'ignore'}；"
+                f"{route_state}"
             )
     workflow = last_workflow_result(context)
     if workflow:
@@ -98,6 +113,15 @@ def build_state_preamble(context: AgentContext) -> str:
             f"{report_job.get('completed', 0)}/{report_job.get('total', 0)}）"
         )
     return "\n".join(["[本轮状态]", *parts]) if parts else ""
+
+
+def _compact_route_stage_state(stage: dict[str, Any]) -> str:
+    points = [point for point in stage.get("waypoints") or [] if isinstance(point, dict)]
+    names = [str(point.get("name") or point.get("query") or "") for point in points]
+    return (
+        f"{stage.get('stage_id') or '-'} {stage.get('label') or '阶段'}"
+        f"({' → '.join(names) or '-'})"
+    )
 
 
 def last_workflow_result(context: AgentContext) -> dict[str, Any] | None:

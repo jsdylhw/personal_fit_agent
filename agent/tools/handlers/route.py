@@ -2,12 +2,29 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from agent.main_agent.context import AgentContext
 from integrations.llm import AnthropicMessagesClient, extract_text
+from integrations.strava import StravaSink
 from services.route.advice import generate_route_advice as generate_route_advice_service
-from services.route.single_day import compact_route_plan, create_single_day_plan, replace_candidate
+from services.route.itinerary import (
+    create_itinerary_plan as create_itinerary_plan_service,
+    edit_itinerary_stage_waypoints,
+    refresh_itinerary_plan,
+    replace_itinerary_stage,
+)
+from services.route.segment_aware import apply_segment_aware_routing
+from services.route.segments import enrich_route_plan_with_segments
+from services.route.single_day import (
+    _elevation_profile,
+    compact_route_plan,
+    create_single_day_plan,
+    edit_candidate_waypoints,
+    replace_candidate,
+)
+from settings import load_config
 from storage.repositories.route import RoutePlanStore
 
 
@@ -19,12 +36,20 @@ def create_route_plan(args: dict[str, Any], context: AgentContext) -> dict[str, 
     return create_route_plan_tool(context, args=args, name="create_route_plan")
 
 
+def create_itinerary_plan(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    return create_itinerary_plan_tool(context, args=args, name="create_itinerary_plan")
+
+
 def update_route_plan(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     return update_route_plan_tool(context, args=args, name="update_route_plan")
 
 
 def get_route_plan(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     return get_route_plan_tool(context, args=args, name="get_route_plan")
+
+
+def explore_route_segments(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    return explore_route_segments_tool(context, args=args, name="explore_route_segments")
 
 
 def generate_route_advice_tool(
@@ -50,6 +75,9 @@ def create_route_plan_tool(
     name: str = "create_route_plan",
 ) -> dict[str, Any]:
     args = args or {}
+    segment_strategy = str(args.get("segment_strategy") or "auto").lower()
+    country_code = str(args.get("country_code") or "")
+    segment_active = country_code.upper() == "CN" and segment_strategy != "ignore"
     candidates = args.get("candidates") if isinstance(args.get("candidates"), list) else []
     if not candidates and isinstance(args.get("waypoints"), list):
         candidates = [{
@@ -61,10 +89,58 @@ def create_route_plan_tool(
     plan = create_single_day_plan(
         workspace_id=_workspace_id(context),
         title=str(args.get("title") or "单日骑行路线"),
-        country_code=str(args.get("country_code") or ""),
+        country_code=country_code,
         candidates=candidates,
-        include_elevation=bool(args.get("include_elevation", True)),
+        include_elevation=bool(args.get("include_elevation", True)) and not segment_active,
     )
+    if segment_active:
+        plan = _apply_segment_strategy(
+            plan,
+            context=context,
+            strategy=segment_strategy,
+            preferences=args.get("segment_preferences") or [],
+            include_elevation=bool(args.get("include_elevation", True)),
+        )
+    stored = RoutePlanStore().save(plan)
+    compact = compact_route_plan(stored)
+    return {
+        "step": name,
+        "status": "completed",
+        "answer": _plan_answer(compact, prefix="已生成"),
+        "result": compact,
+    }
+
+
+def create_itinerary_plan_tool(
+    context: AgentContext,
+    *,
+    args: dict[str, Any] | None = None,
+    name: str = "create_itinerary_plan",
+) -> dict[str, Any]:
+    args = args or {}
+    segment_strategy = str(args.get("segment_strategy") or "auto").lower()
+    country_code = str(args.get("country_code") or "")
+    segment_active = country_code.upper() == "CN" and segment_strategy != "ignore"
+    candidates = args.get("candidates") if isinstance(args.get("candidates"), list) else []
+    plan = create_itinerary_plan_service(
+        workspace_id=_workspace_id(context),
+        title=str(args.get("title") or "分段骑行路线"),
+        country_code=country_code,
+        schedule_type=str(args.get("schedule_type") or ""),
+        candidates=candidates,
+        include_elevation=bool(args.get("include_elevation", True)) and not segment_active,
+        handoff_tolerance_km=args.get("handoff_tolerance_km", 5.0),
+        balance_warning_ratio=args.get("balance_warning_ratio", 0.30),
+    )
+    if segment_active:
+        plan = _apply_segment_strategy(
+            plan,
+            context=context,
+            strategy=segment_strategy,
+            preferences=args.get("segment_preferences") or [],
+            include_elevation=bool(args.get("include_elevation", True)),
+        )
+        plan = refresh_itinerary_plan(plan)
     stored = RoutePlanStore().save(plan)
     compact = compact_route_plan(stored)
     return {
@@ -86,8 +162,26 @@ def update_route_plan_tool(
     plan_id = str(args.get("plan_id") or "").strip()
     plan = _load_plan(store, context, plan_id)
     if not plan:
-        raise ValueError("没有可更新的路线计划，请先创建单日路线")
+        raise ValueError("没有可更新的路线计划，请先创建路线")
     operation = str(args.get("operation") or "replace_waypoints")
+    if operation == "undo":
+        restored = store.undo(str(plan.get("plan_id") or ""))
+        if not restored:
+            raise ValueError("当前路线没有可以撤销的上一版本")
+        compact = compact_route_plan(restored)
+        return {
+            "step": name,
+            "status": "completed",
+            "answer": _plan_answer(compact, prefix="已撤销到上一版"),
+            "result": compact,
+        }
+    segment_strategy = str(args.get("segment_strategy") or plan.get("segment_strategy") or "ignore").lower()
+    segment_active = (
+        str(plan.get("country_code") or "").upper() == "CN"
+        and segment_strategy != "ignore"
+        and operation != "select_candidate"
+    )
+    route_include_elevation = bool(args.get("include_elevation", True)) and not segment_active
     if operation == "select_candidate":
         selected_id = str(args.get("candidate_id") or "")
         valid_ids = {str(item.get("candidate_id")) for item in plan.get("candidates") or [] if isinstance(item, dict)}
@@ -95,6 +189,8 @@ def update_route_plan_tool(
             raise ValueError("route candidate does not exist")
         plan = {**plan, "active_candidate_id": selected_id}
     elif operation == "replace_waypoints":
+        if plan.get("schedule_type") in {"multi_day", "day_parts"}:
+            raise ValueError("分段行程请使用 replace_stage")
         waypoints = args.get("waypoints") if isinstance(args.get("waypoints"), list) else []
         plan = replace_candidate(
             plan,
@@ -103,10 +199,72 @@ def update_route_plan_tool(
             waypoint_queries=[str(value) for value in waypoints],
             route_type=str(args.get("route_type") or ""),
             target_distance_km=args.get("target_distance_km"),
+            include_elevation=route_include_elevation,
+        )
+    elif operation == "replace_stage":
+        if plan.get("schedule_type") not in {"multi_day", "day_parts"}:
+            raise ValueError("replace_stage requires a multi-day or day-parts plan")
+        waypoints = args.get("waypoints") if isinstance(args.get("waypoints"), list) else []
+        plan = replace_itinerary_stage(
+            plan,
+            candidate_id=str(args.get("candidate_id") or "") or None,
+            stage_id=str(args.get("stage_id") or ""),
+            label=str(args.get("stage_label") or ""),
+            waypoint_queries=[str(value) for value in waypoints],
+            route_type=str(args.get("route_type") or ""),
+            target_distance_km=args.get("target_distance_km"),
+            include_elevation=route_include_elevation,
+        )
+    elif operation == "reverse_candidate":
+        if plan.get("schedule_type") in {"multi_day", "day_parts"}:
+            raise ValueError("分段行程请使用 reverse_stage")
+        plan = edit_candidate_waypoints(
+            plan,
+            candidate_id=str(args.get("candidate_id") or "") or None,
+            operation="reverse",
+            include_elevation=route_include_elevation,
+        )
+    elif operation == "reverse_stage":
+        if plan.get("schedule_type") not in {"multi_day", "day_parts"}:
+            raise ValueError("reverse_stage requires a multi-day or day-parts plan")
+        plan = edit_itinerary_stage_waypoints(
+            plan,
+            candidate_id=str(args.get("candidate_id") or "") or None,
+            stage_id=str(args.get("stage_id") or ""),
+            operation="reverse",
+            include_elevation=route_include_elevation,
+        )
+    elif operation == "replace_waypoint":
+        common = {
+            "candidate_id": str(args.get("candidate_id") or "") or None,
+            "operation": "replace_waypoint",
+            "waypoint_index": args.get("waypoint_index"),
+            "new_waypoint": str(args.get("new_waypoint") or ""),
+            "include_elevation": route_include_elevation,
+        }
+        if plan.get("schedule_type") in {"multi_day", "day_parts"}:
+            plan = edit_itinerary_stage_waypoints(
+                plan,
+                stage_id=str(args.get("stage_id") or ""),
+                **common,
+            )
+        else:
+            plan = edit_candidate_waypoints(plan, **common)
+    else:
+        raise ValueError(
+            "operation must be replace_waypoints, replace_stage, replace_waypoint, "
+            "reverse_candidate, reverse_stage, select_candidate or undo"
+        )
+    if segment_active:
+        plan = _apply_segment_strategy(
+            plan,
+            context=context,
+            strategy=segment_strategy,
+            preferences=args.get("segment_preferences") or plan.get("segment_preferences") or [],
             include_elevation=bool(args.get("include_elevation", True)),
         )
-    else:
-        raise ValueError("operation must be replace_waypoints or select_candidate")
+        if plan.get("schedule_type") in {"multi_day", "day_parts"}:
+            plan = refresh_itinerary_plan(plan)
     stored = store.save(plan)
     compact = compact_route_plan(stored)
     return {
@@ -135,6 +293,43 @@ def get_route_plan_tool(
         "status": "completed",
         "answer": _plan_answer(compact, prefix="当前路线"),
         "result": compact,
+    }
+
+
+def explore_route_segments_tool(
+    context: AgentContext,
+    *,
+    args: dict[str, Any] | None = None,
+    name: str = "explore_route_segments",
+) -> dict[str, Any]:
+    args = args or {}
+    store = RoutePlanStore()
+    plan = _load_plan(store, context, str(args.get("plan_id") or "").strip())
+    if not plan:
+        raise ValueError("没有已保存的路线计划，请先创建路线")
+    sink = StravaSink()
+    updated, result = enrich_route_plan_with_segments(
+        plan,
+        access_token=str(sink.access_token or ""),
+        candidate_id=str(args.get("candidate_id") or "") or None,
+        stage_id=str(args.get("stage_id") or "") or None,
+        corridor_km=args.get("corridor_km", 5.0),
+        max_segments=args.get("max_segments", 12),
+        explorer=lambda bounds, _token: sink.explore_segments(bounds),
+    )
+    # Segment discovery enriches the current route but is not itself a route
+    # edit. Do not make a later conversational undo stop at this metadata-only
+    # revision instead of restoring the previous waypoint/geometry version.
+    stored = store.save(updated, archive=False)
+    result = {**result, "revision": stored.get("revision")}
+    return {
+        "step": name,
+        "status": "completed",
+        "answer": (
+            f"已在当前路线附近找到 {result['segment_count']} 个 Strava 热门骑行路段样本；"
+            f"筛选走廊为 {result['corridor_km']} km。"
+        ),
+        "result": result,
     }
 
 
@@ -176,6 +371,101 @@ def _request_route_advice(system: str, user: str) -> str:
     return extract_text(response)
 
 
+def _apply_segment_strategy(
+    plan: dict[str, Any],
+    *,
+    context: AgentContext,
+    strategy: str,
+    preferences: Any,
+    include_elevation: bool,
+) -> dict[str, Any]:
+    config = load_config()
+    amap = config.get("amap") if isinstance(config.get("amap"), dict) else {}
+    normalized_preferences = [str(value) for value in preferences if str(value).strip()] if isinstance(preferences, list) else []
+    elevation_builder = lambda coordinates, distance_m: _elevation_profile(coordinates, distance_m, config)
+    try:
+        sink = StravaSink(config)
+        return apply_segment_aware_routing(
+            plan,
+            strategy=strategy,
+            access_token=str(sink.access_token or ""),
+            amap_key=str(amap.get("web_service_key") or ""),
+            request_text=_latest_user_message(context),
+            preferences=normalized_preferences,
+            include_elevation=include_elevation,
+            explorer=lambda bounds, _token: sink.explore_segments(bounds),
+            detail_fetcher=lambda segment_id: sink.get_segment(segment_id),
+            selector=_request_segment_selection,
+            elevation_builder=elevation_builder,
+        )
+    except Exception as exc:  # noqa: BLE001 - auto deliberately retains the provider baseline
+        if strategy == "require":
+            raise
+        fallback = apply_segment_aware_routing(
+            plan,
+            strategy="ignore",
+            access_token="",
+            amap_key=str(amap.get("web_service_key") or ""),
+            request_text=_latest_user_message(context),
+            preferences=normalized_preferences,
+            include_elevation=include_elevation,
+            explorer=lambda _bounds, _token: {},
+            detail_fetcher=lambda _segment_id: {},
+            selector=lambda _payload: {},
+            elevation_builder=elevation_builder,
+        )
+        fallback["segment_strategy"] = "auto"
+        fallback["segment_aware_summary"] = {
+            "target_count": 0,
+            "composed_target_count": 0,
+            "fallback_target_count": 0,
+            "error": type(exc).__name__,
+        }
+        for candidate in fallback.get("candidates") or []:
+            targets = candidate.get("stages") or [candidate]
+            for target in targets:
+                target["warnings"] = [
+                    *list(target.get("warnings") or []),
+                    f"Strava 路段规划不可用，保留地图基准路线：{type(exc).__name__}",
+                ]
+        return fallback
+
+
+def _request_segment_selection(payload: dict[str, Any]) -> dict[str, Any]:
+    response = AnthropicMessagesClient().create_message(
+        system=(
+            "You select a small set of real Strava cycling Segments for already resolved route anchors. "
+            "Return JSON only with schema {\"selections\":[{\"target_id\":str,"
+            "\"segments\":[{\"segment_id\":int,\"direction\":\"forward|reverse\"}]}]}. "
+            "Never invent ids. Select at most 3 per target. Prefer high route_overlap_ratio, low "
+            "distance_to_route_km, coherent route_position_ratio, and the user's stated preferences. "
+            "It is valid to return an empty segment list when evidence is weak."
+        ),
+        user=json.dumps(payload, ensure_ascii=False, default=str),
+        max_tokens=900,
+        temperature=0.2,
+    )
+    return _json_object(extract_text(response))
+
+
+def _json_object(text: str) -> dict[str, Any]:
+    cleaned = str(text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+    try:
+        value = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("route selector did not return JSON")
+        value = json.loads(cleaned[start:end + 1])
+    if not isinstance(value, dict):
+        raise ValueError("route selector must return a JSON object")
+    return value
+
+
 def _training_load(context: AgentContext) -> dict[str, Any] | None:
     last = context.last_tool_result
     result = last.get("result") if isinstance(last, dict) else None
@@ -194,6 +484,8 @@ def _latest_user_message(context: AgentContext) -> str:
 HANDLERS = {
     "generate_route_advice": generate_route_advice,
     "create_route_plan": create_route_plan,
+    "create_itinerary_plan": create_itinerary_plan,
     "update_route_plan": update_route_plan,
     "get_route_plan": get_route_plan,
+    "explore_route_segments": explore_route_segments,
 }

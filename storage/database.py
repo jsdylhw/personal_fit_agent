@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 
 DEFAULT_DATABASE_PATH = Path("data") / "personal-fit-agent.db"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def database_path(path: str | Path | None = None) -> Path:
@@ -141,7 +141,8 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             ON analysis_results(workspace_id, updated_at DESC);
 
         -- Route plans keep provider geometry outside the model conversation.
-        -- One mutable row stores the latest numbered revision for session recovery.
+        -- The mutable row stores the latest revision; prior snapshots support
+        -- deterministic conversational undo without replaying chat payloads.
         CREATE TABLE IF NOT EXISTS route_plans (
             id TEXT PRIMARY KEY,
             workspace_id TEXT NOT NULL,
@@ -154,6 +155,18 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_route_plans_workspace
             ON route_plans(workspace_id, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS route_plan_revisions (
+            plan_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            plan_json TEXT NOT NULL,
+            archived_at TEXT NOT NULL,
+            PRIMARY KEY(plan_id, revision),
+            FOREIGN KEY(plan_id) REFERENCES route_plans(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_route_plan_revisions_plan
+            ON route_plan_revisions(plan_id, revision DESC);
         """
     )
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
