@@ -52,7 +52,8 @@ def is_terminal_tool_result(name: str, output: object) -> bool:
         "analyze_activity", "query_activity_detail", "summarize_activities",
         "compare_activities", "generate_training_advice", "summarize_recent_training_load",
         "calculate_history_metrics", "analyze_training_history", "inspect_selection",
-        "analyze_selection", "generate_route_advice", "sync_garmin_activities",
+        "analyze_selection", "generate_route_advice", "create_route_plan",
+        "update_route_plan", "get_route_plan", "sync_garmin_activities",
         "sync_and_run_activity_workflow", "run_activity_workflow", "get_activity_workflow",
         "retry_activity_workflow", "rebuild_activity_reports", "get_activity_report_job",
     }

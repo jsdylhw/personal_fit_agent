@@ -204,7 +204,7 @@ def test_llm_disconnect_keeps_completed_tool_state(monkeypatch):
         ctx.current_fit_file = Path("/tmp/resolved.fit")
         return {"step": "resolve_activities", "status": "completed"}
 
-    monkeypatch.setitem(__import__("agent.main_agent.tools", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS, "resolve_activities", fake_find)
+    monkeypatch.setitem(__import__("agent.tools.registry", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS, "resolve_activities", fake_find)
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
         client.return_value.create_messages.side_effect = [
             _activation_response("analyze-activity"),
@@ -271,11 +271,11 @@ def test_resolve_activities_unblocks_analyze_activity_in_same_round(monkeypatch)
     context = AgentContext(session_id="test-find-then-analyze")
     calls: list[str] = []
     monkeypatch.setitem(
-        __import__("agent.main_agent.tools", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS,
+        __import__("agent.tools.registry", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS,
         "resolve_activities", lambda args, ctx: calls.append("resolve_activities") or {"status": "completed"},
     )
     monkeypatch.setitem(
-        __import__("agent.main_agent.tools", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS,
+        __import__("agent.tools.registry", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS,
         "analyze_activity", lambda args, ctx: calls.append("analyze_activity") or {"status": "completed"},
     )
     with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
@@ -300,7 +300,7 @@ def test_terminal_detail_query_hides_tools_before_final_response(monkeypatch):
         selected_activities=[{"activity_key": "a1", "fit_path": "/tmp/current.fit"}],
     )
     monkeypatch.setitem(
-        __import__("agent.main_agent.tools", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS,
+        __import__("agent.tools.registry", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS,
         "query_activity_detail",
         lambda args, ctx: {"status": "completed", "result": {"source": "targeted_query"}, "answer": "冲刺数据"},
     )

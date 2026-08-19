@@ -13,7 +13,7 @@ from agent.main_agent.loop import (
     _skill_catalog_prompt,
     agent_loop,
 )
-from agent.main_agent.tools import TOOL_HANDLERS
+from agent.tools.registry import TOOL_HANDLERS
 from agent.main_agent.turn_policy import tools_for_skill
 from observability import capture_agent_trace
 from agent.skills import get_skill

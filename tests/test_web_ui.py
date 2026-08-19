@@ -53,3 +53,13 @@ def test_web_ui_renders_presentations_without_injecting_markdown_html():
     assert 'label.setAttribute("class", "chart-value-label")' in source
     assert "if (values.length <= 40)" in source
     assert 'createElementNS(namespace, "path")' in source
+
+
+def test_web_ui_initializes_leaflet_view_before_adding_route_layers():
+    source = (WEB_ROOT / "app.js").read_text(encoding="utf-8")
+
+    initialize = 'L.map(container, { zoomControl: true }).setView([0, 0], 2)'
+    add_route = "L.geoJSON(route.geometry"
+    fit_route = "map.fitBounds("
+    assert initialize in source
+    assert source.index(initialize) < source.index(add_route) < source.index(fit_route)

@@ -68,6 +68,23 @@ def build_state_preamble(context: AgentContext) -> str:
             parts.append(f"分析导航焦点: {json.dumps(current, ensure_ascii=False, default=str)}")
         if navigation.get("last_result_id"):
             parts.append(f"最近分析结果: {navigation['last_result_id']}（已持久化，可用于恢复回答）")
+    if context.workspace_id:
+        from storage.repositories.route import RoutePlanStore
+
+        route_plan = RoutePlanStore().get_latest(context.workspace_id)
+        if route_plan:
+            candidates = [item for item in route_plan.get("candidates") or [] if isinstance(item, dict)]
+            active_id = route_plan.get("active_candidate_id")
+            active = next((item for item in candidates if item.get("candidate_id") == active_id), None)
+            waypoint_names = [
+                str(point.get("name") or point.get("query") or "")
+                for point in (active.get("waypoints") or [] if isinstance(active, dict) else [])
+                if isinstance(point, dict)
+            ]
+            parts.append(
+                f"当前路线计划: {route_plan.get('plan_id')} rev{route_plan.get('revision')}；"
+                f"当前候选 {active_id or '-'}；途经 {' → '.join(waypoint_names) or '-'}"
+            )
     workflow = last_workflow_result(context)
     if workflow:
         workflow_id = str(workflow.get("workflow_id") or "")

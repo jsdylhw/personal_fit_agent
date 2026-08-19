@@ -27,6 +27,8 @@ def project_presentations(executions: list[ToolExecution]) -> list[PresentationB
             blocks.extend(_inspection_blocks(execution, payload))
         elif schema_version == "activity_comparison.v1":
             blocks.extend(_activity_comparison_blocks(execution, payload))
+        elif schema_version == "route_plan.v1":
+            blocks.extend(_route_plan_blocks(execution, payload))
         elif (
             schema_version == "activity_selection.v2"
             and execution.tool == "resolve_activities"
@@ -34,6 +36,96 @@ def project_presentations(executions: list[ToolExecution]) -> list[PresentationB
         ):
             blocks.extend(_resolved_activity_blocks(execution, payload))
     return blocks
+
+
+def _route_plan_blocks(
+    execution: ToolExecution,
+    payload: dict[str, Any],
+) -> list[PresentationBlock]:
+    from storage.repositories.route import RoutePlanStore
+
+    plan = RoutePlanStore().get(str(payload.get("plan_id") or ""))
+    if not plan:
+        return []
+    candidates = [item for item in plan.get("candidates") or [] if isinstance(item, dict)]
+    active_id = str(plan.get("active_candidate_id") or "")
+    source = _source(execution, payload)
+    blocks: list[PresentationBlock] = []
+    rows = [{
+        "candidate": item.get("name"),
+        "waypoints": " → ".join(
+            str(point.get("name") or point.get("query") or "")
+            for point in item.get("waypoints") or [] if isinstance(point, dict)
+        ),
+        "distance_km": item.get("distance_km"),
+        "duration_min": item.get("duration_min"),
+        "provider": item.get("provider"),
+        "mode": item.get("travel_mode"),
+        "active": item.get("candidate_id") == active_id,
+    } for item in candidates]
+    if rows:
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-route-candidates",
+            type="table",
+            title=str(plan.get("title") or "路线候选"),
+            data={
+                "columns": ["candidate", "waypoints", "distance_km", "duration_min", "provider", "mode", "active"],
+                "rows": rows,
+            },
+            source=source,
+        ))
+    routes = []
+    for item in candidates:
+        geometry = item.get("geometry") if isinstance(item.get("geometry"), dict) else {}
+        coordinates = geometry.get("coordinates") if isinstance(geometry.get("coordinates"), list) else []
+        if len(coordinates) < 2:
+            continue
+        routes.append({
+            "candidate_id": item.get("candidate_id"),
+            "name": item.get("name"),
+            "active": item.get("candidate_id") == active_id,
+            "geometry": {"type": "LineString", "coordinates": _bounded_coordinates(coordinates)},
+            "waypoints": [
+                {
+                    "name": point.get("name") or point.get("query"),
+                    "latitude": point.get("display_latitude", point.get("latitude")),
+                    "longitude": point.get("display_longitude", point.get("longitude")),
+                }
+                for point in item.get("waypoints") or [] if isinstance(point, dict)
+            ],
+        })
+    if routes:
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-route-map",
+            type="route_map",
+            title="路线地图",
+            data={"routes": routes},
+            source=source,
+        ))
+    active = next((item for item in candidates if item.get("candidate_id") == active_id), None)
+    elevation = active.get("elevation") if isinstance(active, dict) and isinstance(active.get("elevation"), dict) else {}
+    labels = elevation.get("labels") if isinstance(elevation.get("labels"), list) else []
+    values = elevation.get("elevations_m") if isinstance(elevation.get("elevations_m"), list) else []
+    if labels and values:
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-route-elevation",
+            type="line_chart",
+            title="参考海拔剖面",
+            data={
+                "x_label": "距离 (km)",
+                "labels": labels,
+                "series": [{"metric": "elevation_m", "unit": "m", "values": values}],
+            },
+            source=source,
+        ))
+    return blocks
+
+
+def _bounded_coordinates(value: list[Any], *, limit: int = 800) -> list[Any]:
+    if len(value) <= limit:
+        return value
+    step = (len(value) - 1) / (limit - 1)
+    return [value[round(index * step)] for index in range(limit)]
 
 
 def _schema_payload(result: Any) -> dict[str, Any]:

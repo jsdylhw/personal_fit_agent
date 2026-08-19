@@ -27,7 +27,7 @@ from agent.main_agent.result_builder import (
     build_llm_unavailable_result,
     intent_kind,
 )
-from agent.main_agent.tools import TOOL_HANDLERS
+from agent.tools.registry import TOOL_HANDLERS
 from agent.main_agent.turn_control import handle_control_turn
 from agent.main_agent.turn_policy import tools_for_skill
 from agent.skills import get_skill

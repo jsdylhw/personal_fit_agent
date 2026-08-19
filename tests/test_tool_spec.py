@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agent.tools.spec import (
-    CATEGORY_ACTIVITY_INDEX,
+    CATEGORY_ACTIVITY_SELECTION,
     CATEGORY_FIT_QUERY,
     CATEGORY_OPERATION,
     ToolDef,
@@ -49,7 +49,7 @@ class TestToolDef:
 SAMPLE_TOOLS = (
     ToolDef(name="get_overview", description="Overview.", category=CATEGORY_FIT_QUERY),
     ToolDef(name="get_summary", description="Summary.", category=CATEGORY_FIT_QUERY),
-    ToolDef(name="list_activities", description="List.", category=CATEGORY_ACTIVITY_INDEX),
+    ToolDef(name="resolve_activities", description="Resolve.", category=CATEGORY_ACTIVITY_SELECTION),
     ToolDef(name="sync", description="Sync.", category=CATEGORY_OPERATION),
 )
 

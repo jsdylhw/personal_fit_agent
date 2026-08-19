@@ -2,18 +2,28 @@ from __future__ import annotations
 
 from agent.main_agent.context import AgentContext
 from agent.main_agent.guard import guard_tool_call
-from agent.main_agent.tools import TOOL_HANDLERS
+from agent.tools.registry import TOOL_HANDLERS
 from agent.tools.agent_tools import MAIN_AGENT_TOOLS
 
 
+def test_every_declared_tool_has_exactly_one_callable_handler():
+    declared = {tool.name for tool in MAIN_AGENT_TOOLS}
+
+    assert set(TOOL_HANDLERS) == declared
+    assert all(callable(handler) for handler in TOOL_HANDLERS.values())
+
+
 def test_tool_handler_executes_selection_directly(monkeypatch):
+    from agent.tools.handlers.activity_selection import resolve_activities
+
     called = {}
 
     def fake_selection(args, context):
         called["arguments"] = args
         return {"step": "resolve_activities", "status": "completed"}
 
-    monkeypatch.setattr("agent.tools.handlers.activity_selection.resolve_activities", fake_selection)
+    assert TOOL_HANDLERS["resolve_activities"] is resolve_activities
+    monkeypatch.setitem(TOOL_HANDLERS, "resolve_activities", fake_selection)
 
     result = TOOL_HANDLERS["resolve_activities"](
         {"kind": "recent", "limit": 1},

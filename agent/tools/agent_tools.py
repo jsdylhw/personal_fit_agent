@@ -330,6 +330,71 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         },
         category=CATEGORY_COACHING,
     ),
+    ToolDef(
+        name="create_route_plan",
+        description=(
+            "创建并持久化一个经过地图服务验证的单日路线计划。国内使用高德骑行，"
+            "国外使用 Google Routes；可一次提供多个具有不同途经点骨架的候选。"
+        ),
+        input_schema={
+            "type": "object",
+            "required": ["title", "country_code", "candidates"],
+            "properties": {
+                "title": {"type": "string"},
+                "country_code": {"type": "string", "description": "ISO 两字母国家代码，如 CN、FR、JP"},
+                "include_elevation": {"type": "boolean", "default": True},
+                "candidates": {
+                    "type": "array", "minItems": 1, "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "waypoints", "route_type"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "waypoints": {
+                                "type": "array", "minItems": 2, "maxItems": 12,
+                                "items": {"type": "string"},
+                                "description": "按顺序排列的真实地点检索词；环线不必重复首点。",
+                            },
+                            "route_type": {"type": "string", "enum": ["point_to_point", "loop"]},
+                            "target_distance_km": {"type": "number"},
+                        },
+                    },
+                },
+            },
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
+        name="update_route_plan",
+        description=(
+            "更新最近或指定单日路线计划。replace_waypoints 会重新检索地点并算路；"
+            "select_candidate 只切换当前候选。"
+        ),
+        input_schema={
+            "type": "object",
+            "required": ["operation"],
+            "properties": {
+                "plan_id": {"type": "string"},
+                "operation": {"type": "string", "enum": ["replace_waypoints", "select_candidate"]},
+                "candidate_id": {"type": "string"},
+                "candidate_name": {"type": "string"},
+                "waypoints": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 12},
+                "route_type": {"type": "string", "enum": ["point_to_point", "loop"]},
+                "target_distance_km": {"type": "number"},
+                "include_elevation": {"type": "boolean", "default": True},
+            },
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
+        name="get_route_plan",
+        description="读取最近或指定的已持久化路线计划，用于恢复会话或继续修改。",
+        input_schema={
+            "type": "object",
+            "properties": {"plan_id": {"type": "string"}},
+        },
+        category=CATEGORY_COACHING,
+    ),
     # -- operation -----------------------------------------------------
     ToolDef(
         name="sync_garmin_activities",

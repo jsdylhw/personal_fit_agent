@@ -1,0 +1,233 @@
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import pytest
+
+from agent.runtime.models import ToolExecution
+from agent.runtime.presentation_projector import project_presentations
+from agent.main_agent.context import AgentContext
+from agent.tools.handlers.route import create_route_plan_tool, update_route_plan_tool
+from services.route.single_day import compact_route_plan, create_single_day_plan
+from storage.repositories.route import RoutePlanStore
+
+
+def _route_result(distance_m=42_000):
+    return {
+        "provider": "test_provider",
+        "travel_mode": "BICYCLE",
+        "distance_m": distance_m,
+        "duration_s": 7_200,
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[6.1, 45.8], [6.2, 45.7]],
+        },
+    }
+
+
+def _places(queries):
+    return [
+        {
+            "query": query,
+            "name": query,
+            "address": "",
+            "latitude": 45.8 - index * 0.1,
+            "longitude": 6.1 + index * 0.1,
+        }
+        for index, query in enumerate(queries)
+    ]
+
+
+def test_create_loop_reuses_first_waypoint_and_compacts_geometry():
+    captured = []
+
+    def route_google(queries, country_code, route_type, config):
+        captured.append(list(queries))
+        return _places(queries), _route_result()
+
+    with patch("services.route.single_day.load_config", return_value={}), patch(
+        "services.route.single_day._route_google", side_effect=route_google,
+    ):
+        plan = create_single_day_plan(
+            workspace_id="workspace",
+            title="湖区环线",
+            country_code="FR",
+            candidates=[{
+                "name": "湖区候选",
+                "waypoints": ["Annecy", "Doussard", "Talloires"],
+                "route_type": "loop",
+                "target_distance_km": 40,
+            }],
+            include_elevation=False,
+        )
+
+    assert captured == [["Annecy", "Doussard", "Talloires"]]
+    assert plan["candidates"][0]["waypoints"][-1]["query"] == "Annecy"
+    assert plan["candidates"][0]["distance_delta_km"] == 2.0
+    compact = compact_route_plan(plan)
+    assert "geometry" not in compact["candidates"][0]
+    assert compact["candidates"][0]["waypoints"][0]["name"] == "Annecy"
+
+
+def test_route_plan_store_persists_revision_and_latest_workspace(tmp_path):
+    store = RoutePlanStore(tmp_path / "routes.db")
+    plan = {
+        "schema_version": "route_plan.v1",
+        "plan_id": "route_test",
+        "workspace_id": "workspace",
+        "active_candidate_id": "candidate_1",
+        "candidates": [],
+    }
+    first = store.save(plan)
+    second = store.save({**first, "title": "更新路线"})
+
+    assert first["revision"] == 1
+    assert second["revision"] == 2
+    assert store.get("route_test")["title"] == "更新路线"
+    assert store.get_latest("workspace")["plan_id"] == "route_test"
+
+
+def test_route_plan_store_breaks_latest_timestamp_ties_by_insertion_order(tmp_path):
+    store = RoutePlanStore(tmp_path / "routes.db")
+    with patch("storage.repositories.route._now", return_value="2026-08-19T12:00:00+08:00"):
+        store.save({"plan_id": "route_first", "workspace_id": "workspace", "candidates": []})
+        store.save({"plan_id": "route_second", "workspace_id": "workspace", "candidates": []})
+
+    assert store.get_latest("workspace")["plan_id"] == "route_second"
+
+
+def test_route_plan_presentation_loads_full_geometry(monkeypatch):
+    full = {
+        "plan_id": "route_test",
+        "title": "测试路线",
+        "active_candidate_id": "candidate_1",
+        "candidates": [{
+            "candidate_id": "candidate_1",
+            "name": "候选一",
+            "waypoints": _places(["起点", "终点"]),
+            **_route_result(),
+            "distance_km": 42.0,
+            "duration_min": 120,
+            "elevation": {
+                "labels": [0, 42],
+                "elevations_m": [100, 180],
+            },
+        }],
+    }
+    monkeypatch.setattr(RoutePlanStore, "get", lambda self, plan_id: full)
+    execution = ToolExecution(
+        index=0,
+        tool="create_route_plan",
+        result={"result": {"schema_version": "route_plan.v1", "plan_id": "route_test"}},
+    )
+
+    blocks = project_presentations([execution])
+
+    assert [block.type for block in blocks] == ["table", "route_map", "line_chart"]
+    assert blocks[1].data["routes"][0]["geometry"]["coordinates"][-1] == [6.2, 45.7]
+
+
+def test_route_plan_presentation_bounds_large_geometry(monkeypatch):
+    coordinates = [[float(index), float(index)] for index in range(2_000)]
+    full = {
+        "plan_id": "route_test",
+        "active_candidate_id": "candidate_1",
+        "candidates": [{
+            "candidate_id": "candidate_1",
+            "name": "候选一",
+            "waypoints": [],
+            "distance_km": 10,
+            "duration_min": 30,
+            "provider": "test",
+            "travel_mode": "BICYCLE",
+            "geometry": {"type": "LineString", "coordinates": coordinates},
+        }],
+    }
+    monkeypatch.setattr(RoutePlanStore, "get", lambda self, plan_id: full)
+    execution = ToolExecution(
+        index=0,
+        tool="get_route_plan",
+        result={"result": {"schema_version": "route_plan.v1", "plan_id": "route_test"}},
+    )
+
+    blocks = project_presentations([execution])
+    route_coordinates = next(block for block in blocks if block.type == "route_map").data["routes"][0]["geometry"]["coordinates"]
+    assert len(route_coordinates) == 800
+    assert route_coordinates[0] == coordinates[0]
+    assert route_coordinates[-1] == coordinates[-1]
+
+
+def test_create_route_plan_tool_persists_but_returns_compact_result(monkeypatch):
+    plan = {
+        "schema_version": "route_plan.v1",
+        "plan_id": "route_test",
+        "workspace_id": "workspace",
+        "revision": 0,
+        "title": "测试路线",
+        "active_candidate_id": "candidate_1",
+        "candidates": [{
+            "candidate_id": "candidate_1",
+            "name": "候选一",
+            "route_type": "point_to_point",
+            "waypoints": _places(["起点", "终点"]),
+            "waypoint_queries": ["起点", "终点"],
+            **_route_result(),
+            "distance_km": 42.0,
+            "duration_min": 120,
+            "warnings": [],
+        }],
+    }
+    monkeypatch.setattr("agent.tools.handlers.route.create_single_day_plan", lambda **kwargs: plan)
+    monkeypatch.setattr(RoutePlanStore, "save", lambda self, value: {**value, "revision": 1})
+
+    output = create_route_plan_tool(
+        AgentContext(session_id="session", workspace_id="workspace"),
+        args={
+            "title": "测试路线",
+            "country_code": "FR",
+            "candidates": [{"name": "候选一", "waypoints": ["起点", "终点"], "route_type": "point_to_point"}],
+        },
+    )
+
+    assert output["status"] == "completed"
+    assert output["result"]["revision"] == 1
+    assert "geometry" not in output["result"]["candidates"][0]
+
+
+def test_select_candidate_updates_latest_persisted_plan_without_rerouting(monkeypatch):
+    plan = {
+        "schema_version": "route_plan.v1",
+        "plan_id": "route_test",
+        "workspace_id": "workspace",
+        "revision": 1,
+        "title": "测试路线",
+        "active_candidate_id": "candidate_1",
+        "candidates": [
+            {"candidate_id": "candidate_1", "name": "一", "distance_km": 40, "duration_min": 100},
+            {"candidate_id": "candidate_2", "name": "二", "distance_km": 45, "duration_min": 110},
+        ],
+    }
+    monkeypatch.setattr(RoutePlanStore, "get_latest", lambda self, workspace_id: plan)
+    monkeypatch.setattr(RoutePlanStore, "save", lambda self, value: {**value, "revision": 2})
+
+    output = update_route_plan_tool(
+        AgentContext(session_id="session", workspace_id="workspace"),
+        args={"operation": "select_candidate", "candidate_id": "candidate_2"},
+    )
+
+    assert output["result"]["active_candidate_id"] == "candidate_2"
+    assert output["result"]["revision"] == 2
+
+
+def test_get_or_update_rejects_plan_from_another_workspace(monkeypatch):
+    monkeypatch.setattr(
+        RoutePlanStore,
+        "get",
+        lambda self, plan_id: {"plan_id": plan_id, "workspace_id": "another-workspace"},
+    )
+
+    with pytest.raises(ValueError, match="current workspace"):
+        update_route_plan_tool(
+            AgentContext(session_id="session", workspace_id="workspace"),
+            args={"plan_id": "route_foreign", "operation": "select_candidate", "candidate_id": "candidate_1"},
+        )

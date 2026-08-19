@@ -1,4 +1,4 @@
-"""Direct business handlers for LLM tool calls."""
+"""Agent-facing activity range summaries."""
 
 from __future__ import annotations
 
@@ -6,9 +6,17 @@ import json
 from typing import Any
 
 from agent.main_agent.context import AgentContext
-from integrations.llm import AnthropicMessagesClient, extract_text
 from domain.analysis.artifacts import get_analysis_summary, get_index_load_label
+from integrations.llm import AnthropicMessagesClient, extract_text
 from storage.repositories.activity import ActivityStore
+
+
+def summarize_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    return execute_summarize_activity_range("summarize_activities", args, context)
+
+
+def generate_training_advice(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    return summarize_activities(args, context)
 
 
 def execute_summarize_activity_range(
@@ -50,9 +58,8 @@ def execute_summarize_activity_range(
             "duration_min": total_duration,
         },
         "activities": normalized,
-        # Range inspection is intentionally read-only.  Missing full reports
-        # remain visible in this coverage block; explicit report generation is
-        # owned by rebuild_activity_reports / activity workflows.
+        # Range inspection is intentionally read-only. Missing full reports
+        # remain visible; explicit report generation belongs to operations.
         "report_coverage": {
             "available_count": sum(1 for item in normalized if item.get("has_summary")),
             "missing_count": sum(1 for item in normalized if not item.get("has_summary")),
@@ -78,8 +85,7 @@ def empty_activity_selection_answer(selection_mode: str, result: dict[str, Any])
 
     matched_count = payload.get("matched_count")
     count = payload.get("count")
-    is_empty = matched_count == 0 or count == 0
-    if not is_empty:
+    if matched_count != 0 and count != 0:
         return None
 
     if selection_mode == "range":
@@ -110,16 +116,11 @@ def _generate_range_ai_summary(
     reason: str = "",
 ) -> str:
     args = args or {}
-    user_message = _latest_user_message(context)
-    detail_level = str(args.get("detail_level") or "normal")
     payload = {
-        "user_message": user_message,
-        "detail_level": detail_level,
+        "user_message": _latest_user_message(context),
+        "detail_level": str(args.get("detail_level") or "normal"),
         "range_summary": summary,
-        "activity_details": [
-            _activity_for_range_llm(activity)
-            for activity in activities[:20]
-        ],
+        "activity_details": [_activity_for_range_llm(activity) for activity in activities[:20]],
     }
     response = AnthropicMessagesClient().create_message(
         system=(
@@ -127,7 +128,7 @@ def _generate_range_ai_summary(
             "输出中文活动整体总结报告.不要编造未提供的数据;不要输出 JSON."
         ),
         user=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        max_tokens=1800 if detail_level == "detailed" else 1000,
+        max_tokens=1800 if payload["detail_level"] == "detailed" else 1000,
         temperature=0.2,
     )
     text = extract_text(response)
@@ -158,14 +159,8 @@ def _read_summary_detail(activity: dict[str, Any]) -> dict[str, Any]:
     return {
         key: analysis_summary.get(key)
         for key in (
-            "summary_label",
-            "brief",
-            "main_stimulus",
-            "load_label",
-            "quality_notes",
-            "achievement",
-            "limiter",
-            "next_session_advice",
+            "summary_label", "brief", "main_stimulus", "load_label", "quality_notes",
+            "achievement", "limiter", "next_session_advice",
         )
         if analysis_summary.get(key) is not None
     }
@@ -190,10 +185,9 @@ def _compact_range_activity(activity: dict[str, Any]) -> dict[str, Any]:
 
 def _format_range_summary_answer(summary: dict[str, Any]) -> str:
     scope = summary.get("scope") if isinstance(summary.get("scope"), dict) else {}
-    title = _range_title(scope)
     totals = summary.get("totals") if isinstance(summary.get("totals"), dict) else {}
     lines = [
-        f"{title}找到 {summary.get('count')} 条已索引活动。",
+        f"{_range_title(scope)}找到 {summary.get('count')} 条已索引活动。",
         f"总量: {totals.get('distance_km', 0)} km, {totals.get('duration_min', 0)} 分钟。",
     ]
     for activity in summary.get("activities") or []:
@@ -213,6 +207,10 @@ def _empty_range_answer(scope: dict[str, Any]) -> str:
 def _range_title(scope: dict[str, Any]) -> str:
     start = scope.get("start_date")
     end = scope.get("end_date")
-    if start and end:
-        return f"{start} 到 {end} "
-    return ""
+    return f"{start} 到 {end} " if start and end else ""
+
+
+HANDLERS = {
+    "summarize_activities": summarize_activities,
+    "generate_training_advice": generate_training_advice,
+}

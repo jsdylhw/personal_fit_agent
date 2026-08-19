@@ -12,6 +12,48 @@ from domain.analysis.artifacts import build_history_view, get_analysis_summary
 from services.activity.reporting import read_activity_report
 
 
+def analyze_activity(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    """Validate the frozen selection before reading or generating one report."""
+    from agent.tools.handlers.activity_summary import empty_activity_selection_answer
+
+    last = context.last_tool_result or {}
+    last_result = last.get("result") if isinstance(last.get("result"), dict) else {}
+    empty_answer = empty_activity_selection_answer(
+        str(last_result.get("selection_mode") or ""), last_result,
+    )
+    if empty_answer:
+        return {
+            "step": "analyze_activity",
+            "status": "completed",
+            "answer": empty_answer,
+            "result": {
+                "schema_version": "activity_analysis_skipped.v1",
+                "reason": "empty_activity_selection",
+            },
+        }
+    if len(context.selected_activities) != 1:
+        return {
+            "error": "single_activity_required",
+            "message": "analyze_activity 只能读取一条已定位活动；多条活动请使用 summarize_activities。",
+            "selected_count": len(context.selected_activities),
+        }
+    return show_selected_activity_report_tool(context, args=args, name="analyze_activity")
+
+
+def query_activity_detail(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    if len(context.selected_activities) != 1:
+        return {
+            "error": "single_activity_required",
+            "message": "query_activity_detail 只能查询一条已定位活动；请先用 resolve_activities 精确定位。",
+            "selected_count": len(context.selected_activities),
+        }
+    return query_selected_activity_detail_tool(
+        context,
+        question=str(args.get("question") or "").strip(),
+        name="query_activity_detail",
+    )
+
+
 def show_selected_activity_report_tool(
     context: AgentContext,
     *,
@@ -218,3 +260,9 @@ def _fallback_report(summary: dict[str, Any]) -> str:
     if brief:
         lines.extend(["", str(brief)])
     return "\n".join(lines)
+
+
+HANDLERS = {
+    "analyze_activity": analyze_activity,
+    "query_activity_detail": query_activity_detail,
+}

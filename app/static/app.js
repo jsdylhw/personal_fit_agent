@@ -376,6 +376,8 @@ function renderPresentations(blocks) {
       section.appendChild(renderPresentationTable(block.data || {}));
     } else if (block.type === "line_chart") {
       section.appendChild(renderLineCharts(block.data || {}));
+    } else if (block.type === "route_map") {
+      section.appendChild(renderRouteMap(block.data || {}, block.presentation_id));
     } else if (block.type === "markdown") {
       const markdown = document.createElement("pre");
       markdown.className = "presentation-markdown";
@@ -384,6 +386,49 @@ function renderPresentations(blocks) {
     }
     els.presentations.appendChild(section);
   });
+}
+
+function renderRouteMap(data, presentationId) {
+  const container = document.createElement("div");
+  container.className = "route-map";
+  container.id = `route-map-${String(presentationId || randomId("map")).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const routes = Array.isArray(data.routes) ? data.routes : [];
+  queueMicrotask(() => {
+    if (!window.L || !container.isConnected || !routes.length) {
+      if (!window.L) container.textContent = "地图组件加载失败，路线摘要仍可使用。";
+      return;
+    }
+    const map = L.map(container, { zoomControl: true }).setView([0, 0], 2);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(map);
+    const layers = [];
+    routes.forEach((route, index) => {
+      const coordinates = route.geometry?.coordinates;
+      if (!Array.isArray(coordinates) || coordinates.length < 2) return;
+      const color = route.active ? "#087f6c" : ["#d97706", "#2563eb", "#9333ea"][index % 3];
+      const line = L.geoJSON(route.geometry, {
+        style: { color, weight: route.active ? 6 : 4, opacity: route.active ? 0.95 : 0.65 },
+      }).addTo(map).bindPopup(route.name || "路线候选");
+      layers.push(line);
+      (Array.isArray(route.waypoints) ? route.waypoints : []).forEach((point, pointIndex) => {
+        const lat = Number(point.latitude);
+        const lon = Number(point.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        const marker = L.circleMarker([lat, lon], {
+          radius: pointIndex === 0 ? 7 : 5,
+          color,
+          fillColor: "#fff",
+          fillOpacity: 1,
+          weight: 3,
+        }).addTo(map).bindTooltip(point.name || `途经点 ${pointIndex + 1}`);
+        layers.push(marker);
+      });
+    });
+    if (layers.length) map.fitBounds(L.featureGroup(layers).getBounds().pad(0.08));
+  });
+  return container;
 }
 
 function renderMetricCards(data) {
@@ -607,6 +652,12 @@ function presentationColumnLabel(value) {
     heart_rate_bpm: "心率",
     power_w: "功率",
     summary_label: "活动标签",
+    candidate: "候选路线",
+    waypoints: "途经点",
+    provider: "算路服务",
+    mode: "模式",
+    active: "当前使用",
+    elevation_m: "海拔",
     activity_count: "活动数量",
     intensity_factor: "强度因子",
     main_stimulus: "主要刺激",

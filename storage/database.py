@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 
 DEFAULT_DATABASE_PATH = Path("data") / "personal-fit-agent.db"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def database_path(path: str | Path | None = None) -> Path:
@@ -139,6 +139,21 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_analysis_results_workspace
             ON analysis_results(workspace_id, updated_at DESC);
+
+        -- Route plans keep provider geometry outside the model conversation.
+        -- One mutable row stores the latest numbered revision for session recovery.
+        CREATE TABLE IF NOT EXISTS route_plans (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1,
+            active_candidate_id TEXT,
+            plan_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_route_plans_workspace
+            ON route_plans(workspace_id, updated_at DESC);
         """
     )
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

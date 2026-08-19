@@ -127,7 +127,12 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             "Recommend a route type, duration, distance, terrain, and training constraints. "
             "Use for route or riding-destination advice, not for activity analysis or Garmin and Strava operations."
         ),
-        tool_names=("generate_route_advice",),
+        tool_names=(
+            "generate_route_advice",
+            "create_route_plan",
+            "update_route_plan",
+            "get_route_plan",
+        ),
         public_intent="route_advice",
     ),
 )

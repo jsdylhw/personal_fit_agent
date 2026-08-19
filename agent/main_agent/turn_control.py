@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 from agent.main_agent.context import AgentContext
-from agent.main_agent.tools import TOOL_HANDLERS, execute_saved_action
+from agent.main_agent.saved_action import execute_saved_action
+from agent.tools.registry import TOOL_HANDLERS
 from agent.skills import get_skill, skill_allows_tool
 from agent.runtime.models import ToolExecution, TurnResult
 

@@ -1,7 +1,7 @@
 """Read-only range summary regressions."""
 
 from agent.main_agent.context import AgentContext
-from agent.main_agent.handlers import execute_summarize_activity_range
+from agent.tools.handlers.activity_summary import execute_summarize_activity_range
 
 
 def test_range_summary_reports_coverage_without_generating_missing_reports():

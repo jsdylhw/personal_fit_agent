@@ -328,6 +328,16 @@ p,
   gap: 10px;
 }
 
+.route-map {
+  width: 100%;
+  height: 420px;
+  min-height: 280px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #eef2f3;
+}
+
 .chart-series {
   padding: 9px;
 }
