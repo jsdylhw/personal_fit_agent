@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,17 +21,22 @@ class RoutePlanStore:
             raise ValueError("plan_id and workspace_id are required")
         now = _now()
         with connect_database(self.path) as connection:
+            # Serialize the read-increment-write sequence. A deferred SQLite
+            # transaction lets concurrent writers read the same revision and
+            # silently overwrite one another before either UPSERT commits.
+            connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 "SELECT revision, created_at FROM route_plans WHERE id = ?",
                 (plan_id,),
             ).fetchone()
             revision = int(existing["revision"] or 0) + 1 if existing else 1
             created_at = str(existing["created_at"]) if existing else now
+            updated_at = _next_workspace_timestamp(connection, workspace_id, now)
             stored = {
                 **plan,
                 "revision": revision,
                 "created_at": created_at,
-                "updated_at": now,
+                "updated_at": updated_at,
             }
             connection.execute(
                 """
@@ -53,7 +58,7 @@ class RoutePlanStore:
                     stored.get("active_candidate_id"),
                     json.dumps(stored, ensure_ascii=False, default=str),
                     created_at,
-                    now,
+                    updated_at,
                 ),
             )
         return stored
@@ -88,4 +93,19 @@ def _json_object(value: Any) -> dict[str, Any]:
 
 
 def _now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.now().astimezone().isoformat(timespec="microseconds")
+
+
+def _next_workspace_timestamp(connection, workspace_id: str, proposed: str) -> str:
+    """Return a strictly increasing ISO timestamp within one workspace."""
+    row = connection.execute(
+        "SELECT MAX(updated_at) AS updated_at FROM route_plans WHERE workspace_id = ?",
+        (workspace_id,),
+    ).fetchone()
+    latest = str(row["updated_at"] or "") if row else ""
+    proposed_at = datetime.fromisoformat(proposed)
+    if latest:
+        latest_at = datetime.fromisoformat(latest)
+        if proposed_at <= latest_at:
+            proposed_at = latest_at + timedelta(microseconds=1)
+    return proposed_at.isoformat(timespec="microseconds")

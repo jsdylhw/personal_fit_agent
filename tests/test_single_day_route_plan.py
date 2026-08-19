@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest.mock import patch
 
 import pytest
@@ -94,6 +96,36 @@ def test_route_plan_store_breaks_latest_timestamp_ties_by_insertion_order(tmp_pa
         store.save({"plan_id": "route_second", "workspace_id": "workspace", "candidates": []})
 
     assert store.get_latest("workspace")["plan_id"] == "route_second"
+
+
+def test_route_plan_store_marks_an_updated_old_row_as_latest_with_same_clock_value(tmp_path):
+    store = RoutePlanStore(tmp_path / "routes.db")
+    timestamp = "2026-08-19T12:00:00+08:00"
+    with patch("storage.repositories.route._now", return_value=timestamp):
+        first = store.save({"plan_id": "route_first", "workspace_id": "workspace", "candidates": []})
+        store.save({"plan_id": "route_second", "workspace_id": "workspace", "candidates": []})
+        updated = store.save({**first, "title": "updated"})
+
+    assert updated["revision"] == 2
+    assert store.get_latest("workspace")["plan_id"] == "route_first"
+
+
+def test_route_plan_store_serializes_concurrent_revision_updates(tmp_path):
+    path = tmp_path / "routes.db"
+    store = RoutePlanStore(path)
+    plan = store.save({"plan_id": "route_shared", "workspace_id": "workspace", "candidates": []})
+    workers = 16
+    barrier = Barrier(workers)
+
+    def save_once(index):
+        barrier.wait()
+        return RoutePlanStore(path).save({**plan, "writer": index})["revision"]
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        revisions = list(executor.map(save_once, range(workers)))
+
+    assert sorted(revisions) == list(range(2, workers + 2))
+    assert store.get("route_shared")["revision"] == workers + 1
 
 
 def test_route_plan_presentation_loads_full_geometry(monkeypatch):
