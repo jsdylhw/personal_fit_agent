@@ -177,7 +177,7 @@ def strava_upload_endpoint(request: UploadStravaRequest, http_request: Request) 
 
 @app.post("/api/chat")
 def chat_endpoint(request: ChatRequest, http_request: Request) -> dict[str, Any]:
-    """Run one serialized, idempotent turn in an in-process chat session."""
+    """Run one serialized, idempotent turn in a durable chat session."""
     _require_api_access(http_request)
     session = chat_sessions.get_or_create(request.session_id)
     with session.lock:

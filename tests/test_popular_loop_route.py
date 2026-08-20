@@ -99,6 +99,86 @@ def test_popular_loop_preserves_complete_strava_geometry_and_adds_connectors():
     assert coordinates[-1] == [118.79, 32.02]
 
 
+def test_popular_loop_accepts_descriptive_name_hint():
+    plan = create_popular_loop_plan(
+        workspace_id="workspace", title="夫子庙环陵", origin="夫子庙", area="中山陵",
+        segment_name_hint="紫金山环陵", include_elevation=False,
+        config={"amap": {"web_service_key": "test"}}, place_searcher=_place,
+        segment_explorer=_explore, segment_fetcher=_detail, connector_router=_connector,
+    )
+
+    assert plan["route_mode"] == "popular_loop"
+    assert plan["candidates"][0]["strava_segments"][0]["segment_id"] == 12108894
+
+
+def test_popular_loop_tries_next_candidate_when_first_detail_is_invalid():
+    def explore(_bounds: str):
+        return {"segments": [
+            {
+                "id": 1, "name": "环陵热门线", "distance": 22_000,
+                "start_latlng": [32.061, 118.851], "end_latlng": [32.0611, 118.8511],
+                "star_count": 1_000,
+            },
+            {
+                "id": 12108894, "name": "环陵路一圈", "distance": 22_160,
+                "start_latlng": [32.061, 118.851], "end_latlng": [32.0612, 118.8512],
+                "star_count": 900,
+            },
+        ]}
+
+    fetched = []
+
+    def fetch(segment_id: int):
+        fetched.append(segment_id)
+        if segment_id == 1:
+            return {"id": 1, "name": "环陵热门线", "distance": 22_000, "map": {}}
+        return _detail(segment_id)
+
+    plan = create_popular_loop_plan(
+        workspace_id="workspace", title="夫子庙环陵", origin="夫子庙", area="中山陵",
+        segment_name_hint="环陵", include_elevation=False,
+        config={"amap": {"web_service_key": "test"}}, place_searcher=_place,
+        segment_explorer=explore, segment_fetcher=fetch, connector_router=_connector,
+    )
+
+    assert fetched == [1, 12108894]
+    assert plan["route_mode"] == "popular_loop"
+    assert plan["candidates"][0]["strava_segments"][0]["segment_id"] == 12108894
+
+
+def test_popular_loop_target_distance_accounts_for_connectors():
+    def explore(_bounds: str):
+        return {"segments": [
+            {
+                "id": 22, "name": "湖区环线甲", "distance": 22_000,
+                "start_latlng": [32.061, 118.851], "end_latlng": [32.0611, 118.8511],
+                "star_count": 100,
+            },
+            {
+                "id": 30, "name": "湖区环线乙", "distance": 30_000,
+                "start_latlng": [32.061, 118.851], "end_latlng": [32.0611, 118.8511],
+                "star_count": 200,
+            },
+        ]}
+
+    fetched = []
+
+    def fetch(segment_id: int):
+        fetched.append(segment_id)
+        detail = _detail(12108894)
+        return {**detail, "id": segment_id, "name": f"湖区环线{segment_id}", "distance": segment_id * 1_000}
+
+    plan = create_popular_loop_plan(
+        workspace_id="workspace", title="夫子庙湖区环线", origin="夫子庙", area="中山陵",
+        target_distance_km=30, include_elevation=False,
+        config={"amap": {"web_service_key": "test"}}, place_searcher=_place,
+        segment_explorer=explore, segment_fetcher=fetch, connector_router=_connector,
+    )
+
+    assert fetched == [22]
+    assert plan["candidates"][0]["strava_segments"][0]["segment_id"] == 22
+
+
 def test_popular_loop_tool_persists_compact_result(monkeypatch):
     plan = create_popular_loop_plan(
         workspace_id="workspace", title="夫子庙环陵", origin="夫子庙", area="中山陵",

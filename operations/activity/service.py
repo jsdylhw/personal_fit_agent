@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import requests
@@ -77,7 +78,9 @@ def sync_garmin_activities_tool(
                 continue
 
             raw_bytes = downloader.download_original(activity_id)
-            saved = save_original_as_fit(raw_bytes, output_dir, activity)
+            saved = _validate_then_save_original(
+                raw_bytes, output_dir, activity, save_original_as_fit=save_original_as_fit,
+            )
             _index_fit_paths(saved, activity_id=activity_id, indexed=indexed, errors=index_errors)
             downloaded.append({
                 "activity_id": activity_id,
@@ -108,6 +111,24 @@ def sync_garmin_activities_tool(
         "indexed_items": indexed,
         "index_errors": index_errors,
     }
+
+
+def _validate_then_save_original(
+    raw_bytes: bytes,
+    output_dir: Path,
+    activity: dict[str, Any],
+    *,
+    save_original_as_fit,
+) -> list[Path]:
+    """Parse a staged Garmin ORIGINAL before replacing any visible FIT file."""
+    from services.activity.catalog import parse_fit
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=".garmin-refresh-", dir=output_dir.parent) as temporary:
+        staged = save_original_as_fit(raw_bytes, Path(temporary), activity)
+        for path in staged:
+            parse_fit(path)
+    return save_original_as_fit(raw_bytes, output_dir, activity)
 
 
 def _index_fit_paths(

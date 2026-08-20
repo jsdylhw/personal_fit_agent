@@ -417,7 +417,7 @@ function renderRouteMap(data, presentationId) {
           opacity: route.active ? 0.95 : isStravaSegment ? 0.85 : 0.65,
           dashArray: isStravaSegment ? "7 5" : null,
         },
-      }).addTo(map).bindPopup(route.name || "路线候选");
+      }).addTo(map).bindPopup(leafletText(route.name || "路线候选"));
       layers.push(line);
       (Array.isArray(route.waypoints) ? route.waypoints : []).forEach((point, pointIndex) => {
         const lat = Number(point.latitude);
@@ -429,13 +429,19 @@ function renderRouteMap(data, presentationId) {
           fillColor: "#fff",
           fillOpacity: 1,
           weight: 3,
-        }).addTo(map).bindTooltip(point.name || `途经点 ${pointIndex + 1}`);
+        }).addTo(map).bindTooltip(leafletText(point.name || `途经点 ${pointIndex + 1}`));
         layers.push(marker);
       });
     });
     if (layers.length) map.fitBounds(L.featureGroup(layers).getBounds().pad(0.08));
   });
   return container;
+}
+
+function leafletText(value) {
+  const content = document.createElement("span");
+  content.textContent = String(value ?? "");
+  return content;
 }
 
 function renderMetricCards(data) {

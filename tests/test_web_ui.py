@@ -63,3 +63,11 @@ def test_web_ui_initializes_leaflet_view_before_adding_route_layers():
     fit_route = "map.fitBounds("
     assert initialize in source
     assert source.index(initialize) < source.index(add_route) < source.index(fit_route)
+
+
+def test_route_leaflet_labels_are_bound_as_text_nodes():
+    source = (WEB_ROOT / "app.js").read_text(encoding="utf-8")
+
+    assert "bindPopup(leafletText(" in source
+    assert "bindTooltip(leafletText(" in source
+    assert 'content.textContent = String(value ?? "")' in source

@@ -71,21 +71,30 @@ def create_popular_loop_plan(
         fetch = segment_fetcher or sink.get_segment
         bounds = _bounds_for_place(area_place, radius_km)
         sample = explore(bounds)
-        selected = _select_closed_segment(
+        origin_wgs = _display_coordinate(origin_place)
+        ranked_segments = _rank_closed_segments(
             sample.get("segments") or [],
             name_hint=str(segment_name_hint or "").strip(),
             target_distance_km=target_distance_km,
+            origin=origin_wgs,
         )
-        detail = fetch(int(selected["id"]))
-        feature = segment_detail_feature(detail)
-        coordinates = [list(point) for point in feature["geometry"]["coordinates"]]
-        closure_gap_m = haversine_m(coordinates[0], coordinates[-1])
-        if closure_gap_m > 1_000:
-            raise ValueError(f"选中的 Strava 路段不是闭合环线（缺口 {closure_gap_m:.0f} m）")
         route_connector = connector_router or _amap_connector(amap_key)
-        origin_wgs = _display_coordinate(origin_place)
-        outbound = route_connector(origin_wgs, coordinates[0])
-        inbound = route_connector(coordinates[-1], origin_wgs)
+        last_candidate_error: Exception | None = None
+        for selected in ranked_segments[:3]:
+            try:
+                detail = fetch(int(selected["id"]))
+                feature = segment_detail_feature(detail)
+                coordinates = [list(point) for point in feature["geometry"]["coordinates"]]
+                closure_gap_m = haversine_m(coordinates[0], coordinates[-1])
+                if closure_gap_m > 1_000:
+                    raise ValueError(f"选中的 Strava 路段不是闭合环线（缺口 {closure_gap_m:.0f} m）")
+                outbound = route_connector(origin_wgs, coordinates[0])
+                inbound = route_connector(coordinates[-1], origin_wgs)
+                break
+            except Exception as exc:
+                last_candidate_error = exc
+        else:
+            raise RuntimeError(f"Strava 闭合环线候选均不可用：{last_candidate_error}") from last_candidate_error
         geometry = _join_lines(
             outbound["geometry"]["coordinates"], coordinates, inbound["geometry"]["coordinates"],
         )
@@ -254,9 +263,13 @@ def _display_coordinate(place: dict[str, Any]) -> list[float]:
     ]
 
 
-def _select_closed_segment(
-    segments: Sequence[dict[str, Any]], *, name_hint: str, target_distance_km: float | None,
-) -> dict[str, Any]:
+def _rank_closed_segments(
+    segments: Sequence[dict[str, Any]],
+    *,
+    name_hint: str,
+    target_distance_km: float | None,
+    origin: Sequence[float] | None = None,
+) -> list[dict[str, Any]]:
     closed = []
     normalized_hint = "".join(name_hint.casefold().split())
     for index, segment in enumerate(segments):
@@ -267,16 +280,44 @@ def _select_closed_segment(
         if gap > 1_000:
             continue
         name = "".join(str(segment.get("name") or "").casefold().split())
-        name_match = 1 if normalized_hint and (normalized_hint in name or name in normalized_hint) else 0
+        name_match = _name_match_score(normalized_hint, name)
         distance_km = float(segment.get("distance") or 0) / 1_000
-        target_error = abs(distance_km - float(target_distance_km)) if target_distance_km is not None else 0
+        connector_km = 0.0
+        if origin is not None:
+            connector_km = (
+                haversine_m(origin, (start[1], start[0]))
+                + haversine_m((end[1], end[0]), origin)
+            ) / 1_000 * 1.25
+        target_error = (
+            abs(distance_km + connector_km - float(target_distance_km))
+            if target_distance_km is not None else 0
+        )
         popularity = float(segment.get("star_count") or segment.get("athlete_count") or 0)
         closed.append(((name_match, -target_error, popularity, -gap, -index), segment))
     if not closed:
         raise ValueError("Strava Explorer 在指定区域没有返回闭合骑行环线")
     if normalized_hint and not any(score[0] for score, _ in closed):
         raise ValueError(f"未找到名称匹配“{name_hint}”的闭合 Strava 环线")
-    return max(closed, key=lambda item: item[0])[1]
+    return [segment for _, segment in sorted(closed, key=lambda item: item[0], reverse=True)]
+
+
+def _select_closed_segment(
+    segments: Sequence[dict[str, Any]], *, name_hint: str, target_distance_km: float | None,
+) -> dict[str, Any]:
+    """Compatibility wrapper for callers that need only the first candidate."""
+    return _rank_closed_segments(
+        segments, name_hint=name_hint, target_distance_km=target_distance_km,
+    )[0]
+
+
+def _name_match_score(hint: str, name: str) -> int:
+    if not hint:
+        return 0
+    if hint in name or name in hint:
+        return 3
+    hint_pairs = {hint[index:index + 2] for index in range(max(0, len(hint) - 1))}
+    name_pairs = {name[index:index + 2] for index in range(max(0, len(name) - 1))}
+    return 2 if hint_pairs & name_pairs else 0
 
 
 def _amap_connector(key: str) -> ConnectorRouter:

@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+from agent.main_agent.context import AgentContext
+from agent.tools.handlers.activity_operations import _install_synced_activity_selection
 from operations.activity.reporting import ensure_summary
 from operations.activity.catalog import resolve_recent
 from operations.activity.sync import sync_recent
 from operations.activity.upload import upload_activity
+
+
+def test_index_failure_clears_stale_activity_focus(tmp_path):
+    context = AgentContext(
+        session_id="sync-index-failed",
+        current_fit_file=tmp_path / "old.fit",
+        selected_activities=[{"activity_key": "old", "fit_path": str(tmp_path / "old.fit")}],
+    )
+
+    _install_synced_activity_selection(
+        {"status": "failed", "error": "activity_index_failed", "activities": []}, context,
+    )
+
+    assert context.selected_activities == []
+    assert context.current_fit_file is None
 
 
 def test_resolve_recent_is_explicit_and_does_not_need_agent_context(monkeypatch):

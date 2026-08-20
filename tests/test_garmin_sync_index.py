@@ -144,6 +144,41 @@ def test_sync_garmin_force_download_refreshes_existing_fit(monkeypatch, tmp_path
     assert result["force_download"] is True
 
 
+def test_force_download_keeps_existing_fit_when_staged_parse_fails(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    fit_dir = tmp_path / "fits"
+    fit_dir.mkdir()
+    activity = {
+        "activityId": 456,
+        "activityName": "基础训练",
+        "startTimeLocal": "2026-05-26 21:38:30",
+    }
+    from integrations.garmin import activity_base_name
+    fit_path = fit_dir / f"{activity_base_name(activity)}.fit"
+    fit_path.write_bytes(b"old-valid-fit")
+
+    class FakeDownloader:
+        def login(self):
+            return None
+
+        def list_activities(self, count):
+            return [activity]
+
+        def download_original(self, activity_id):
+            return b"new-invalid-fit"
+
+    monkeypatch.setattr("settings.load_config", lambda: {"output_dir": str(fit_dir)})
+    monkeypatch.setattr("settings.cfg_get", lambda config, key, default=None: config.get(key, default))
+    monkeypatch.setattr("integrations.garmin.build_downloader", lambda config: FakeDownloader())
+    monkeypatch.setattr("services.activity.catalog.parse_fit", lambda path: (_ for _ in ()).throw(ValueError("bad FIT")))
+
+    result = sync_garmin_activities_tool(count=1, force_download=True)
+
+    assert result["failed"] == 1
+    assert result["downloaded"] == 0
+    assert fit_path.read_bytes() == b"old-valid-fit"
+
+
 def test_sync_garmin_continues_after_one_activity_download_fails(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     activities = [

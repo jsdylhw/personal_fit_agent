@@ -54,7 +54,7 @@ def _install_synced_activity_selection(result: dict[str, Any], context: AgentCon
             "type": "garmin_sync_result",
             "workflow_id": result.get("workflow_id"),
         })
-    elif status in {"completed", "partial", "no_activities"}:
+    elif status in {"completed", "partial", "no_activities"} or result.get("error") == "activity_index_failed":
         context.clear_activities()
 
 

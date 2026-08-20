@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 
 DEFAULT_DATABASE_PATH = Path("data") / "personal-fit-agent.db"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def database_path(path: str | Path | None = None) -> Path:
@@ -167,6 +167,19 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_route_plan_revisions_plan
             ON route_plan_revisions(plan_id, revision DESC);
+
+        -- Web chat state is compact but durable.  Domain artifacts remain in
+        -- their dedicated tables; this row restores the transcript, activity
+        -- focus, retry state, and request-id idempotency after a process restart.
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            session_id TEXT PRIMARY KEY,
+            context_json TEXT NOT NULL,
+            responses_json TEXT NOT NULL DEFAULT '[]',
+            updated_at REAL NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at
+            ON chat_sessions(updated_at DESC);
         """
     )
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
