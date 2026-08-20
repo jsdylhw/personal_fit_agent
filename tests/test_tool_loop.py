@@ -71,7 +71,7 @@ def test_pure_sync_executes_without_starting_analysis_workflow(monkeypatch):
     assert result["status"] == "completed"
     assert result["steps"] == [{"tool": "sync_garmin_activities", "input": {"count": 3}}]
     assert result["answer"].endswith("同步完成。")
-    assert result["answer"].startswith("已处理：本次请求｜同步 Garmin 活动")
+    assert result["answer"].startswith("已处理：本次 Garmin 同步｜同步 Garmin 活动")
     first_tools = client.return_value.create_messages.call_args_list[0].kwargs["tools"]
     assert [tool["name"] for tool in first_tools] == ["activate_skill"]
     second_tools = client.return_value.create_messages.call_args_list[1].kwargs["tools"]
@@ -129,6 +129,59 @@ def test_completed_sync_workflow_hides_tools_before_final_response(monkeypatch):
         "input": {"count": 3, "goals": ["upload_strava"]},
     }]
     assert client.return_value.create_messages.call_args_list[2].kwargs["tools"] == []
+
+
+def test_second_sync_turn_replaces_previous_activity_focus(monkeypatch):
+    context = AgentContext(session_id="two-sync-turns")
+    workflow_results = iter([
+        {
+            "status": "completed", "workflow_id": "run-old",
+            "sync": {"downloaded": 0, "skipped": 1},
+            "activities": [{"activity_key": "old", "fit_path": "old.fit"}],
+            "tasks": [{"status": "skipped"}],
+        },
+        {
+            "status": "completed", "workflow_id": "run-new",
+            "sync": {"downloaded": 1, "skipped": 0},
+            "activities": [{"activity_key": "new", "fit_path": "new.fit"}],
+            "tasks": [{"status": "completed"}],
+        },
+    ])
+    monkeypatch.setattr(
+        "operations.activity.workflow_service.sync_and_start_activity_workflow",
+        lambda **kwargs: next(workflow_results),
+    )
+    monkeypatch.setattr(
+        "agent.tools.handlers.activity_operations.ActivityStore.get_activity",
+        lambda self, key: {
+            "activity_key": key, "fit_path": f"{key}.fit", "sport_type": "cycling",
+            "start_time_local": "2026-08-20T11:00:00",
+        },
+    )
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
+        client.return_value.create_messages.side_effect = [
+            _activation_response("run-activity-workflow"),
+            {"content": [{
+                "type": "tool_use", "name": "sync_and_run_activity_workflow", "id": "tu-sync-old",
+                "input": {"count": 1, "goals": ["ensure_summary"]},
+            }], "stop_reason": "tool_use"},
+            {"content": [{"type": "text", "text": "第一次同步完成。"}], "stop_reason": "end_turn"},
+            _activation_response("run-activity-workflow"),
+            {"content": [{
+                "type": "tool_use", "name": "sync_and_run_activity_workflow", "id": "tu-sync-new",
+                "input": {"count": 1, "goals": ["ensure_summary"]},
+            }], "stop_reason": "tool_use"},
+            {"content": [{"type": "text", "text": "第二次同步完成。"}], "stop_reason": "end_turn"},
+        ]
+
+        first = run_tool_loop("同步 Garmin 最后一个活动并分析", context=context)
+        second = run_tool_loop("手机同步好了，重新拉最后一个活动并分析", context=context)
+
+    assert first["executions"][0]["result"]["workflow_id"] == "run-old"
+    assert second["executions"][0]["result"]["workflow_id"] == "run-new"
+    assert context.current_activity_key == "new"
+    assert str(context.current_fit_file) == "new.fit"
+    assert second["answer"].startswith("已处理：2026-08-20T11:00:00")
 
 
 def test_terminal_tool_stops_later_calls_from_the_same_response(monkeypatch):
@@ -248,6 +301,29 @@ def test_llm_disconnect_after_completed_workflow_reports_real_completion(monkeyp
     assert "最近工作流: run-finished（completed" in _build_state_preamble(context)
 
 
+def test_llm_disconnect_before_current_tool_does_not_report_previous_workflow():
+    context = AgentContext(
+        session_id="test-stale-workflow-disconnect",
+        last_tool_result={
+            "step_name": "sync_and_run_activity_workflow",
+            "result": {
+                "status": "completed",
+                "workflow_id": "old-run",
+                "sync": {"downloaded": 0, "skipped": 1},
+                "tasks": [{"status": "skipped"}],
+            },
+        },
+    )
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
+        client.return_value.create_messages.side_effect = LLMRequestError("connection closed before activation")
+        result = run_tool_loop("重新同步一次，活动更新了", context=context)
+
+    assert result["status"] == "llm_unavailable"
+    assert result["executions"] == []
+    assert "old-run" not in result["answer"]
+    assert "本轮已执行 0 步" in result["answer"]
+
+
 def test_max_steps_exceeded_returns_not_completed():
     context = AgentContext(session_id="test-max")
     response = {
@@ -293,7 +369,7 @@ def test_resolve_activities_unblocks_analyze_activity_in_same_round(monkeypatch)
     assert calls == ["resolve_activities", "analyze_activity"]
 
 
-def test_terminal_detail_query_hides_tools_before_final_response(monkeypatch):
+def test_terminal_detail_query_returns_tool_answer_without_final_model_call(monkeypatch):
     context = AgentContext(
         session_id="terminal-detail",
         current_fit_file=Path("/tmp/current.fit"),
@@ -308,10 +384,49 @@ def test_terminal_detail_query_hides_tools_before_final_response(monkeypatch):
         client.return_value.create_messages.side_effect = [
             _activation_response("analyze-activity"),
             {"id": "msg-query", "content": [{"type": "tool_use", "name": "query_activity_detail", "id": "tu-query", "input": {"question": "有冲刺吗"}}], "stop_reason": "tool_use"},
-            {"id": "msg-final", "content": [{"type": "text", "text": "冲刺表现良好。"}], "stop_reason": "end_turn"},
         ]
         result = run_tool_loop("这次有冲刺吗", context=context)
 
     assert result["status"] == "completed"
     assert result["steps"] == [{"tool": "query_activity_detail", "input": {"question": "有冲刺吗"}}]
-    assert client.return_value.create_messages.call_args_list[2].kwargs["tools"] == []
+    assert result["answer"].endswith("冲刺数据")
+    assert client.return_value.create_messages.call_count == 2
+
+
+def test_terminal_activity_report_replaces_pre_tool_commentary(monkeypatch):
+    context = AgentContext(
+        session_id="terminal-report-direct",
+        current_fit_file=Path("/tmp/current.fit"),
+        selected_activities=[{
+            "activity_key": "a1", "fit_path": "/tmp/current.fit",
+            "sport_type": "running", "start_time_local": "2026-08-19T18:40:15",
+        }],
+    )
+    report = "# 跑步详细分析\n\n心率后程上升，步频整体稳定。"
+    monkeypatch.setitem(
+        __import__("agent.tools.registry", fromlist=["TOOL_HANDLERS"]).TOOL_HANDLERS,
+        "analyze_activity",
+        lambda args, ctx: {
+            "step": "analyze_activity", "status": "completed", "answer": report,
+            "result": {"source": "existing_report"},
+        },
+    )
+    with patch("agent.main_agent.loop.AnthropicMessagesClient") as client:
+        client.return_value.create_messages.side_effect = [
+            _activation_response("analyze-activity"),
+            {
+                "id": "msg-report",
+                "content": [
+                    {"type": "text", "text": "I'll analyze the running activity."},
+                    {"type": "tool_use", "name": "analyze_activity", "id": "tu-report", "input": {}},
+                ],
+                "stop_reason": "tool_use",
+            },
+        ]
+
+        result = run_tool_loop("详细分析一下这个跑步活动", context=context)
+
+    assert result["status"] == "completed"
+    assert result["answer"].endswith(report)
+    assert "I'll analyze" not in result["answer"]
+    assert client.return_value.create_messages.call_count == 2

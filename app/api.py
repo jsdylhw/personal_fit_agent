@@ -40,6 +40,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 class DownloadGarminRequest(BaseModel):
     count: int | None = None
+    force_download: bool = False
 
 
 class AnalyzeFitRequest(BaseModel):
@@ -104,7 +105,7 @@ def garmin_download_endpoint(request: DownloadGarminRequest, http_request: Reque
     output_dir = _fit_output_dir(config)
     count = request.count or int(cfg_get(config, "download_count", 5))
 
-    result = sync_garmin_activities_tool(count=count)
+    result = sync_garmin_activities_tool(count=count, force_download=request.force_download)
     results = [
         {**item, "status": "downloaded"}
         for item in result.get("downloaded_items") or []
@@ -119,7 +120,7 @@ def garmin_download_endpoint(request: DownloadGarminRequest, http_request: Reque
     )
 
     return {
-        "status": "partial" if result.get("failed") else "ok",
+        "status": "partial" if result.get("failed") or result.get("index_errors") else "ok",
         "fit_dir": result.get("fit_dir") or str(output_dir),
         "count": len(results),
         "downloaded": int(result.get("downloaded") or 0),

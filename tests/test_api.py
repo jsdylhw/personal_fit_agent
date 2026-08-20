@@ -92,8 +92,8 @@ def test_garmin_download_delegates_to_activity_operation(tmp_path, monkeypatch):
     api, client, fit_dir = _prepare_api(tmp_path, monkeypatch)
     calls = []
 
-    def fake_sync(*, count):
-        calls.append(count)
+    def fake_sync(*, count, force_download=False):
+        calls.append((count, force_download))
         return {
             "fit_dir": str(fit_dir),
             "downloaded": 1,
@@ -107,10 +107,10 @@ def test_garmin_download_delegates_to_activity_operation(tmp_path, monkeypatch):
 
     monkeypatch.setattr(api, "sync_garmin_activities_tool", fake_sync)
 
-    response = client.post("/api/garmin/download", json={"count": 2})
+    response = client.post("/api/garmin/download", json={"count": 2, "force_download": True})
 
     assert response.status_code == 200
-    assert calls == [2]
+    assert calls == [(2, True)]
     assert response.json()["status"] == "ok"
     assert [item["status"] for item in response.json()["results"]] == ["downloaded", "skipped_existing"]
 

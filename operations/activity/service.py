@@ -26,7 +26,11 @@ def check_garmin_connection() -> dict[str, Any]:
     return {"status": "connected", "latest_activity": activities[0] if activities else None}
 
 
-def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
+def sync_garmin_activities_tool(
+    count: int = 5,
+    *,
+    force_download: bool = False,
+) -> dict[str, Any]:
     """从 Garmin 中国区下载最近 N 条活动的 FIT 文件,自动跳过已下载的。
 
     Args:
@@ -62,7 +66,7 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
         activity_id = activity.get("activityId")
         try:
             existing = existing_fit_paths(output_dir, activity)
-            if existing:
+            if existing and not force_download:
                 _index_fit_paths(existing, activity_id=activity_id, indexed=indexed, errors=index_errors)
                 skipped.append({
                     "activity_id": activity_id,
@@ -96,6 +100,7 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
         "downloaded": len(downloaded),
         "skipped": len(skipped),
         "failed": len(failed),
+        "force_download": bool(force_download),
         "downloaded_items": downloaded,
         "skipped_items": skipped,
         "failed_items": failed,

@@ -48,6 +48,10 @@ def test_no_conversation_skill_is_registered():
     assert get_skill("conversation") is None
 
 
+def test_legacy_route_skill_restores_as_route_discovery():
+    assert get_skill("plan-routes").skill_id == "discover-routes"
+
+
 def test_analysis_skills_keep_established_and_unified_tool_entry_points():
     """Adding selection APIs must not silently hide established analysis tools."""
     single = set(get_skill("analyze-activity").tool_names)

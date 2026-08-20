@@ -17,6 +17,7 @@ from services.route.itinerary import (
 )
 from services.route.segment_aware import apply_segment_aware_routing
 from services.route.segments import enrich_route_plan_with_segments
+from services.route.popular_loop import create_popular_loop_plan, reverse_popular_loop_plan
 from services.route.single_day import (
     _elevation_profile,
     compact_route_plan,
@@ -34,6 +35,10 @@ def generate_route_advice(args: dict[str, Any], context: AgentContext) -> dict[s
 
 def create_route_plan(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     return create_route_plan_tool(context, args=args, name="create_route_plan")
+
+
+def create_popular_loop(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    return create_popular_loop_tool(context, args=args, name="create_popular_loop")
 
 
 def create_itinerary_plan(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
@@ -111,6 +116,35 @@ def create_route_plan_tool(
     }
 
 
+def create_popular_loop_tool(
+    context: AgentContext,
+    *,
+    args: dict[str, Any] | None = None,
+    name: str = "create_popular_loop",
+) -> dict[str, Any]:
+    args = args or {}
+    plan = create_popular_loop_plan(
+        workspace_id=_workspace_id(context),
+        title=str(args.get("title") or "热门环线"),
+        origin=str(args.get("origin") or ""),
+        area=str(args.get("area") or ""),
+        segment_name_hint=str(args.get("segment_name_hint") or ""),
+        target_distance_km=args.get("target_distance_km"),
+        search_radius_km=float(args.get("search_radius_km", 8.0)),
+        include_elevation=bool(args.get("include_elevation", True)),
+        fallback_to_provider=bool(args.get("fallback_to_provider", True)),
+    )
+    stored = RoutePlanStore().save(plan)
+    compact = compact_route_plan(stored)
+    prefix = "已生成热门环线" if stored.get("route_mode") == "popular_loop" else "已降级生成普通往返路线"
+    return {
+        "step": name,
+        "status": "completed",
+        "answer": _plan_answer(compact, prefix=prefix),
+        "result": compact,
+    }
+
+
 def create_itinerary_plan_tool(
     context: AgentContext,
     *,
@@ -175,6 +209,8 @@ def update_route_plan_tool(
             "answer": _plan_answer(compact, prefix="已撤销到上一版"),
             "result": compact,
         }
+    if plan.get("route_mode") == "popular_loop" and operation not in {"reverse_candidate", "select_candidate"}:
+        raise ValueError("热门环线更换起点、区域或名称时请重新调用 create_popular_loop")
     segment_strategy = str(args.get("segment_strategy") or plan.get("segment_strategy") or "ignore").lower()
     segment_active = (
         str(plan.get("country_code") or "").upper() == "CN"
@@ -218,12 +254,18 @@ def update_route_plan_tool(
     elif operation == "reverse_candidate":
         if plan.get("schedule_type") in {"multi_day", "day_parts"}:
             raise ValueError("分段行程请使用 reverse_stage")
-        plan = edit_candidate_waypoints(
-            plan,
-            candidate_id=str(args.get("candidate_id") or "") or None,
-            operation="reverse",
-            include_elevation=route_include_elevation,
-        )
+        if plan.get("route_mode") == "popular_loop":
+            plan = reverse_popular_loop_plan(
+                plan, candidate_id=str(args.get("candidate_id") or "") or None,
+            )
+            segment_active = False
+        else:
+            plan = edit_candidate_waypoints(
+                plan,
+                candidate_id=str(args.get("candidate_id") or "") or None,
+                operation="reverse",
+                include_elevation=route_include_elevation,
+            )
     elif operation == "reverse_stage":
         if plan.get("schedule_type") not in {"multi_day", "day_parts"}:
             raise ValueError("reverse_stage requires a multi-day or day-parts plan")
@@ -483,6 +525,7 @@ def _latest_user_message(context: AgentContext) -> str:
 
 HANDLERS = {
     "generate_route_advice": generate_route_advice,
+    "create_popular_loop": create_popular_loop,
     "create_route_plan": create_route_plan,
     "create_itinerary_plan": create_itinerary_plan,
     "update_route_plan": update_route_plan,

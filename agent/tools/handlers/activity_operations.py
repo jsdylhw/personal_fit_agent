@@ -5,23 +5,57 @@ from __future__ import annotations
 from typing import Any
 
 from agent.main_agent.context import AgentContext
+from domain.activity.models import ActivityHandle
+from storage.repositories.activity import ActivityStore
 
 
 def sync_garmin_activities(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     from operations.activity.sync import sync_recent
 
-    return sync_recent(count=int(args.get("count", 5)))
+    result = sync_recent(
+        count=int(args.get("count", 5)),
+        force_download=bool(args.get("force_download")),
+    )
+    _install_synced_activity_selection(result, context)
+    return result
 
 
 def sync_and_run_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
     from operations.activity.workflow_service import sync_and_start_activity_workflow
 
-    return sync_and_start_activity_workflow(
+    result = sync_and_start_activity_workflow(
         count=int(args.get("count", 5)),
         goals=args.get("goals") or ("ensure_summary",),
         force=bool(args.get("force")),
+        force_download=bool(args.get("force_download")),
         force_upload=bool(args.get("force_upload")),
     )
+    _install_synced_activity_selection(result, context)
+    return result
+
+
+def _install_synced_activity_selection(result: dict[str, Any], context: AgentContext) -> None:
+    """Make follow-up references point at this sync result, never an older FIT."""
+    rows = [item for item in result.get("activities") or [] if isinstance(item, dict)]
+    handles: list[ActivityHandle] = []
+    store = ActivityStore()
+    for item in rows:
+        key = str(item.get("activity_key") or "")
+        indexed = store.get_activity(key) if key else None
+        source = indexed or {
+            **item,
+            "fit_path": item.get("fit_path") or item.get("path"),
+        }
+        if source.get("activity_key"):
+            handles.append(ActivityHandle.from_index_entry(source))
+    status = str(result.get("status") or "")
+    if handles:
+        context.set_selected_activities(handles, scope={
+            "type": "garmin_sync_result",
+            "workflow_id": result.get("workflow_id"),
+        })
+    elif status in {"completed", "partial", "no_activities"}:
+        context.clear_activities()
 
 
 def run_activity_workflow(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:

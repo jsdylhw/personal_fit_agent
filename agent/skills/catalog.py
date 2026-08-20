@@ -41,6 +41,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
         ),
         tool_names=_ACTIVITY_NAVIGATION_TOOLS,
         public_intent="analyze_single",
+        library_path="activity/manage-activity-library.md",
     ),
     SkillSpec(
         skill_id="analyze-activity",
@@ -56,6 +57,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             "query_activity_detail",
         ),
         public_intent="analyze_single",
+        library_path="analysis/analyze-activity.md",
     ),
     SkillSpec(
         skill_id="analyze-training-history",
@@ -69,6 +71,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             *_HISTORY_EVIDENCE_TOOLS,
         ),
         public_intent="analyze_range",
+        library_path="analysis/analyze-training-history.md",
     ),
     SkillSpec(
         skill_id="sync-garmin-activities",
@@ -79,6 +82,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
         tool_names=("sync_garmin_activities",),
         public_intent="sync",
         allow_side_effects=True,
+        library_path="operations/sync-garmin-activities.md",
     ),
     SkillSpec(
         skill_id="publish-to-strava",
@@ -89,6 +93,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
         tool_names=("resolve_activities", "run_activity_workflow"),
         public_intent="upload",
         allow_side_effects=True,
+        library_path="operations/publish-to-strava.md",
     ),
     SkillSpec(
         skill_id="run-activity-workflow",
@@ -106,6 +111,7 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
         ),
         public_intent="mixed",
         allow_side_effects=True,
+        library_path="operations/run-activity-workflow.md",
     ),
     SkillSpec(
         skill_id="coach-training",
@@ -120,32 +126,54 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
             "generate_training_advice",
         ),
         public_intent="training_advice",
+        library_path="coaching/coach-training.md",
     ),
     SkillSpec(
-        skill_id="plan-routes",
+        skill_id="plan-popular-loop",
         description=(
-            "Recommend a route type, duration, distance, terrain, and training constraints. "
-            "Use for route or riding-destination advice and nearby Strava Segment context, "
-            "not for activity analysis, Garmin sync, or Strava activity upload."
+            "Build a domestic ride around a named or area-specific complete popular closed loop, "
+            "with map-routed access from and back to the rider's origin. Use for classic loops such as 环陵 or 环湖."
+        ),
+        tool_names=("create_popular_loop", "update_route_plan", "get_route_plan", "explore_route_segments"),
+        public_intent="route_advice",
+        library_path="route/plan-popular-loop.md",
+    ),
+    SkillSpec(
+        skill_id="plan-waypoint-route",
+        description=(
+            "Create, persist, inspect, or conversationally edit routes whose endpoints, waypoints, days, or day parts are explicit. "
+            "Use for direct routes, ordinary loops, multi-day trips, reversals, and waypoint replacements."
         ),
         tool_names=(
-            "generate_route_advice",
-            "create_route_plan",
-            "create_itinerary_plan",
-            "update_route_plan",
-            "get_route_plan",
-            "explore_route_segments",
+            "create_route_plan", "create_itinerary_plan", "update_route_plan",
+            "get_route_plan", "explore_route_segments",
         ),
         public_intent="route_advice",
+        library_path="route/plan-waypoint-route.md",
+    ),
+    SkillSpec(
+        skill_id="discover-routes",
+        description=(
+            "Recommend route ideas when the rider gives a region, time, distance, terrain, scenery, or training goal "
+            "but has not fixed a complete waypoint sequence. May turn selected ideas into persisted routes."
+        ),
+        tool_names=(
+            "generate_route_advice", "create_popular_loop", "create_route_plan", "create_itinerary_plan",
+            "update_route_plan", "get_route_plan", "explore_route_segments",
+        ),
+        public_intent="route_advice",
+        library_path="route/discover-routes.md",
     ),
 )
 
 _BY_ID = {skill.skill_id: skill for skill in SKILL_CATALOG}
+_LEGACY_ALIASES = {"plan-routes": "discover-routes"}
 
 
 def get_skill(skill_id: str | None) -> SkillSpec | None:
     """Return a registered skill without accepting prompt-defined skills."""
-    return _BY_ID.get(str(skill_id or ""))
+    normalized = str(skill_id or "")
+    return _BY_ID.get(_LEGACY_ALIASES.get(normalized, normalized))
 
 
 def list_skill_descriptors() -> list[dict[str, str]]:

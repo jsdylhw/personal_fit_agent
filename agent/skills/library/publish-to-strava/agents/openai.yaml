@@ -1,4 +1,0 @@
-interface:
-  display_name: "Publish to Strava"
-  short_description: "Publish local activities to Strava"
-  default_prompt: "Publish or refresh selected local activities on Strava."

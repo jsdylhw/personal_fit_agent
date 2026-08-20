@@ -331,6 +331,36 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         category=CATEGORY_COACHING,
     ),
     ToolDef(
+        name="create_popular_loop",
+        description=(
+            "创建并持久化一条国内热门闭合骑行环线：从指定起点用高德接驳到完整 Strava 环线，"
+            "骑完整环线后再接驳返回起点。适合环陵、环湖、经典绕圈等明确区域或命名环线。"
+        ),
+        input_schema={
+            "type": "object",
+            "required": ["title", "origin", "area"],
+            "properties": {
+                "title": {"type": "string"},
+                "origin": {"type": "string", "description": "实际出发和返回地点，如南京夫子庙"},
+                "area": {"type": "string", "description": "环线所在区域或地标，如南京中山陵"},
+                "segment_name_hint": {
+                    "type": "string",
+                    "description": "用户提到的环线或道路名称片段，如环陵；不确定时可省略。",
+                },
+                "target_distance_km": {"type": "number", "minimum": 1},
+                "search_radius_km": {
+                    "type": "number", "minimum": 0.5, "maximum": 20, "default": 8,
+                },
+                "include_elevation": {"type": "boolean", "default": True},
+                "fallback_to_provider": {
+                    "type": "boolean", "default": True,
+                    "description": "找不到完整 Strava 环线时，是否明确降级为起点到区域的普通地图往返。",
+                },
+            },
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
         name="create_route_plan",
         description=(
             "创建并持久化一个经过地图服务验证的单日路线计划。国内使用高德骑行，"
@@ -516,6 +546,10 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
             "type": "object",
             "properties": {
                 "count": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                "force_download": {
+                    "type": "boolean", "default": False,
+                    "description": "仅当用户明确要求刷新同一条 Garmin 活动的原始 FIT 时使用；新增活动不需要。",
+                },
             },
         },
         category=CATEGORY_OPERATION,
@@ -532,6 +566,10 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
             "type": "object",
             "properties": {
                 "count": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                "force_download": {
+                    "type": "boolean", "default": False,
+                    "description": "重新下载本地已有的同一 Garmin 活动；不要把普通的新活动同步设为 true。",
+                },
                 "goals": {
                     "type": "array",
                     "items": {"type": "string", "enum": ["ensure_summary", "upload_strava", "aggregate_report"]},

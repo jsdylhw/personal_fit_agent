@@ -97,6 +97,8 @@ python -m evaluation.cli run --cases evaluation/cases/live.jsonl --mode live --r
 
 评测输出工具选择成功率、任务完成率、回答一致性、响应时间、Token 用量和可选的估算成本。用例格式与报告说明见 [`evaluation/README.md`](evaluation/README.md)。
 
+如果要从代码层理解 Garmin 同步、活动身份、ActivityRun、断线恢复和多层测试，请阅读 [`docs/garmin-sync-workflow-guide.md`](docs/garmin-sync-workflow-guide.md)。
+
 ## 数据与隐私
 
 - 下载的 FIT、分析报告和活动处理记录均为本地运行产物，默认不提交到 Git。

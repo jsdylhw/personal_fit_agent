@@ -197,6 +197,9 @@ def compact_route_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "schedule_type": plan.get("schedule_type") or "single_day",
         "day_count": plan.get("day_count") or 1,
         "country_code": plan.get("country_code"),
+        "route_mode": plan.get("route_mode"),
+        "popular_loop_request": plan.get("popular_loop_request") or {},
+        "popular_loop_error": plan.get("popular_loop_error") or {},
         "handoff_tolerance_km": plan.get("handoff_tolerance_km"),
         "segment_strategy": plan.get("segment_strategy") or "ignore",
         "segment_preferences": plan.get("segment_preferences") or [],
@@ -247,11 +250,16 @@ def route_candidate(
     config: dict[str, Any],
 ) -> dict[str, Any]:
     queries = [str(value).strip() for value in candidate.get("waypoints") or [] if str(value).strip()]
-    if len(queries) < 2:
-        raise ValueError("each candidate requires at least two waypoint queries")
     route_type = str(candidate.get("route_type") or "point_to_point").strip().lower()
     if route_type not in {"point_to_point", "loop"}:
         raise ValueError("route_type must be point_to_point or loop")
+    # A loop closes itself at the provider boundary.  Models and users still
+    # occasionally repeat the start explicitly (A -> B -> A); keeping it would
+    # ask AMap for an extra A -> A leg and may return RESULTS_ARE_EMPTY.
+    if route_type == "loop" and len(queries) >= 2 and queries[-1].casefold() == queries[0].casefold():
+        queries.pop()
+    if len(queries) < 2:
+        raise ValueError("each candidate requires at least two distinct waypoint queries")
     if country_code == "CN":
         places, route = _route_amap(queries, route_type, config)
     else:

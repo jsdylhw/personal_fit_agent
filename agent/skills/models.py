@@ -14,6 +14,7 @@ class SkillSpec:
     tool_names: tuple[str, ...]
     public_intent: str
     allow_side_effects: bool = False
+    library_path: str | None = None
 
     def public_descriptor(self) -> dict[str, str]:
         """Return metadata safe to include before Skill activation."""

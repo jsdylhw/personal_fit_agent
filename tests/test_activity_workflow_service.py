@@ -123,7 +123,7 @@ def test_service_retry_recovers_persisted_running_task_after_lock_is_acquired(mo
 def test_sync_service_freezes_exact_indexed_items_and_persists_sync_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "operations.activity.workflow_service.sync_recent",
-        lambda count: {
+        lambda count, force_download=False: {
             "status": "partial", "downloaded": 1, "skipped": 1, "failed": 1,
             "failed_items": [{"id": "remote-failed"}],
             "activities": [
@@ -132,9 +132,14 @@ def test_sync_service_freezes_exact_indexed_items_and_persists_sync_metadata(mon
             ],
         },
     )
+    def complete_run(run, **kwargs):
+        for task in run["tasks"]:
+            task["status"] = "completed"
+        return {"workflow": {"status": "completed"}, "waiting_for": []}
+
     monkeypatch.setattr(
         "operations.activity.workflow_service.execute_activity_run",
-        lambda run, **kwargs: {"workflow": {"status": "completed"}, "waiting_for": []},
+        complete_run,
     )
 
     result = sync_and_start_activity_workflow(
@@ -142,6 +147,7 @@ def test_sync_service_freezes_exact_indexed_items_and_persists_sync_metadata(mon
     )
 
     assert result["created"] is True
+    assert result["status"] == "partial"
     assert [item["activity_key"] for item in result["activities"]] == ["a1", "a2"]
     from storage.repositories.workflow import load_workflow
     run = load_workflow(result["workflow_id"], directory=tmp_path)
@@ -150,5 +156,26 @@ def test_sync_service_freezes_exact_indexed_items_and_persists_sync_metadata(mon
     assert run["request"]["sync"] == {
         "schema_version": "activity_workflow_sync.v1", "requested_count": 5, "status": "partial",
         "downloaded": 1, "skipped": 1, "failed": 1, "indexed_activity_keys": ["a1", "a2"],
-        "failed_items": [{"id": "remote-failed"}],
+        "failed_items": [{"id": "remote-failed"}], "index_failed": 0,
+        "index_errors": [], "force_download": False,
     }
+
+
+def test_sync_service_surfaces_index_failure_without_creating_workflow(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "operations.activity.workflow_service.sync_recent",
+        lambda count, force_download=False: {
+            "status": "partial", "downloaded": 1, "skipped": 0, "failed": 0,
+            "activities": [], "failed_items": [], "index_failed": 1,
+            "index_errors": [{"path": "broken.fit", "error": "FitParseError"}],
+            "force_download": force_download,
+        },
+    )
+
+    result = sync_and_start_activity_workflow(count=1, directory=tmp_path)
+
+    assert result["status"] == "failed"
+    assert result["error"] == "activity_index_failed"
+    assert result["sync"]["index_failed"] == 1
+    assert result["sync"]["index_errors"][0]["error"] == "FitParseError"
+    assert list(tmp_path.glob("*.json")) == []

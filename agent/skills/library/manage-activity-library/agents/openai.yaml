@@ -1,4 +1,0 @@
-interface:
-  display_name: "Manage Activity Library"
-  short_description: "Find and manage local activities"
-  default_prompt: "Find or manage activities in the local library."

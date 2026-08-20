@@ -71,6 +71,28 @@ def test_create_loop_reuses_first_waypoint_and_compacts_geometry():
     assert compact["candidates"][0]["waypoints"][0]["name"] == "Annecy"
 
 
+def test_create_loop_ignores_explicit_duplicate_start_at_end():
+    captured = []
+
+    def route_google(queries, country_code, route_type, config):
+        captured.append(list(queries))
+        return _places(queries), _route_result()
+
+    with patch("services.route.single_day.load_config", return_value={}), patch(
+        "services.route.single_day._route_google", side_effect=route_google,
+    ):
+        create_single_day_plan(
+            workspace_id="workspace", title="重复首点", country_code="FR",
+            candidates=[{
+                "name": "环线", "waypoints": ["Annecy", "Talloires", " annecy "],
+                "route_type": "loop",
+            }],
+            include_elevation=False,
+        )
+
+    assert captured == [["Annecy", "Talloires"]]
+
+
 def test_route_plan_store_persists_revision_and_latest_workspace(tmp_path):
     store = RoutePlanStore(tmp_path / "routes.db")
     plan = {

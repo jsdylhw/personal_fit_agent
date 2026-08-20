@@ -56,11 +56,22 @@ def test_workflow_handler_returns_service_result_directly(monkeypatch):
 
 def test_sync_workflow_handler_returns_service_result_directly(monkeypatch):
     context = AgentContext(session_id="sync-workflow-tool")
+    context.set_single_activity(__import__("domain.activity.models", fromlist=["ActivityHandle"]).ActivityHandle(
+        activity_key="old", fit_path="old.fit",
+    ))
     monkeypatch.setattr(
         "operations.activity.workflow_service.sync_and_start_activity_workflow",
         lambda **kwargs: {
             "status": "completed", "workflow_id": "run-2",
             "execution": {"waiting_for": []},
+            "activities": [{"activity_key": "new", "fit_path": "new.fit"}],
+        },
+    )
+    monkeypatch.setattr(
+        "agent.tools.handlers.activity_operations.ActivityStore.get_activity",
+        lambda self, key: {
+            "activity_key": key, "fit_path": "new.fit", "sport_type": "cycling",
+            "start_time_local": "2026-08-20T11:00:00",
         },
     )
 
@@ -70,6 +81,11 @@ def test_sync_workflow_handler_returns_service_result_directly(monkeypatch):
 
     assert result["status"] == "completed"
     assert result["workflow_id"] == "run-2"
+    assert context.current_activity_key == "new"
+    assert str(context.current_fit_file) == "new.fit"
+    assert context.selected_activity_range == {
+        "type": "garmin_sync_result", "workflow_id": "run-2",
+    }
 
 
 def test_pure_sync_handler_does_not_start_activity_workflow(monkeypatch):
@@ -84,7 +100,7 @@ def test_pure_sync_handler_does_not_start_activity_workflow(monkeypatch):
 
     result = TOOL_HANDLERS["sync_garmin_activities"]({"count": 3}, context)
 
-    assert calls == [{"count": 3}]
+    assert calls == [{"count": 3, "force_download": False}]
     assert result == {"status": "completed", "downloaded": 2, "skipped": 1, "failed": 0}
     assert "workflow_id" not in result
 
