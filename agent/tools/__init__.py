@@ -3,8 +3,8 @@
 按类型组织:
 - spec.py          — ToolDef + ToolRegistry + renderers + 类别常量
 - fit_analysis/    — ActivityAnalysisAgent 内部只读 FIT 数据工具
-- index_query.py   — 活动索引工具 (3 ToolDef)
 - agent_tools.py   — Main Agent 暴露的粗粒度业务工具
+- registry.py      — Main Agent 工具 handler 注册表
 
 确定性 FIT 计算在 fit.analysis 中，子 Agent 的 ToolDef 与 handler 在
 agent.tools.fit_analysis 中。
@@ -18,9 +18,7 @@ from agent.tools.fit_analysis import (
     fit_analysis_tool_catalog,
     fit_data_tool_catalog,
 )
-from agent.tools.index_query import INDEX_TOOLS, index_tool_catalog
 from agent.tools.spec import (
-    CATEGORY_ACTIVITY_INDEX,
     CATEGORY_ACTIVITY_SELECTION,
     CATEGORY_ANALYSIS,
     CATEGORY_COACHING,
@@ -35,7 +33,6 @@ from agent.tools.spec import (
 )
 __all__ = [
     # spec
-    "CATEGORY_ACTIVITY_INDEX",
     "CATEGORY_ACTIVITY_SELECTION",
     "CATEGORY_ANALYSIS",
     "CATEGORY_COACHING",
@@ -53,9 +50,6 @@ __all__ = [
     "call_fit_analysis_tool",
     "fit_analysis_tool_catalog",
     "fit_data_tool_catalog",
-    # index_query
-    "INDEX_TOOLS",
-    "index_tool_catalog",
     # agent_tools
     "MAIN_AGENT_TOOLS",
     "AGENT_TOOLS",

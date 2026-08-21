@@ -191,14 +191,15 @@ function renderRouteProbe(probe) {
     const isSegment = feature.properties?.kind === "strava_segment";
     const isLocalRebuild = feature.properties?.kind === "local_graphhopper_rebuild";
     const isCandidate = feature.properties?.kind === "graphhopper_candidate";
+    const isHandoffGap = feature.properties?.kind === "strava_handoff_gap";
     const layer = L.geoJSON(feature, {
-      style: { color: feature.properties?.color || (isSegment ? "#d7438d" : "#2d7dd2"), weight: isSegment ? 6 : 4, opacity: .88 },
+      style: { color: feature.properties?.color || (isSegment ? "#d7438d" : isHandoffGap ? "#e0a62b" : "#2d7dd2"), weight: isSegment ? 6 : 4, opacity: .88, dashArray: isHandoffGap ? "7 7" : undefined },
     }).addTo(routeProbeLayer);
     const item = document.createElement("li");
     const title = document.createElement("strong");
-    title.textContent = `${isSegment ? "Strava 路段" : isLocalRebuild ? "本地重建" : isCandidate ? "连接候选" : "连接"} · ${feature.properties?.name || "未命名路段"}`;
+    title.textContent = `${isSegment ? "Strava 路段" : isHandoffGap ? "待核验接缝" : isLocalRebuild ? "本地重建" : isCandidate ? "连接候选" : "连接"} · ${feature.properties?.name || "未命名路段"}`;
     const detail = document.createElement("small");
-    detail.textContent = `${formatDistance(feature.properties?.distance_m || 0)}${feature.properties?.reverse_overlap_m ? ` · 反向重叠 ${formatDistance(feature.properties.reverse_overlap_m)}` : ""}${feature.properties?.ascend_m ? ` · 爬升 ${Math.round(feature.properties.ascend_m)} m` : ""}`;
+    detail.textContent = `${formatDistance(feature.properties?.distance_m || 0)}${feature.properties?.handoff_gap_m ? " · 非路网接缝，需核验" : ""}${feature.properties?.local_distance_m ? ` · 区域 ${formatDistance(feature.properties.local_distance_m)}` : ""}${feature.properties?.local_retrace_ratio != null ? ` · 区域重复 ${(Number(feature.properties.local_retrace_ratio) * 100).toFixed(1)}%` : ""}${feature.properties?.reverse_overlap_m ? ` · 反向重叠 ${formatDistance(feature.properties.reverse_overlap_m)}` : ""}${feature.properties?.ascend_m ? ` · 爬升 ${Math.round(feature.properties.ascend_m)} m` : ""}`;
     item.append(title, detail);
     item.addEventListener("click", () => {
       if (isCandidate) {
@@ -232,7 +233,15 @@ async function showRouteProbe(name, loadingText, fallbackName, readyText) {
     renderRouteProbe(probe);
     const meta = probe.metadata || {};
     const distance = meta.total_distance_m || meta.local_distance_m || meta.source_distance_m || 0;
-    summaryNode.textContent = `${meta.name || fallbackName} · ${formatDistance(distance)}${meta.known_segment_ascent_m ? ` · 已知主爬 ${Math.round(meta.known_segment_ascent_m)} m` : meta.source_ascent_m ? ` · 已知爬升 ${Math.round(meta.source_ascent_m)} m` : ""}${meta.closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.closure_gap_m)} m` : meta.local_closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.local_closure_gap_m)} m` : ""}`;
+    const candidateCount = Number(meta.candidate_count || 0);
+    const candidateMinDistance = Number(meta.candidate_min_distance_m || 0);
+    const candidateMaxDistance = Number(meta.candidate_max_distance_m || 0);
+    const routeSummary = candidateCount > 1 && candidateMinDistance && candidateMaxDistance
+      ? `${candidateCount} 条候选 · ${formatDistance(candidateMinDistance)}–${formatDistance(candidateMaxDistance)}`
+      : candidateCount > 1
+        ? `${candidateCount} 条候选 · 目标 ${formatDistance(meta.target_distance_m || distance)}`
+        : formatDistance(distance);
+    summaryNode.textContent = `${meta.name || fallbackName} · ${routeSummary}${meta.known_segment_ascent_m ? ` · 已知主爬 ${Math.round(meta.known_segment_ascent_m)} m` : meta.source_ascent_m ? ` · 已知爬升 ${Math.round(meta.source_ascent_m)} m` : ""}${meta.closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.closure_gap_m)} m` : meta.local_closure_gap_m != null ? ` · 闭合差 ${Math.round(meta.local_closure_gap_m)} m` : ""}`;
     setStatus(readyText, "ready");
   } catch (error) {
     setStatus(error.message, "error");
@@ -275,4 +284,20 @@ document.querySelector("#show-hangzhou-nw-reversible-probe").addEventListener("c
 document.querySelector("#show-jingshan-town-probe").addEventListener("click", showJingshanTownProbe);
 document.querySelector("#show-hangzhou-retrace-probe").addEventListener("click", showHangzhouRetraceProbe);
 updatePlannerMode();
-api("/health").then(() => setStatus("本地服务已就绪", "ready")).catch(() => setStatus("本地服务不可用", "error"));
+
+// Local experiments can be opened directly without adding a permanent button
+// for every ignored route-probe GeoJSON file.
+const requestedProbe = new URLSearchParams(window.location.search).get("probe");
+const validRequestedProbe = requestedProbe && /^[a-z0-9][a-z0-9_-]*$/.test(requestedProbe);
+api("/health").then(() => {
+  setStatus("本地服务已就绪", "ready");
+  if (validRequestedProbe) {
+    return showRouteProbe(
+      requestedProbe,
+      "正在读取本地路线探针…",
+      "本地路线探针",
+      "已叠加本地路线探针",
+    );
+  }
+  return null;
+}).catch(() => setStatus("本地服务不可用", "error"));

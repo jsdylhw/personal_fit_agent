@@ -1,4 +1,0 @@
-interface:
-  display_name: "Run Activity Workflow"
-  short_description: "Run recoverable multi-step activity jobs"
-  default_prompt: "Run or recover a multi-step activity workflow."

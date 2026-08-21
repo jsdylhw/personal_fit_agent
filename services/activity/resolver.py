@@ -98,12 +98,28 @@ def _filter_common(
 
 
 def _ordered(rows: list[dict[str, Any]], order: str) -> list[dict[str, Any]]:
+    if order == "longest":
+        return sorted(rows, key=_duration_order_key, reverse=True)
     result = sorted(rows, key=_row_order_key)
     return result if order == "earliest" else list(reversed(result))
 
 
 def _row_order_key(row: dict[str, Any]) -> tuple[str, str]:
     return str(row.get("start_time_local") or ""), str(row.get("file_name") or "")
+
+
+def _duration_order_key(row: dict[str, Any]) -> tuple[float, tuple[str, str]]:
+    value = row.get("duration_min")
+    if value is None and row.get("duration_s") is not None:
+        try:
+            value = float(row["duration_s"]) / 60
+        except (TypeError, ValueError):
+            value = None
+    try:
+        duration = float(value) if value is not None else -1.0
+    except (TypeError, ValueError):
+        duration = -1.0
+    return duration, _row_order_key(row)
 
 
 def _resolve_date(value: str, *, today: date) -> str:

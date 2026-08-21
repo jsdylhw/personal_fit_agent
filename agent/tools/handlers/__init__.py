@@ -1,1 +1,1 @@
-"""Thin adapters from LLM tool calls to application services."""
+"""Domain-owned adapters from Agent tool calls to services and operations."""

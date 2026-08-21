@@ -11,13 +11,15 @@
 - 用自然语言查询单次活动，例如“100–200 秒有没有连续冲刺”。
 - 汇总最近活动、比较训练表现、查看训练负荷，并给出下一次训练建议。
 - 批量生成活动报告、上传 Strava；中断或失败后可继续处理。
-- 提供本地 OSM/GraphHopper 骑行路线实验：搜索景点、生成自由环线，或用热门爬坡路段组合训练路线。
+- 规划国内外单日、多日或上下午分段骑行路线，并通过对话选择、修改、反转、撤销和确认候选。
+- 在国内路线中展示并组合真实 Strava 路段；支持经典完整环线以及开放式距离、方向、地形和风景发现。
+- 在 Web UI 中查看活动报告、训练曲线、路线候选、参考海拔和 Strava 路段叠加图。
 
 ## 它如何工作
 
 运动数据、活动索引、分析报告和处理记录默认保存在本地。大模型负责理解问题、选择分析方式和解释结果；FIT 解析、指标计算、路线计算和文件管理由本地程序完成。
 
-只有在你主动使用时才会访问外部服务：Garmin 用于同步、配置的大模型服务用于分析、Strava 用于上传。请把账号和 API 凭据放在本地 `config.yaml`，不要提交到 Git。
+只有在你主动使用相应功能时才会访问外部服务：Garmin 用于同步，大模型服务用于理解和分析，Strava 用于活动发布与国内热门路段参考，高德用于国内地点检索和骑行算路，Google 用于国外地点、路线和参考海拔。请把账号和 API 凭据放在本地 `config.yaml`，不要提交到 Git。
 
 ## 快速开始
 
@@ -33,7 +35,7 @@ pip install -r requirements.txt
 cp config.yaml.example config.yaml
 ```
 
-编辑 `config.yaml` 并填入凭据：`agent` 用于对话和分析；Garmin 配置仅在同步时需要；Strava 配置仅在上传时需要。若要通过局域网或反向代理访问 Web UI，请设置随机的 `web_api_token`。`config.yaml` 不会提交到 Git。
+编辑 `config.yaml` 并填入所需凭据：`agent` 用于对话和分析；Garmin 配置仅在同步时需要；Strava 配置用于活动发布和国内热门路段；高德与 Google 配置用于路线规划。若要通过局域网或反向代理访问 Web UI，请设置随机的 `web_api_token`。`config.yaml` 不会提交到 Git。
 
 启动对话：
 
@@ -49,7 +51,18 @@ python -m app.cli chat
 汇总最近一周训练负荷，并建议下次训练
 同步最新五个活动，分析后上传到 Strava
 重新分析所有活动，生成 V2 报告
+从青浦新城地铁站出发骑一圈 50km 再回来，沿途风景好一点
+规划一条夫子庙到中山陵再到玄武湖的路线
+从夫子庙出发骑完整环陵路线
 ```
+
+启动 Web UI：
+
+```bash
+python -m uvicorn app.api:app --reload --host 127.0.0.1 --port 8000
+```
+
+打开 <http://127.0.0.1:8000>。Web 对话、候选预览和请求幂等状态会持久化到本地 SQLite；路线图中可切换候选，并在同一张地图上按顺序选择最多三个 Strava 路段生成新候选。
 
 也可直接分析一个本地文件：
 
@@ -75,16 +88,17 @@ python -m app.debug_cli rebuild-v2-reports --scope all
 
 如需给外部程序查看 JSON，使用 `ActivityStore.export_report(activity_key, path)` 显式导出；导出文件不是缓存，也不参与后续状态判断。
 
-## 本地路线实验
+## Agent 路线规划
 
-路线 Demo 位于 `demo/osm_cycling_router/`。它使用本地 OpenStreetMap 数据和 GraphHopper 计算路线，适合验证景点检索、自由环线、热门爬坡路段组合与回头路惩罚等能力：
+路线能力由三个互斥的入口组织：
 
-```bash
-cd demo/osm_cycling_router
-docker compose up --build
-```
+- `discover-routes`：用户给出起点或区域、方向、距离、地形、风景等条件，但没有完整途经点；Agent 创建一至三条经过地图服务验证的真实候选。无名称的“从 A 出发骑一圈 50km 再回来”属于此类。
+- `plan-waypoint-route`：用户明确起终点、途经点、多日或上下午阶段；也负责后续的途经点替换、路线反转、候选切换、撤销和指定 Strava 路段组合。
+- `plan-popular-loop`：用户明确经典完整环线；系统用普通地图路线连接实际起点与完整 Strava 闭合路段，再返回起点。
 
-启动后打开 <http://127.0.0.1:8080>。这是独立实验能力，暂未接入主 Agent 对话链路。
+首次生成的是待选择草稿，不会自动视为最终路线。国内使用高德骑行算路，国外使用 Google；海拔仅作为参考信息。Strava 路段用于路线证据与组合，不代表实时路况、安全、道路开放状态或精确坡度。
+
+`demo/gaode_cycling_router/`、`demo/global_cycling_router/` 和 `demo/osm_cycling_router/` 保留为供应商接入与算法实验；主 Agent 使用 `services/route/` 下的持久化路线服务。
 
 ## Agent 评测
 
@@ -96,6 +110,8 @@ python -m evaluation.cli run --cases evaluation/cases/live.jsonl --mode live --r
 ```
 
 评测输出工具选择成功率、任务完成率、回答一致性、响应时间、Token 用量和可选的估算成本。用例格式与报告说明见 [`evaluation/README.md`](evaluation/README.md)。
+
+如果要从代码层理解 Garmin 同步、活动身份、ActivityRun、断线恢复和多层测试，请阅读 [`docs/garmin-sync-workflow-guide.md`](docs/garmin-sync-workflow-guide.md)。
 
 ## 数据与隐私
 

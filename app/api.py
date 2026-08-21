@@ -14,8 +14,11 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from agent.main_agent.loop import run_tool_loop
+from agent.runtime.models import public_turn_dict
+from app.chat_sessions import ChatSessionStore
 from settings import cfg_get, load_config
 from domain.analysis.artifacts import get_analysis_summary, summary_schema_version
 from operations.activity.service import (
@@ -25,17 +28,21 @@ from operations.activity.service import (
 )
 from integrations.garmin import DEFAULT_OUTPUT_DIR
 from storage.repositories.activity import ActivityStore, file_content_key
+from storage.repositories.route import RoutePlanStore
+from services.route.single_day import compact_route_plan
 from operations.activity.strava import upload_activity_to_strava
 from fit.parser import parse_fit
 
 
 app = FastAPI(title="Personal FIT Agent API")
+chat_sessions = ChatSessionStore()
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class DownloadGarminRequest(BaseModel):
     count: int | None = None
+    force_download: bool = False
 
 
 class AnalyzeFitRequest(BaseModel):
@@ -49,6 +56,18 @@ class UploadStravaRequest(BaseModel):
     title: str | None = None
     wait: bool = True
     force: bool = False
+
+
+class ChatRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    message: str = Field(min_length=1, max_length=20_000)
+
+
+class SelectRouteCandidateRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    plan_id: str = Field(min_length=1, max_length=128)
+    candidate_id: str = Field(min_length=1, max_length=128)
 
 
 @app.get("/")
@@ -94,7 +113,7 @@ def garmin_download_endpoint(request: DownloadGarminRequest, http_request: Reque
     output_dir = _fit_output_dir(config)
     count = request.count or int(cfg_get(config, "download_count", 5))
 
-    result = sync_garmin_activities_tool(count=count)
+    result = sync_garmin_activities_tool(count=count, force_download=request.force_download)
     results = [
         {**item, "status": "downloaded"}
         for item in result.get("downloaded_items") or []
@@ -109,7 +128,7 @@ def garmin_download_endpoint(request: DownloadGarminRequest, http_request: Reque
     )
 
     return {
-        "status": "partial" if result.get("failed") else "ok",
+        "status": "partial" if result.get("failed") or result.get("index_errors") else "ok",
         "fit_dir": result.get("fit_dir") or str(output_dir),
         "count": len(results),
         "downloaded": int(result.get("downloaded") or 0),
@@ -162,6 +181,50 @@ def strava_upload_endpoint(request: UploadStravaRequest, http_request: Request) 
         wait=request.wait,
         force=request.force,
     )
+
+
+@app.post("/api/chat")
+def chat_endpoint(request: ChatRequest, http_request: Request) -> dict[str, Any]:
+    """Run one serialized, idempotent turn in a durable chat session."""
+    _require_api_access(http_request)
+    session = chat_sessions.get_or_create(request.session_id)
+    with session.lock:
+        try:
+            cached = session.cached_response(request.request_id, request.message)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if cached is not None:
+            return cached
+        result = run_tool_loop(request.message, context=session.context)
+        response = public_turn_dict(result)
+        session.cache_response(request.request_id, request.message, response)
+        return response
+
+
+@app.post("/api/route-plans/select")
+def select_route_candidate_endpoint(
+    request: SelectRouteCandidateRequest,
+    http_request: Request,
+) -> dict[str, Any]:
+    """Persist a deterministic preview selection without spending an LLM turn."""
+    _require_api_access(http_request)
+    session = chat_sessions.get_or_create(request.session_id)
+    with session.lock:
+        store = RoutePlanStore()
+        plan = store.get(request.plan_id)
+        if not plan:
+            raise HTTPException(status_code=404, detail="Route plan does not exist.")
+        workspace_id = str(session.context.workspace_id or session.context.session_id)
+        if str(plan.get("workspace_id") or "") != workspace_id:
+            raise HTTPException(status_code=403, detail="Route plan does not belong to this chat session.")
+        valid_ids = {
+            str(item.get("candidate_id") or "")
+            for item in plan.get("candidates") or [] if isinstance(item, dict)
+        }
+        if request.candidate_id not in valid_ids:
+            raise HTTPException(status_code=404, detail="Route candidate does not exist.")
+        stored = store.save({**plan, "active_candidate_id": request.candidate_id}, archive=False)
+        return compact_route_plan(stored)
 
 
 def _fit_output_dir(config: dict[str, Any]) -> Path:

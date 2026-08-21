@@ -121,4 +121,18 @@ def execute_tool_loop(
 
         messages.append({"role": "user", "content": results})
 
+        # Some terminal tools already return the complete user-facing answer
+        # (for example a persisted activity report). Passing that answer back
+        # through the main model adds cost and can replace it with stale
+        # pre-tool commentary, so finish deterministically instead.
+        terminal_answer = str(getattr(runtime, "terminal_answer", None) or "").strip()
+        if terminal_answer:
+            response = {
+                "content": [{"type": "text", "text": terminal_answer}],
+                "stop_reason": "end_turn",
+            }
+            messages.append({"role": "assistant", "content": response["content"]})
+            runtime.on_loop_end(messages=messages, response=response, steps=step_count)
+            return step_count
+
     return step_count

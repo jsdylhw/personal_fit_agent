@@ -81,6 +81,32 @@ def test_report_store_rejects_unindexed_and_legacy_documents(tmp_path):
         store.save_report({**report, "schema_version": "llm_fit_file_analysis.v1"})
 
 
+def test_garmin_refresh_replaces_old_content_identity_and_report(tmp_path):
+    database = tmp_path / "activities.db"
+    old_fit = tmp_path / "old-name.fit"
+    new_fit = tmp_path / "new-name.fit"
+    old_fit.write_bytes(b"old")
+    new_fit.write_bytes(b"new")
+    store = ActivityStore(database)
+    old = entry_from_fit_summary(
+        old_fit, {"sport_type": "cycling", "start_time_local": "2026-08-13T08:00:00"},
+        source="garmin_cn", source_activity_id="remote-123",
+    )
+    new = entry_from_fit_summary(
+        new_fit, {"sport_type": "cycling", "start_time_local": "2026-08-13T08:00:00"},
+        source="garmin_cn", source_activity_id="remote-123",
+    )
+    store.upsert_activity(old)
+    store.save_report(_v2_report(old["activity_key"], old["fit_path"]))
+
+    store.upsert_activity(new)
+
+    assert store.count_activities() == 1
+    assert store.get_activity(old["activity_key"]) is None
+    assert store.get_report(old["activity_key"]) is None
+    assert store.get_activity(new["activity_key"])["source_activity_id"] == "remote-123"
+
+
 def test_history_uses_v2_report_only_as_legacy_fallback(tmp_path):
     database = tmp_path / "activities.db"
     fit = tmp_path / "ride.fit"

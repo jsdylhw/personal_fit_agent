@@ -169,6 +169,7 @@ class TestStravaSinkBuildAuthorizeUrl:
         assert "client_id=12345" in url
         assert "response_type=code" in url
         # URL-encoded scope
+        assert "scope=read%2C" in url
         assert "activity%3Awrite" in url
 
     def test_custom_scope(self):
@@ -211,6 +212,69 @@ class TestStravaSinkUpload:
         sink = _make_sink()
         with pytest.raises(ValueError, match=".fit"):
             sink.upload_fit(str(wrong_file))
+
+
+class TestStravaSinkSegments:
+    @patch("integrations.strava.requests.get")
+    def test_explores_riding_segments(self, mock_get):
+        response = MagicMock()
+        response.ok = True
+        response.json.return_value = {"segments": [{"id": 1, "name": "test"}]}
+        mock_get.return_value = response
+        sink = _make_sink()
+
+        result = sink.explore_segments("29.0,118.0,30.0,119.0")
+
+        assert result["segments"][0]["id"] == 1
+        assert mock_get.call_args.kwargs["params"]["activity_type"] == "riding"
+
+    def test_rejects_invalid_segment_bounds(self):
+        with pytest.raises(ValueError, match="rectangle"):
+            _make_sink().explore_segments("30,118,29,119")
+
+    @patch("integrations.strava.requests.get")
+    def test_gets_segment_detail(self, mock_get):
+        response = MagicMock()
+        response.ok = True
+        response.json.return_value = {"id": 123, "map": {"polyline": "encoded"}}
+        mock_get.return_value = response
+
+        result = _make_sink().get_segment(123)
+
+        assert result["id"] == 123
+        assert mock_get.call_args.args[0].endswith("/segments/123")
+
+    @patch("integrations.strava.time.sleep")
+    @patch("integrations.strava.requests.get")
+    def test_retries_transient_segment_read_failure(self, mock_get, mock_sleep):
+        response = MagicMock()
+        response.ok = True
+        response.json.return_value = {"segments": [{"id": 1}]}
+        mock_get.side_effect = [
+            __import__("requests").exceptions.SSLError("TLS EOF"),
+            response,
+        ]
+
+        result = _make_sink().explore_segments("29.0,118.0,30.0,119.0")
+
+        assert result["segments"][0]["id"] == 1
+        assert mock_get.call_count == 2
+        mock_sleep.assert_called_once_with(0.25)
+
+    @patch("integrations.strava.time.sleep")
+    @patch("integrations.strava.requests.get")
+    def test_does_not_retry_segment_http_error(self, mock_get, mock_sleep):
+        response = MagicMock()
+        response.ok = False
+        response.status_code = 429
+        response.json.return_value = {"message": "Rate Limit Exceeded"}
+        mock_get.return_value = response
+
+        with pytest.raises(RuntimeError, match="HTTP 429"):
+            _make_sink().get_segment(123)
+
+        mock_get.assert_called_once()
+        mock_sleep.assert_not_called()
 
 
 class TestStravaSinkUpdateDescription:

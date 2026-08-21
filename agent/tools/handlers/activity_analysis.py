@@ -128,3 +128,11 @@ def _focused_analyzer(activity: dict[str, Any], question: str) -> dict[str, Any]
     from agent.tools.handlers.activity_reporting import answer_focused_activity_question
 
     return answer_focused_activity_question(activity, question=question)
+
+
+HANDLERS = {
+    "find_segments": find_segments,
+    "inspect_selection": inspect_selection,
+    "analyze_selection": analyze_selection,
+    "navigate_selection": navigate_selection,
+}

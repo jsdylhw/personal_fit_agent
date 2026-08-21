@@ -6,9 +6,52 @@ from pathlib import Path
 from typing import Any
 
 from agent.analysis.agent import run_activity_analysis_agent
+from agent.analysis.query import run_activity_query_agent
 from agent.main_agent.context import AgentContext
 from domain.analysis.artifacts import build_history_view, get_analysis_summary
 from services.activity.reporting import read_activity_report
+
+
+def analyze_activity(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    """Validate the frozen selection before reading or generating one report."""
+    from agent.tools.handlers.activity_summary import empty_activity_selection_answer
+
+    last = context.last_tool_result or {}
+    last_result = last.get("result") if isinstance(last.get("result"), dict) else {}
+    empty_answer = empty_activity_selection_answer(
+        str(last_result.get("selection_mode") or ""), last_result,
+    )
+    if empty_answer:
+        return {
+            "step": "analyze_activity",
+            "status": "completed",
+            "answer": empty_answer,
+            "result": {
+                "schema_version": "activity_analysis_skipped.v1",
+                "reason": "empty_activity_selection",
+            },
+        }
+    if len(context.selected_activities) != 1:
+        return {
+            "error": "single_activity_required",
+            "message": "analyze_activity 只能读取一条已定位活动；多条活动请使用 summarize_activities。",
+            "selected_count": len(context.selected_activities),
+        }
+    return show_selected_activity_report_tool(context, args=args, name="analyze_activity")
+
+
+def query_activity_detail(args: dict[str, Any], context: AgentContext) -> dict[str, Any]:
+    if len(context.selected_activities) != 1:
+        return {
+            "error": "single_activity_required",
+            "message": "query_activity_detail 只能查询一条已定位活动；请先用 resolve_activities 精确定位。",
+            "selected_count": len(context.selected_activities),
+        }
+    return query_selected_activity_detail_tool(
+        context,
+        question=str(args.get("question") or "").strip(),
+        name="query_activity_detail",
+    )
 
 
 def show_selected_activity_report_tool(
@@ -112,31 +155,27 @@ def _answer_targeted_question(
             "message": "A focused activity question requires the original FIT file.",
         }
 
-    analysis = run_activity_analysis_agent(
-        str(fit_path),
-        user_request=user_request,
-        persist=False,
-    )
-    report = str(analysis.get("markdown_report") or "").strip()
-    if not report:
+    analysis = run_activity_query_agent(str(fit_path), question=user_request)
+    answer = str(analysis.get("answer") or "").strip()
+    if not answer:
         return {
-            "error": "missing_markdown_report",
-            "message": "Focused analysis did not return markdown_report.",
+            "error": "missing_query_answer",
+            "message": "Focused analysis did not return an answer.",
             "analysis": analysis,
         }
     return {
         "step": name,
         "status": "completed",
-        "answer": report,
+        "answer": answer,
         "result": {
             "schema_version": "activity_report.v1",
             "activity_key": analysis.get("activity_key") or activity.get("activity_key"),
             "fit_path": analysis.get("fit_path") or fit_path,
             "source": "targeted_query",
             "status": analysis.get("status"),
-            "agent": analysis.get("agent"),
-            "analysis_error": analysis.get("analysis_error") if isinstance(analysis.get("analysis_error"), dict) else None,
-            "analysis_summary": analysis.get("analysis_summary") if isinstance(analysis.get("analysis_summary"), dict) else {},
+            "agent": "ActivityQueryAgent",
+            "evidence": analysis.get("evidence") if isinstance(analysis.get("evidence"), list) else [],
+            "limitations": analysis.get("limitations") if isinstance(analysis.get("limitations"), list) else [],
         },
     }
 
@@ -221,3 +260,9 @@ def _fallback_report(summary: dict[str, Any]) -> str:
     if brief:
         lines.extend(["", str(brief)])
     return "\n".join(lines)
+
+
+HANDLERS = {
+    "analyze_activity": analyze_activity,
+    "query_activity_detail": query_activity_detail,
+}

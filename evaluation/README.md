@@ -4,8 +4,8 @@
 
 ## 两种模式
 
-- `skill`：只评测第一阶段的 Skill 选择，不暴露或执行领域工具。
-- `live`：先选择 Skill，再只暴露该 Skill 的工具；所有 handler 替换为评测 Sandbox，不会同步 Garmin、写 Strava 或修改活动数据。
+- `skill`：运行真实主循环的第一轮，只暴露 `activate_skill`；激活后立即停止，不暴露或执行领域工具。
+- `live`：通过 `activate_skill` 渐进加载 Skill 工具并完整运行；所有业务 handler 替换为评测 Sandbox，不会同步 Garmin、写 Strava 或修改活动数据。
 
 ## 运行
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from agent.main_agent.context import AgentContext
 from agent.tools.handlers.activity_insights import analyze_training_history_tool
 from services.activity.training_history_analysis import analyze_training_history
@@ -44,6 +46,7 @@ def test_professional_history_analysis_returns_stable_ui_contract(tmp_path, monk
     assert result["scope"]["sport_type"] == "cycling"
     assert result["scope"]["baseline_period"]["label"] == "2026-W19"
     assert result["scope"]["current_period"]["label"] == "2026-W20"
+    assert result["scope"]["current_period"]["status"] == "closed"
     assert result["coverage"]["activity_count"] == 4
     assert result["coverage"]["comparable_session_count"] == 0
     assert result["conclusion"]["assessment"] == "mixed"
@@ -75,3 +78,27 @@ def test_professional_history_analysis_reports_insufficient_periods(tmp_path, mo
     assert result["conclusion"]["assessment"] == "insufficient_data"
     assert result["scope"]["baseline_period"] is None
     assert all(item["confidence"] == "low" for item in result["dimensions"])
+
+
+def test_history_analysis_marks_latest_observed_bucket_closed_by_calendar_date(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    output = analyze_training_history(
+        _history_activities(tmp_path),
+        group_by="week",
+        sport_type="cycling",
+        today=date(2026, 5, 21),
+    )
+
+    result = output["result"]
+    current = result["scope"]["current_period"]
+    assert current == {
+        "label": "2026-W20",
+        "start": "2026-05-11",
+        "end": "2026-05-17",
+        "status": "closed",
+        "as_of": "2026-05-21",
+        "activity_count": 2,
+        "active_days": 2,
+    }
+    assert any("不得将它描述为" in warning for warning in result["warnings"])

@@ -11,21 +11,31 @@ from agent.skills.models import SkillSpec
 SKILL_LIBRARY = Path(__file__).with_name("library")
 
 
+def _skill_path(skill: SkillSpec) -> Path:
+    """Resolve a trusted catalogue entry as either a Markdown file or package."""
+    path = SKILL_LIBRARY / (skill.library_path or skill.skill_id)
+    return path if path.suffix == ".md" else path / "SKILL.md"
+
+
+def _reference_directory(skill: SkillSpec) -> Path:
+    """Keep optional references grouped by Skill inside its category."""
+    path = SKILL_LIBRARY / (skill.library_path or skill.skill_id)
+    return path.parent / "references" / skill.skill_id if path.suffix == ".md" else path / "references"
+
+
 def load_skill_instructions(skill: SkillSpec, *, sport_types: Iterable[str] = ()) -> str:
     """Load SKILL.md only after activation, then add bounded references."""
-    skill_dir = SKILL_LIBRARY / skill.skill_id
-    body = _markdown_body((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
+    body = _markdown_body(_skill_path(skill).read_text(encoding="utf-8"))
     references = list(load_skill_references(skill, sport_types=sport_types))
     return "\n\n".join(part for part in (body.strip(), *references) if part)
 
 
 def load_skill_references(skill: SkillSpec, *, sport_types: Iterable[str] = ()) -> tuple[str, ...]:
     """Load only references explicitly registered for the activated Skill."""
-    skill_dir = SKILL_LIBRARY / skill.skill_id
     names = [*_general_reference_names(skill), *_sport_reference_names(sport_types)]
     references: list[str] = []
     for reference_name in names:
-        path = skill_dir / "references" / f"{reference_name}.md"
+        path = _reference_directory(skill) / f"{reference_name}.md"
         if path.exists():
             references.append(path.read_text(encoding="utf-8").strip())
     return tuple(references)

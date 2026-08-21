@@ -41,13 +41,27 @@ class ActivityStore:
 
         now = _now()
         with connect_database(self.path) as connection:
-            # A FIT path identifies one immutable source row.  If a file was
-            # replaced, discard the stale content-key row and its report.
-            stale = connection.execute(
-                "SELECT id FROM activities WHERE fit_file_path = ? AND id <> ?",
-                (fit_path, activity_id),
-            ).fetchone()
-            if stale:
+            # A FIT path identifies one immutable source row. A remote source
+            # identity also owns only one current content-key row. Refreshes
+            # discard stale derived facts/reports through the FK cascade.
+            source = str(entry.get("source") or "manual")
+            source_activity_id = _text(entry.get("source_activity_id"))
+            if source_activity_id:
+                stale_rows = connection.execute(
+                    """
+                    SELECT id FROM activities
+                    WHERE id <> ? AND (
+                        fit_file_path = ? OR (source = ? AND source_activity_id = ?)
+                    )
+                    """,
+                    (activity_id, fit_path, source, source_activity_id),
+                ).fetchall()
+            else:
+                stale_rows = connection.execute(
+                    "SELECT id FROM activities WHERE fit_file_path = ? AND id <> ?",
+                    (fit_path, activity_id),
+                ).fetchall()
+            for stale in stale_rows:
                 connection.execute("DELETE FROM activities WHERE id = ?", (str(stale["id"]),))
             existing = connection.execute(
                 "SELECT raw_json, created_at FROM activities WHERE id = ?",

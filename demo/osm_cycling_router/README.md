@@ -104,6 +104,66 @@ python demo/osm_cycling_router/places.py nearby \
 
 结果包含 OSM ID、类别、坐标、原始标签和距离。它们是给后续地点消歧、GraphHopper 算路与 LLM 路线解释使用的事实输入；没有结果只代表当前 OSM 数据未标注，不代表现实中不存在该地点。
 
+## 语义道路走廊索引
+
+GraphHopper 保存完整的可路由路网，但不能直接回答“春风十里路 / YBA4 在哪里、可作为哪一段连接走廊”。`road_corridors.py` 从同一份 PBF 额外索引有道路名称、编号、道路关系或自行车属性的道路；保存简化几何和 SQLite RTree，而不重复 GraphHopper 的图结构。
+
+容器首次启动会自动建立 `data/road_corridors.sqlite`。也可手动重建：
+
+```bash
+python demo/osm_cycling_router/road_corridors.py build \
+  --pbf demo/osm_cycling_router/data/osm/jzsh-latest.osm.pbf \
+  --database demo/osm_cycling_router/data/road_corridors.sqlite
+
+python demo/osm_cycling_router/road_corridors.py search "YBA4" \
+  --database demo/osm_cycling_router/data/road_corridors.sqlite
+
+python demo/osm_cycling_router/road_corridors.py nearby \
+  --point "31.706,119.334" --radius-m 5000 \
+  --database demo/osm_cycling_router/data/road_corridors.sqlite
+```
+
+查询结果给出道路名、编号、所属道路关系和少量可用作途经点的 anchors。它们是后续生成“直连 / 经春风十里路 / 经绿道”等连接候选的事实输入；道路本身仍由本地 GraphHopper 计算并校验可通性。
+
+## 多候选主爬闭环
+
+`route_candidates.py` 把每一段主爬之间的连接扩展为“直连 + 经指定语义走廊的局部途经”候选，并同时搜索主爬顺序、正反方向和连接候选。它返回最多三条路线；“经 YBA4”只选择合适锚点，不强制骑完整条春风十里路。
+
+```bash
+python demo/osm_cycling_router/route_candidates.py \
+  --input demo/osm_cycling_router/data/route-probes/jurong-maoshan-wawushan-climbs.geojson \
+  --road-database demo/osm_cycling_router/data/road_corridors.sqlite \
+  --corridor YBA4 \
+  --segment-id 1530562 --segment-id 11607745 \
+  --start "31.946528,119.163720" --target-km 100 \
+  --profile car --max-routes 3 \
+  --output demo/osm_cycling_router/data/route-probes/jurong-yba4-candidates.geojson
+```
+
+评分暂时只考虑目标距离、连接段长度、几何重叠与覆盖不同走廊；全程高程不在这一版承诺范围内。输出是可解释的规划 JSON，下一阶段再将它渲染为动态地图路线并接入 Agent。
+
+传入 `--output` 后会同时生成可直接在 Demo 查看的 GeoJSON。运行服务后打开
+`http://127.0.0.1:8080/?probe=jurong-yba4-candidates`；点击左侧每条候选可单独高亮并缩放到该路线。
+
+## 干线 + 已验证区域闭环
+
+`lollipop_loop.py` 是低层的“城市出发、进入一个**已验证**骑行区域、在区域内绕圈后按相同或近似干线返回”的拼接器。它把 `A → B` 和 `B → A` 只计算一次，保留在总距离中，但只对 B 区内部的多点闭环计算回头比例；不会把合理的进出山区共用道路误判为差路线。
+
+它**不会**根据“环江心洲 / 环陵一圈”这类地点名自行推断可骑边界。区域骨架必须先来自已验证的 Strava Segment、完整 OSM 道路关系或人工审核的连续道路；随后才可以按一个方向提供边界点：
+
+```bash
+python demo/osm_cycling_router/lollipop_loop.py \
+  --start "32.0226,118.7836" \
+  --gateway "32.0100,118.6958" \
+  --via "32.0350,118.6980" --via "32.0320,118.6670" \
+  --via "31.9850,118.6650" --via "31.9820,118.6900" \
+  --profile racingbike \
+  --name "城市—已验证区域闭环（实验）" \
+  --output demo/osm_cycling_router/data/route-probes/verified-area-lollipop.geojson
+```
+
+输出包含顺、逆两个区域环线候选；每条候选都显示干线去程、干线回程、区域内部距离和**仅区域内部**的重复比例。
+
 ## 用真实 FIT 探针算路
 
 另开终端：
@@ -161,6 +221,32 @@ python demo/osm_cycling_router/strava_segments.py \
   --bounds '31.05,121.05,31.25,121.30' \
   --output demo/osm_cycling_router/data/strava-segment-sample.json
 ```
+
+当 Explorer 找到疑似完整环线后，先只读取该 Segment 的详情与 polyline，再交给本地规划器连接城市起点；不要用几个手工边界点替代真实骑行骨架：
+
+```bash
+python demo/osm_cycling_router/strava_segments.py \
+  --segment-id 17544798 \
+  --output demo/osm_cycling_router/data/jiangxinzhou-loop.geojson
+
+python demo/osm_cycling_router/segment_loop.py \
+  --input demo/osm_cycling_router/data/jiangxinzhou-loop.geojson \
+  --output demo/osm_cycling_router/data/route-probes/city-jiangxinzhou.geojson \
+  --start "32.0226,118.7836" --start-name "城市起点" \
+  --profile racingbike --target-km 50
+```
+
+若一个真实 Segment 是进出区域的明确约束（例如“经夹江大桥东往西过江，再开始江心洲闭环”），将桥段与闭环段按意图写入同一个 GeoJSON，并传入 `--preserve-input-order`。这样桥段不是可被重排的普通主爬：
+
+```bash
+python demo/osm_cycling_router/segment_loop.py \
+  --input demo/osm_cycling_router/data/jiangxinzhou-bridge-then-loop.geojson \
+  --output demo/osm_cycling_router/data/route-probes/city-jiangxinzhou-via-bridge.geojson \
+  --start "32.0226,118.7836" --start-name "城市起点" \
+  --profile racingbike --target-km 55 --preserve-input-order --near-handoff-m 100
+```
+
+`--near-handoff-m` 只允许衔接两条 Strava 轨迹首尾非常接近的情况；输出会把该短缝渲染为黄色虚线“待核验接缝”，不能当作已经由本地路网验证的道路。
 
 后续排序实验应是：GraphHopper 生成候选路线 → 计算它与本地历史 FIT 及这个 Strava 路段样本的重叠 → 用这些只读信号排序。不得让模型自行编造道路或路段热度。
 

@@ -64,6 +64,7 @@ def sync_and_start_activity_workflow(
     count: int = 5,
     goals: Iterable[str] = ("ensure_summary",),
     force: bool = False,
+    force_download: bool = False,
     force_upload: bool = False,
     directory: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -73,7 +74,7 @@ def sync_and_start_activity_workflow(
     Run.request.sync，之后 summary/upload/aggregate 仍使用同一 ActivityRun 状态机。
     """
     target_directory = _directory(directory)
-    sync = sync_recent(count=count)
+    sync = sync_recent(count=count, force_download=force_download)
     if sync.get("status") == "failed":
         return {
             "schema_version": "activity_workflow_service.v1",
@@ -85,12 +86,20 @@ def sync_and_start_activity_workflow(
 
     activities = _synced_activities(sync.get("activities") or [])
     if not activities:
-        return {
+        index_failed = int(sync.get("index_failed") or 0)
+        response = {
             "schema_version": "activity_workflow_service.v1",
-            "status": "no_activities",
-            "message": "Garmin 同步没有产生可索引的 FIT 活动；未创建工作流。",
+            "status": "failed" if index_failed else "no_activities",
+            "message": (
+                f"Garmin FIT 已获取，但有 {index_failed} 个文件索引失败；未创建工作流。"
+                if index_failed else
+                "Garmin 同步没有产生可索引的 FIT 活动；未创建工作流。"
+            ),
             "sync": _sync_overview(sync, requested_count=count),
         }
+        if index_failed:
+            response["error"] = "activity_index_failed"
+        return response
 
     created = create_activity_run_from_activities(
         activities,
@@ -105,6 +114,7 @@ def sync_and_start_activity_workflow(
             "sync": _sync_overview(sync, requested_count=count),
             "goals": list(goals),
             "force": bool(force),
+            "force_download": bool(force_download),
             "force_upload": bool(force_upload),
         },
         directory=target_directory,
@@ -113,10 +123,13 @@ def sync_and_start_activity_workflow(
         return {**created, "sync": _sync_overview(sync, requested_count=count)}
     run = created["run"]
     execution = execute_activity_run(run, directory=target_directory)
-    return {
+    response = {
         **_response(run, target_directory, execution=execution, created=True),
         "sync": _sync_overview(sync, requested_count=count),
     }
+    if sync.get("status") == "partial" and response.get("status") == "completed":
+        response["status"] = "partial"
+    return response
 
 
 def get_activity_workflow(
@@ -249,10 +262,13 @@ def _sync_overview(sync: dict[str, Any], *, requested_count: int) -> dict[str, A
         "downloaded": int(sync.get("downloaded") or 0),
         "skipped": int(sync.get("skipped") or 0),
         "failed": int(sync.get("failed") or 0),
+        "index_failed": int(sync.get("index_failed") or 0),
         "indexed_activity_keys": [
             str(item["activity_key"])
             for item in sync.get("activities") or []
             if isinstance(item, dict) and item.get("activity_key")
         ],
         "failed_items": sync.get("failed_items") or [],
+        "index_errors": sync.get("index_errors") or [],
+        "force_download": bool(sync.get("force_download")),
     }

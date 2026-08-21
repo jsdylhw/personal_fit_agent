@@ -13,12 +13,10 @@ from agent.main_agent.loop import (
     _skill_catalog_prompt,
     agent_loop,
 )
-from agent.main_agent.tools import TOOL_HANDLERS
+from agent.tools.registry import TOOL_HANDLERS
 from agent.main_agent.turn_policy import tools_for_skill
 from observability import capture_agent_trace
 from agent.skills import get_skill
-from agent.skills.policy import validate_skill_selection
-from agent.skills.selector import select_skill
 from agent.tools import MAIN_AGENT_TOOLS, render_anthropic_tools
 from evaluation.graders import grade_case
 from evaluation.sandbox import EvaluationSandbox
@@ -37,15 +35,7 @@ def run_case(
 ) -> dict[str, Any]:
     with capture_agent_trace(metadata={"case_id": case.case_id, "mode": case.mode, "repeat": repeat}) as trace:
         if case.mode == "skill":
-            selection = select_skill(case.input, client=client or AnthropicMessagesClient())
-            skill = validate_skill_selection(selection)
-            result = {
-                "status": "completed",
-                "intent": skill.public_intent if skill else "chat",
-                "skill_id": skill.skill_id if skill else None,
-                "answer": "",
-                "steps": [],
-            }
+            result = _run_skill_activation_case(case, client=client)
         else:
             result = _run_live_case(case, client=client)
     trace_payload = trace.to_dict()
@@ -99,6 +89,60 @@ def run_suite(
                 cache_read_price_per_million=cache_read_price_per_million,
             ))
     return results
+
+
+def _run_skill_activation_case(
+    case: EvalCase,
+    *,
+    client: AnthropicMessagesClient | None,
+) -> dict[str, Any]:
+    """Run the real first model round with only ``activate_skill`` exposed."""
+    client = client or AnthropicMessagesClient()
+    context = AgentContext(
+        session_id=f"eval-skill-{case.case_id}",
+        history_enabled=False,
+        messages=[{"role": "user", "content": case.input}],
+    )
+    activation_tool = next(tool for tool in MAIN_AGENT_TOOLS if tool.name == "activate_skill")
+    messages = list(context.messages)
+    steps: list[dict[str, Any]] = []
+    hooks = ToolLoopHooks(
+        context,
+        {activation_tool.category},
+        {"value": False},
+        steps,
+        allowed_tool_names={"activate_skill"},
+        verbose=False,
+    )
+    error = None
+    try:
+        # One model round is sufficient: ordinary chat returns text; a domain
+        # request calls activate_skill.  The loop intentionally stops before
+        # any business tool can be disclosed or executed.
+        agent_loop(
+            messages,
+            tools=render_anthropic_tools([activation_tool]),
+            handlers={"activate_skill": TOOL_HANDLERS["activate_skill"]},
+            hooks=hooks,
+            system=_build_system_prompt(skill_catalog=_skill_catalog_prompt()),
+            max_steps=1,
+            client=client,
+        )
+        status = "completed"
+    except Exception as exc:
+        status = "failed"
+        error = {"type": type(exc).__name__, "message": str(exc)}
+    skill = get_skill(context.active_skill_id)
+    result: dict[str, Any] = {
+        "status": status,
+        "intent": skill.public_intent if skill else "chat",
+        "skill_id": skill.skill_id if skill else None,
+        "answer": "",
+        "steps": [],
+    }
+    if error:
+        result["error"] = error
+    return result
 
 
 def _run_live_case(case: EvalCase, *, client: AnthropicMessagesClient | None) -> dict[str, Any]:

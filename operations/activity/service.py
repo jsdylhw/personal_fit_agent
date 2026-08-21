@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import requests
@@ -26,7 +27,11 @@ def check_garmin_connection() -> dict[str, Any]:
     return {"status": "connected", "latest_activity": activities[0] if activities else None}
 
 
-def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
+def sync_garmin_activities_tool(
+    count: int = 5,
+    *,
+    force_download: bool = False,
+) -> dict[str, Any]:
     """从 Garmin 中国区下载最近 N 条活动的 FIT 文件,自动跳过已下载的。
 
     Args:
@@ -62,7 +67,7 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
         activity_id = activity.get("activityId")
         try:
             existing = existing_fit_paths(output_dir, activity)
-            if existing:
+            if existing and not force_download:
                 _index_fit_paths(existing, activity_id=activity_id, indexed=indexed, errors=index_errors)
                 skipped.append({
                     "activity_id": activity_id,
@@ -73,7 +78,9 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
                 continue
 
             raw_bytes = downloader.download_original(activity_id)
-            saved = save_original_as_fit(raw_bytes, output_dir, activity)
+            saved = _validate_then_save_original(
+                raw_bytes, output_dir, activity, save_original_as_fit=save_original_as_fit,
+            )
             _index_fit_paths(saved, activity_id=activity_id, indexed=indexed, errors=index_errors)
             downloaded.append({
                 "activity_id": activity_id,
@@ -96,6 +103,7 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
         "downloaded": len(downloaded),
         "skipped": len(skipped),
         "failed": len(failed),
+        "force_download": bool(force_download),
         "downloaded_items": downloaded,
         "skipped_items": skipped,
         "failed_items": failed,
@@ -103,6 +111,24 @@ def sync_garmin_activities_tool(count: int = 5) -> dict[str, Any]:
         "indexed_items": indexed,
         "index_errors": index_errors,
     }
+
+
+def _validate_then_save_original(
+    raw_bytes: bytes,
+    output_dir: Path,
+    activity: dict[str, Any],
+    *,
+    save_original_as_fit,
+) -> list[Path]:
+    """Parse a staged Garmin ORIGINAL before replacing any visible FIT file."""
+    from services.activity.catalog import parse_fit
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=".garmin-refresh-", dir=output_dir.parent) as temporary:
+        staged = save_original_as_fit(raw_bytes, Path(temporary), activity)
+        for path in staged:
+            parse_fit(path)
+    return save_original_as_fit(raw_bytes, output_dir, activity)
 
 
 def _index_fit_paths(

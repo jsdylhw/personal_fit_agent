@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+from agent.main_agent.context import AgentContext
+from agent.tools.handlers.activity_operations import _install_synced_activity_selection
 from operations.activity.reporting import ensure_summary
 from operations.activity.catalog import resolve_recent
 from operations.activity.sync import sync_recent
 from operations.activity.upload import upload_activity
+
+
+def test_index_failure_clears_stale_activity_focus(tmp_path):
+    context = AgentContext(
+        session_id="sync-index-failed",
+        current_fit_file=tmp_path / "old.fit",
+        selected_activities=[{"activity_key": "old", "fit_path": str(tmp_path / "old.fit")}],
+    )
+
+    _install_synced_activity_selection(
+        {"status": "failed", "error": "activity_index_failed", "activities": []}, context,
+    )
+
+    assert context.selected_activities == []
+    assert context.current_fit_file is None
 
 
 def test_resolve_recent_is_explicit_and_does_not_need_agent_context(monkeypatch):
@@ -20,12 +37,32 @@ def test_resolve_recent_is_explicit_and_does_not_need_agent_context(monkeypatch)
 def test_sync_recent_normalizes_partial_sync_result(monkeypatch):
     monkeypatch.setattr(
         "operations.activity.sync.sync_garmin_activities_tool",
-        lambda count: {"downloaded": 1, "skipped": 0, "failed": 1, "indexed_items": [{"activity_key": "ok", "path": "ok.fit"}], "failed_items": [{"activity_id": 2, "error": "ConnectionError"}]},
+        lambda count, force_download=False: {"downloaded": 1, "skipped": 0, "failed": 1, "indexed_items": [{"activity_key": "ok", "path": "ok.fit"}], "failed_items": [{"activity_id": 2, "error": "ConnectionError"}]},
     )
     result = sync_recent(count=2)
     assert result["status"] == "partial"
     assert result["activities"] == [{"activity_key": "ok", "path": "ok.fit"}]
     assert result["failed_items"][0]["activity_id"] == 2
+
+
+def test_sync_recent_marks_fit_index_errors_partial(monkeypatch):
+    monkeypatch.setattr(
+        "operations.activity.sync.sync_garmin_activities_tool",
+        lambda count, force_download=False: {
+            "downloaded": 1,
+            "skipped": 0,
+            "failed": 0,
+            "indexed_items": [],
+            "index_errors": [{"path": "broken.fit", "error": "FitParseError"}],
+        },
+    )
+
+    result = sync_recent(count=1)
+
+    assert result["status"] == "partial"
+    assert result["failed"] == 0
+    assert result["index_failed"] == 1
+    assert result["index_errors"][0]["error"] == "FitParseError"
 
 
 def test_ensure_summary_requires_persisted_artifact(monkeypatch, tmp_path):

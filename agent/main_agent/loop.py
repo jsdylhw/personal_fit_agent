@@ -27,7 +27,7 @@ from agent.main_agent.result_builder import (
     build_llm_unavailable_result,
     intent_kind,
 )
-from agent.main_agent.tools import TOOL_HANDLERS
+from agent.tools.registry import TOOL_HANDLERS
 from agent.main_agent.turn_control import handle_control_turn
 from agent.main_agent.turn_policy import tools_for_skill
 from agent.skills import get_skill
@@ -72,7 +72,7 @@ def run_tool_loop(
         return build_activation_unavailable_result(context, error=exc)
 
     try:
-        step_count, steps_taken = _run_agent_turn(
+        step_count, steps_taken = _execute_main_agent_turn(
             message,
             context,
             verbose,
@@ -127,7 +127,7 @@ def _prepare_context(
     return context
 
 
-def _run_agent_turn(
+def _execute_main_agent_turn(
     message,
     context,
     verbose,

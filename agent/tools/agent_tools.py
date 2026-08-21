@@ -66,7 +66,12 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "activity_key": {"type": "string"},
                 "activity_index": {"type": "integer"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 1},
-                "order": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
+                "order": {
+                    "type": "string",
+                    "enum": ["latest", "earliest", "longest"],
+                    "default": "latest",
+                    "description": "longest 按活动时长从长到短排序。",
+                },
                 "date": {"type": "string", "description": "相对或 ISO 日期,如 today/yesterday/2026-05-18"},
                 "name": {"type": "string"},
                 "sport_type": {"type": "string", "description": "可传 cycling/running/walking，也接受 Ride、骑行、run、跑步等常见别名。"},
@@ -94,7 +99,7 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         name="lookup_activities",
         description=(
             "按显式 kind 只读查询本地 SQLite 活动目录，不改变当前活动集合或导航焦点。"
-            "用于在已建立的活动范围外补充查询、对照或查找全库最早/最新活动；参数规则与 resolve_activities 相同。"
+            "用于在已建立的活动范围外补充查询、对照或查找全库最早/最新/最长活动；参数规则与 resolve_activities 相同。"
         ),
         input_schema={
             "type": "object",
@@ -107,7 +112,12 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "activity_key": {"type": "string"},
                 "activity_index": {"type": "integer"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 1},
-                "order": {"type": "string", "enum": ["latest", "earliest"], "default": "latest"},
+                "order": {
+                    "type": "string",
+                    "enum": ["latest", "earliest", "longest"],
+                    "default": "latest",
+                    "description": "longest 按活动时长从长到短排序。",
+                },
                 "date": {"type": "string", "description": "相对或 ISO 日期,如 today/yesterday/2026-05-18"},
                 "name": {"type": "string"},
                 "sport_type": {"type": "string", "description": "可传 cycling/running/walking，也接受常见别名。"},
@@ -304,18 +314,221 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         category=CATEGORY_COACHING,
     ),
     ToolDef(
-        name="generate_route_advice",
-        description="按位置、时长/距离、目标和可选训练状态推荐路线类型。",
+        name="create_popular_loop",
+        description=(
+            "创建并持久化国内热门闭合骑行环线候选：从指定起点用高德接驳到完整 Strava 环线，"
+            "骑完整环线后再接驳返回起点。返回最多三个真实闭环候选，等待用户选择和确认。"
+        ),
+        input_schema={
+            "type": "object",
+            "required": ["title", "origin", "area"],
+            "properties": {
+                "title": {"type": "string"},
+                "origin": {"type": "string", "description": "实际出发和返回地点，如南京夫子庙"},
+                "area": {"type": "string", "description": "环线所在区域或地标，如南京中山陵"},
+                "segment_name_hint": {
+                    "type": "string",
+                    "description": "用户提到的环线或道路名称片段，如环陵；不确定时可省略。",
+                },
+                "target_distance_km": {"type": "number", "minimum": 1},
+                "search_radius_km": {
+                    "type": "number", "minimum": 0.5, "maximum": 20, "default": 8,
+                },
+                "include_elevation": {"type": "boolean", "default": True},
+                "fallback_to_provider": {
+                    "type": "boolean", "default": True,
+                    "description": "找不到完整 Strava 环线时，是否明确降级为起点到区域的普通地图往返。",
+                },
+            },
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
+        name="create_route_plan",
+        description=(
+            "创建并持久化一个经过地图服务验证的单日路线计划。国内使用高德骑行，"
+            "国外使用 Google Routes；可一次提供多个具有不同途经点骨架的候选。"
+        ),
+        input_schema={
+            "type": "object",
+            "required": ["title", "country_code", "candidates"],
+            "properties": {
+                "title": {"type": "string"},
+                "country_code": {"type": "string", "description": "ISO 两字母国家代码，如 CN、FR、JP"},
+                "include_elevation": {"type": "boolean", "default": True},
+                "segment_strategy": {
+                    "type": "string", "enum": ["auto", "ignore", "require"], "default": "auto",
+                    "description": "国内路线默认保留地图基准并建议独立 Strava 候选；auto 失败时仍保留基准路线。",
+                },
+                "segment_preferences": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "例如热门、湖景、少爬坡、经典爬坡。",
+                },
+                "candidates": {
+                    "type": "array", "minItems": 1, "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "waypoints", "route_type"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "waypoints": {
+                                "type": "array", "minItems": 2, "maxItems": 12,
+                                "items": {"type": "string"},
+                                "description": "按顺序排列的真实地点检索词；环线不必重复首点。",
+                            },
+                            "route_type": {"type": "string", "enum": ["point_to_point", "loop"]},
+                            "target_distance_km": {"type": "number"},
+                        },
+                    },
+                },
+            },
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
+        name="create_itinerary_plan",
+        description=(
+            "创建并持久化经过地图服务验证的多日或单日上下午分段行程。"
+            "每个候选由按顺序排列的 stages 组成，并校验相邻阶段的衔接距离。"
+        ),
+        input_schema={
+            "type": "object",
+            "required": ["title", "country_code", "schedule_type", "candidates"],
+            "properties": {
+                "title": {"type": "string"},
+                "country_code": {"type": "string", "description": "ISO 两字母国家代码"},
+                "schedule_type": {"type": "string", "enum": ["multi_day", "day_parts"]},
+                "include_elevation": {"type": "boolean", "default": True},
+                "segment_strategy": {
+                    "type": "string", "enum": ["auto", "ignore", "require"], "default": "auto",
+                },
+                "segment_preferences": {"type": "array", "items": {"type": "string"}},
+                "handoff_tolerance_km": {"type": "number", "minimum": 0, "default": 5},
+                "balance_warning_ratio": {"type": "number", "minimum": 0, "default": 0.3},
+                "candidates": {
+                    "type": "array", "minItems": 1, "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "stages"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "stages": {
+                                "type": "array", "minItems": 2, "maxItems": 7,
+                                "items": {
+                                    "type": "object",
+                                    "required": ["label", "day", "period", "waypoints"],
+                                    "properties": {
+                                        "label": {"type": "string"},
+                                        "day": {"type": "integer", "minimum": 1, "maximum": 7},
+                                        "period": {
+                                            "type": "string",
+                                            "enum": ["full_day", "morning", "afternoon", "evening"],
+                                        },
+                                        "waypoints": {
+                                            "type": "array", "minItems": 2, "maxItems": 12,
+                                            "items": {"type": "string"},
+                                        },
+                                        "route_type": {
+                                            "type": "string",
+                                            "enum": ["point_to_point", "loop"],
+                                            "default": "point_to_point",
+                                        },
+                                        "target_distance_km": {"type": "number"},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
+        name="update_route_plan",
+        description=(
+            "更新最近或指定路线计划。replace_waypoints 更新单日路线，replace_stage "
+            "更新完整阶段，replace_waypoint 替换一个途经点；reverse_candidate/reverse_stage "
+            "确定性反转路线方向，select_candidate 切换预览候选，compose_segments 按已发现的 "
+            "Strava 路段顺序生成路线，confirm_candidate 确认最终路线，undo 恢复上一版本。"
+        ),
+        input_schema={
+            "type": "object",
+            "required": ["operation"],
+            "properties": {
+                "plan_id": {"type": "string"},
+                "operation": {
+                    "type": "string",
+                    "enum": [
+                        "replace_waypoints", "replace_stage", "replace_waypoint",
+                        "reverse_candidate", "reverse_stage", "select_candidate",
+                        "compose_segments", "confirm_candidate", "undo",
+                    ],
+                },
+                "candidate_id": {"type": "string"},
+                "candidate_name": {"type": "string"},
+                "stage_id": {"type": "string"},
+                "stage_label": {"type": "string"},
+                "waypoint_index": {
+                    "type": "integer", "minimum": 1,
+                    "description": "replace_waypoint 使用，按用户可见顺序从 1 开始",
+                },
+                "new_waypoint": {"type": "string", "description": "replace_waypoint 的新地点检索词"},
+                "waypoints": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 12},
+                "route_type": {"type": "string", "enum": ["point_to_point", "loop"]},
+                "target_distance_km": {"type": "number"},
+                "include_elevation": {"type": "boolean", "default": True},
+                "segment_strategy": {
+                    "type": "string", "enum": ["auto", "ignore", "require"],
+                    "description": "缺省时沿用当前路线计划的策略。",
+                },
+                "segment_preferences": {"type": "array", "items": {"type": "string"}},
+                "segments": {
+                    "type": "array", "minItems": 1, "maxItems": 3,
+                    "description": "compose_segments 使用；数组顺序就是骑行顺序，只能引用当前路线已发现的真实 Strava Segment ID。",
+                    "items": {
+                        "type": "object",
+                        "required": ["segment_id"],
+                        "properties": {
+                            "segment_id": {"type": "integer", "minimum": 1},
+                            "direction": {
+                                "type": "string", "enum": ["auto", "forward", "reverse"], "default": "auto",
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
+        name="get_route_plan",
+        description="读取最近或指定的已持久化路线计划，用于恢复会话或继续修改。",
+        input_schema={
+            "type": "object",
+            "properties": {"plan_id": {"type": "string"}},
+        },
+        category=CATEGORY_COACHING,
+    ),
+    ToolDef(
+        name="explore_route_segments",
+        description=(
+            "读取最近或指定的已保存路线，通过 Strava Segment Explorer 查询路线附近的热门骑行路段样本，"
+            "并保存名称、距离、平均坡度、爬升分类和地图几何。不会自动改变已验证路线。"
+        ),
         input_schema={
             "type": "object",
             "properties": {
-                "location": {"type": "string", "description": "位置/区域"},
-                "duration": {"type": "integer", "description": "时长(分钟)"},
-                "distance": {"type": "integer", "description": "距离(km)"},
-                "goal": {"type": "string", "description": "骑行目标"},
-                "terrain": {"type": "string", "description": "地形偏好"},
-                "scenery": {"type": "string", "description": "风景偏好"},
-                "preferences": {"type": "array", "items": {"type": "string"}},
+                "plan_id": {"type": "string"},
+                "candidate_id": {"type": "string", "description": "缺省时使用当前候选"},
+                "stage_id": {"type": "string", "description": "多日或上下午行程可只查询一个阶段"},
+                "corridor_km": {
+                    "type": "number", "minimum": 0.1, "maximum": 20, "default": 5,
+                    "description": "路段几何到计划路线的最大接近距离",
+                },
+                "max_segments": {
+                    "type": "integer", "minimum": 1, "maximum": 20, "default": 12,
+                },
             },
         },
         category=CATEGORY_COACHING,
@@ -332,6 +545,10 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
             "type": "object",
             "properties": {
                 "count": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                "force_download": {
+                    "type": "boolean", "default": False,
+                    "description": "仅当用户明确要求刷新同一条 Garmin 活动的原始 FIT 时使用；新增活动不需要。",
+                },
             },
         },
         category=CATEGORY_OPERATION,
@@ -348,6 +565,10 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
             "type": "object",
             "properties": {
                 "count": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                "force_download": {
+                    "type": "boolean", "default": False,
+                    "description": "重新下载本地已有的同一 Garmin 活动；不要把普通的新活动同步设为 true。",
+                },
                 "goals": {
                     "type": "array",
                     "items": {"type": "string", "enum": ["ensure_summary", "upload_strava", "aggregate_report"]},

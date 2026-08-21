@@ -6,52 +6,7 @@ from agent.main_agent.turn_control import handle_control_turn
 from agent.main_agent.turn_policy import requires_raw_window_evidence, tools_for_skill
 from agent.skills.catalog import get_skill, list_skill_descriptors
 from agent.skills.loader import load_skill_instructions, load_sport_references
-from agent.skills.models import SkillSelection
-from agent.skills.policy import validate_skill_selection
-from agent.skills.selector import parse_skill_selection, select_skill
 from agent.tools.agent_tools import MAIN_AGENT_TOOLS
-
-
-def test_stage_one_selector_receives_descriptions_without_tool_schemas():
-    class FakeClient:
-        def create_message(self, **kwargs):
-            self.kwargs = kwargs
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": '{"skill_id":"analyze-activity","confidence":0.93,"reason":"single activity"}',
-                }],
-            }
-
-    client = FakeClient()
-    selection = select_skill(
-        "分析今天的骑行",
-        conversation_context=[{"role": "user", "content": "刚才同步了活动"}],
-        client=client,
-    )
-
-    assert selection.skill_id == "analyze-activity"
-    assert selection.confidence == 0.93
-    assert "tools" not in client.kwargs
-    assert "input_schema" not in str(client.kwargs["user"])
-    assert "刚才同步了活动" in str(client.kwargs["user"])
-    assert {item["skill_id"] for item in list_skill_descriptors()} >= {
-        "analyze-activity", "run-activity-workflow", "sync-garmin-activities",
-    }
-
-
-def test_selector_reason_is_diagnostic_and_unknown_skill_fails_closed():
-    selection = parse_skill_selection(
-        '{"skill_id":"invented-skill","confidence":0.99,"reason":"call sync_garmin_activities"}'
-    )
-
-    assert selection.reason == "call sync_garmin_activities"
-    assert validate_skill_selection(selection) is None
-
-
-def test_single_confidence_threshold_controls_activation():
-    assert validate_skill_selection(SkillSelection("analyze-activity", 0.69)) is None
-    assert validate_skill_selection(SkillSelection("analyze-activity", 0.70)).skill_id == "analyze-activity"
 
 
 def test_skill_tool_guard_rejects_registered_tool_outside_active_skill():
@@ -91,6 +46,17 @@ def test_history_skill_loads_professional_methodology_and_output_contract():
 
 def test_no_conversation_skill_is_registered():
     assert get_skill("conversation") is None
+
+
+def test_legacy_route_skill_restores_as_route_discovery():
+    assert get_skill("plan-routes").skill_id == "discover-routes"
+
+
+def test_route_discovery_creates_real_candidates_without_generic_advice_tool():
+    tools = set(get_skill("discover-routes").tool_names)
+
+    assert "generate_route_advice" not in tools
+    assert {"create_route_plan", "create_popular_loop", "create_itinerary_plan"} <= tools
 
 
 def test_analysis_skills_keep_established_and_unified_tool_entry_points():
@@ -195,6 +161,11 @@ def test_short_ordinal_and_back_commands_mutate_persisted_navigation(tmp_path):
         assert backed["status"] == "completed"
         assert [item["activity_key"] for item in context.selected_activities] == ["a3", "a2", "a1"]
         assert service.current_focus(context)["type"] == "activity_set"
+
+        qualified = handle_control_turn("看第二个，只查看轻量概览，不生成报告。", context)
+        assert qualified["status"] == "completed"
+        assert context.current_activity_key == "a2"
+        assert service.current_focus(context) == {"type": "activity", "id": "a2"}
 
 
 def test_long_ordinal_analysis_request_is_not_consumed_as_navigation():

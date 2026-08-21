@@ -112,3 +112,9 @@ def lookup_activities(
         "result": selection.to_dict(),
         "navigation_changed": False,
     }
+
+
+HANDLERS = {
+    "resolve_activities": resolve_activities,
+    "lookup_activities": lookup_activities,
+}

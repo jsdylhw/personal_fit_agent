@@ -23,10 +23,11 @@ def test_cli_exposes_main_agent_commands_and_removes_old_agent_command():
 
 
 def test_sync_garmin_command_calls_operation_tool(monkeypatch):
-    captured: dict[str, int] = {}
+    captured: dict[str, object] = {}
 
-    def fake_sync_garmin_activities_tool(count: int):
+    def fake_sync_garmin_activities_tool(count: int, *, force_download: bool = False):
         captured["count"] = count
+        captured["force_download"] = force_download
         return {"status": "ok", "downloaded": 0, "skipped": 1}
 
     monkeypatch.setattr("app.cli.sync_garmin_activities_tool", fake_sync_garmin_activities_tool)
@@ -35,6 +36,7 @@ def test_sync_garmin_command_calls_operation_tool(monkeypatch):
 
     assert result.exit_code == 0
     assert captured["count"] == 3
+    assert captured["force_download"] is False
     assert '"status": "ok"' in result.output
 
 

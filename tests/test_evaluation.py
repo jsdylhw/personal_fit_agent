@@ -23,9 +23,9 @@ def test_load_cases_rejects_duplicate_ids(tmp_path):
 
 def test_skill_grader_reports_match_and_mismatch():
     class FakeClient:
-        def create_message(self, **kwargs):
+        def create_messages(self, **kwargs):
             return {
-                "content": [{"type": "text", "text": '{"skill_id":null,"confidence":0.99,"reason":"chat"}'}],
+                "content": [{"type": "text", "text": "你好。"}],
                 "stop_reason": "end_turn",
             }
 
@@ -43,6 +43,34 @@ def test_skill_grader_reports_match_and_mismatch():
     }), client=FakeClient())
     assert mismatch["grade"]["passed"] is False
     assert "intent expected" in mismatch["grade"]["failures"][0]
+
+
+def test_skill_evaluation_uses_real_activate_skill_protocol():
+    case = EvalCase.from_dict({
+        "case_id": "activation-protocol",
+        "input": "分析最近一次骑行",
+        "mode": "skill",
+        "expected": {"skill_id": "analyze-activity", "intent": "analyze_single"},
+    })
+
+    class FakeClient:
+        def create_messages(self, **kwargs):
+            self.kwargs = kwargs
+            return {
+                "content": [{
+                    "type": "tool_use", "id": "tu-activate", "name": "activate_skill",
+                    "input": {"skill_id": "analyze-activity"},
+                }],
+                "stop_reason": "tool_use",
+            }
+
+    client = FakeClient()
+    result = run_case(case, client=client)
+
+    assert result["grade"]["passed"] is True
+    assert [tool["name"] for tool in client.kwargs["tools"]] == ["activate_skill"]
+    assert "input_schema" not in client.kwargs["system"]
+    assert result["result"]["steps"] == []
 
 
 def test_tool_grader_supports_argument_constraints_and_completion():
@@ -152,9 +180,9 @@ def test_report_writes_jsonl_summary_and_markdown(tmp_path):
     })
 
     class FakeClient:
-        def create_message(self, **kwargs):
+        def create_messages(self, **kwargs):
             return {
-                "content": [{"type": "text", "text": '{"skill_id":null,"confidence":0.99,"reason":"chat"}'}],
+                "content": [{"type": "text", "text": "你好。"}],
                 "stop_reason": "end_turn",
             }
 
@@ -175,8 +203,9 @@ def test_report_writes_jsonl_summary_and_markdown(tmp_path):
 def test_skill_cases_are_versioned_evaluation_inputs():
     cases = load_cases("evaluation/cases/skills.jsonl")
 
-    assert len(cases) == 8
+    assert len(cases) == 15
     assert all(case.mode == "skill" for case in cases)
     assert {case.expected.get("skill_id") for case in cases} >= {
         None, "analyze-activity", "run-activity-workflow", "sync-garmin-activities",
+        "plan-popular-loop", "plan-waypoint-route", "discover-routes",
     }

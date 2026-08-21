@@ -30,14 +30,28 @@ garmin_tokenstore: ".garmin_cn_tokens"
 # garmin_proxy: "http://127.0.0.1:7890"
 disable_curl_cffi: false
 
-# Optional: required only when uploading to Strava. Refresh-token OAuth is
-# recommended; generated tokens are stored locally in token_store.
+# Optional: required when uploading to Strava or enriching routes with public
+# Strava Segments. Refresh-token OAuth is recommended; generated tokens are
+# stored locally in token_store. Authorize read for public Segment access.
 strava:
   client_id: "your-strava-client-id"
   client_secret: "your-strava-client-secret"
   refresh_token: "your-strava-refresh-token"
   token_store: ".strava_tokens.json"
   timeout_seconds: 120
+
+# Optional: required only by demo/gaode_cycling_router. The Web Service key
+# stays in the local Python process; JS key and security code load the AMap
+# base map in the browser. Restrict the JS key's Referer in the AMap console.
+amap:
+  web_service_key: "replace-with-amap-web-service-key"
+  js_key: "replace-with-amap-js-key"
+  security_js_code: "replace-with-amap-security-js-code"
+
+# Optional: required only by demo/global_cycling_router. The key stays in the
+# local Python process and is never sent to the browser.
+google:
+  api_key: "replace-with-google-maps-api-key"
 
 # Leave blank for local-only Web UI access. Set a long random value before
 # exposing the Web UI through a LAN or reverse proxy.

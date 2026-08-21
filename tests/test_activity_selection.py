@@ -132,6 +132,17 @@ def test_key_index_name_and_all_use_uniform_list_result(tmp_path):
         assert [item["activity_key"] for item in result["result"]["activities"]] == expected
 
 
+def test_longest_order_resolves_one_activity_deterministically(tmp_path):
+    database = tmp_path / "activities.db"
+    _write_catalog(database)
+
+    result, context = _resolve(database, {"kind": "all", "order": "longest", "limit": 1})
+
+    assert result["result"]["request"] == {"kind": "all", "order": "longest", "limit": 1}
+    assert [item["activity_key"] for item in result["result"]["activities"]] == ["a2"]
+    assert context.current_activity_key == "a2"
+
+
 def test_current_reuses_frozen_selection_order(tmp_path):
     database = tmp_path / "activities.db"
     _write_catalog(database)

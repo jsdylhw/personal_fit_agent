@@ -10,7 +10,6 @@ from typing import Any
 
 # 工具类别
 CATEGORY_FIT_QUERY = "fit_query"          # FIT 只读数据查询
-CATEGORY_ACTIVITY_INDEX = "activity_index" # 活动索引查询
 CATEGORY_OPERATION = "operation"           # 有副作用的操作(sync/upload)
 CATEGORY_CONVERSATION = "conversation"     # 闲聊/追问
 CATEGORY_ACTIVITY_SELECTION = "activity_selection"   # 活动定位

@@ -115,6 +115,56 @@ class StravaSink:
         )
         return self._json_or_raise(response)
 
+    def explore_segments(self, bounds: str) -> dict[str, Any]:
+        """查询一个 WGS-84 矩形范围内的热门骑行 Segment 样本."""
+        values = [float(value.strip()) for value in str(bounds).split(",")]
+        if len(values) != 4:
+            raise ValueError("bounds must be south,west,north,east")
+        south, west, north, east = values
+        if not (-90 <= south < north <= 90 and -180 <= west < east <= 180):
+            raise ValueError("bounds must be a valid south,west,north,east rectangle")
+        return self._get_segment_json(
+            "explore",
+            params={
+                "bounds": ",".join(str(value) for value in values),
+                "activity_type": "riding",
+            },
+        )
+
+    def get_segment(self, segment_id: int | str) -> dict[str, Any]:
+        """读取一个公开 Strava Segment 的详细属性和完整 polyline."""
+        try:
+            normalized_id = int(segment_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("segment_id must be a positive integer") from exc
+        if normalized_id <= 0:
+            raise ValueError("segment_id must be a positive integer")
+        return self._get_segment_json(str(normalized_id))
+
+    def _get_segment_json(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run an idempotent Segment GET with a bounded transient-network retry."""
+        attempts = max(1, min(3, int(self.config.get("segment_read_attempts", 2))))
+        delay = max(0.0, float(self.config.get("segment_retry_delay_seconds", 0.25)))
+        for attempt in range(attempts):
+            try:
+                response = requests.get(
+                    f"{STRAVA_API_BASE}/segments/{path}",
+                    headers=self._headers(),
+                    params=params,
+                    timeout=float(self.config.get("timeout_seconds", 120)),
+                )
+                return self._json_or_raise(response)
+            except requests.RequestException:
+                if attempt + 1 >= attempts:
+                    raise
+                time.sleep(delay * (attempt + 1))
+        raise AssertionError("unreachable")
+
     def update_description(self, activity_id: str, markdown: str) -> dict[str, Any]:
         """更新已有 Strava 活动的描述."""
         response = requests.put(
@@ -127,7 +177,7 @@ class StravaSink:
 
     def build_authorize_url(
         self, *, redirect_uri: str = "http://localhost",
-        scope: str = "activity:read_all,activity:write",
+        scope: str = "read,activity:read_all,activity:write",
         approval_prompt: str = "force",
     ) -> str:
         """生成 Strava OAuth 授权 URL,用户在浏览器中打开以授权应用."""
@@ -270,7 +320,7 @@ class StravaSink:
                 raise RuntimeError(
                     "Strava API failed: token is missing activity:write permission. "
                     "Generate a new Strava authorization URL with scope "
-                    "'activity:read_all,activity:write', authorize it, exchange the returned code, "
+                    "'read,activity:read_all,activity:write', authorize it, exchange the returned code, "
                     "and update strava.refresh_token in config.yaml."
                 )
             raise RuntimeError(f"Strava API failed: HTTP {response.status_code}; body={data}")

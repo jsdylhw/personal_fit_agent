@@ -23,6 +23,7 @@ class ToolLoopHooks:
         self.allowed_tool_provider = allowed_tool_provider
         self.verbose = verbose
         self.final_response_only = False
+        self.terminal_answer: str | None = None
         self._tool_call_count = 0
         self._tool_call_indices: dict[str, int] = {}
         self._navigation_before: dict[str, dict[str, Any]] = {}
@@ -94,6 +95,10 @@ class ToolLoopHooks:
                 self._append_activity_sport_reference()
         if is_terminal_tool_result(name, output):
             self.final_response_only = True
+            if isinstance(output, dict):
+                answer = str(output.get("answer") or "").strip()
+                if answer:
+                    self.terminal_answer = answer
         if self.verbose:
             self._log_post_tool(block, output, tool_index=tool_index)
 

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Sync Garmin Activities"
-  short_description: "Download activities from Garmin"
-  default_prompt: "Synchronize recent Garmin activities without analysis."

@@ -96,9 +96,14 @@ def sync_garmin_command(
         max=MAX_SYNC_COUNT,
         help=f"下载最近 N 条 Garmin 活动,最多 {MAX_SYNC_COUNT} 条.",
     ),
+    force_download: bool = typer.Option(
+        False,
+        "--force-download",
+        help="重新下载本地已有的同一 Garmin 活动原始 FIT。",
+    ),
 ) -> None:
     """下载 Garmin 中国区最近活动 FIT 文件,自动跳过本地已有文件."""
-    result = sync_garmin_activities_tool(count=count)
+    result = sync_garmin_activities_tool(count=count, force_download=force_download)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 
@@ -134,7 +139,7 @@ def update_strava_description_command(activity_id: str, activity_key: str) -> No
 @app.command("strava-auth-url")
 def strava_auth_url_command(
     redirect_uri: str = "http://localhost",
-    scope: str = "activity:read_all,activity:write",
+    scope: str = "read,activity:read_all,activity:write",
 ) -> None:
     sink = StravaSink(require_access_token=False)
     typer.echo(sink.build_authorize_url(redirect_uri=redirect_uri, scope=scope))
