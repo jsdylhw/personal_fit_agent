@@ -52,6 +52,13 @@ def test_legacy_route_skill_restores_as_route_discovery():
     assert get_skill("plan-routes").skill_id == "discover-routes"
 
 
+def test_route_discovery_creates_real_candidates_without_generic_advice_tool():
+    tools = set(get_skill("discover-routes").tool_names)
+
+    assert "generate_route_advice" not in tools
+    assert {"create_route_plan", "create_popular_loop", "create_itinerary_plan"} <= tools
+
+
 def test_analysis_skills_keep_established_and_unified_tool_entry_points():
     """Adding selection APIs must not silently hide established analysis tools."""
     single = set(get_skill("analyze-activity").tool_names)

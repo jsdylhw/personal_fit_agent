@@ -78,9 +78,10 @@ function restoreChatSession() {
 }
 
 async function fetchJson(url, options = {}) {
-  const { headers, ...requestOptions } = options;
+  const { headers, json, ...requestOptions } = options;
   const response = await fetch(url, {
     ...requestOptions,
+    ...(json === undefined ? {} : { body: JSON.stringify(json) }),
     headers: apiHeaders(headers),
   });
   if (!response.ok) {
@@ -389,9 +390,14 @@ function renderPresentations(blocks) {
 }
 
 function renderRouteMap(data, presentationId) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "route-map-view";
+  const controls = document.createElement("div");
+  controls.className = "route-map-controls";
   const container = document.createElement("div");
   container.className = "route-map";
   container.id = `route-map-${String(presentationId || randomId("map")).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  wrapper.append(controls, container);
   const routes = Array.isArray(data.routes) ? data.routes : [];
   queueMicrotask(() => {
     if (!window.L || !container.isConnected || !routes.length) {
@@ -403,39 +409,138 @@ function renderRouteMap(data, presentationId) {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }).addTo(map);
-    const layers = [];
-    routes.forEach((route, index) => {
-      const coordinates = route.geometry?.coordinates;
-      if (!Array.isArray(coordinates) || coordinates.length < 2) return;
-      const palette = ["#087f6c", "#d97706", "#2563eb", "#9333ea", "#dc2626", "#0891b2", "#65a30d"];
-      const isStravaSegment = route.kind === "strava_segment";
-      const color = isStravaSegment ? "#d7438d" : palette[index % palette.length];
-      const line = L.geoJSON(route.geometry, {
-        style: {
-          color,
-          weight: route.active ? 6 : isStravaSegment ? 4 : 4,
-          opacity: route.active ? 0.95 : isStravaSegment ? 0.85 : 0.65,
-          dashArray: isStravaSegment ? "7 5" : null,
-        },
-      }).addTo(map).bindPopup(leafletText(route.name || "路线候选"));
-      layers.push(line);
-      (Array.isArray(route.waypoints) ? route.waypoints : []).forEach((point, pointIndex) => {
-        const lat = Number(point.latitude);
-        const lon = Number(point.longitude);
-        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-        const marker = L.circleMarker([lat, lon], {
-          radius: pointIndex === 0 ? 7 : 5,
-          color,
-          fillColor: "#fff",
-          fillOpacity: 1,
-          weight: 3,
-        }).addTo(map).bindTooltip(leafletText(point.name || `途经点 ${pointIndex + 1}`));
-        layers.push(marker);
+    const candidateRoutes = routes.filter((route) => route.kind !== "strava_segment");
+    const segmentRoutes = routes.filter((route) => route.kind === "strava_segment");
+    let selectedCandidateIndex = Math.max(0, candidateRoutes.findIndex((route) => route.active));
+    const selectedSegmentIndexes = [];
+    let layerGroup = L.featureGroup().addTo(map);
+    const candidateButtons = candidateRoutes.map((route, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "route-map-choice";
+      button.textContent = route.name || `路线 ${index + 1}`;
+      button.addEventListener("click", async () => {
+        selectedCandidateIndex = index;
+        drawSelected();
+        if (data.plan_id && route.candidate_id) {
+          try {
+            await fetchJson("/api/route-plans/select", {
+              method: "POST",
+              json: {
+                session_id: state.chatSessionId,
+                plan_id: data.plan_id,
+                candidate_id: route.candidate_id,
+              },
+            });
+          } catch (error) {
+            appendChatMessage("error", `路线预览状态保存失败：${error.message}`);
+          }
+        }
       });
+      controls.appendChild(button);
+      return button;
     });
-    if (layers.length) map.fitBounds(L.featureGroup(layers).getBounds().pad(0.08));
+    if (segmentRoutes.length) {
+      const hint = document.createElement("div");
+      hint.className = "route-map-hint";
+      hint.textContent = "点击路段可多选（最多 3 条），选择顺序就是骑行顺序。";
+      controls.appendChild(hint);
+    }
+    const segmentButtons = segmentRoutes.map((route, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "route-map-choice";
+      button.textContent = route.name || `Strava 路段 ${index + 1}`;
+      button.addEventListener("click", () => {
+        const selectedPosition = selectedSegmentIndexes.indexOf(index);
+        if (selectedPosition >= 0) {
+          selectedSegmentIndexes.splice(selectedPosition, 1);
+        } else if (selectedSegmentIndexes.length < 3) {
+          selectedSegmentIndexes.push(index);
+        }
+        drawSelected();
+      });
+      controls.appendChild(button);
+      return button;
+    });
+    let composeButton = null;
+    if (segmentRoutes.length && data.plan_id) {
+      composeButton = document.createElement("button");
+      composeButton.type = "button";
+      composeButton.className = "primary";
+      composeButton.disabled = true;
+      composeButton.textContent = "用所选路段生成路线";
+      composeButton.addEventListener("click", () => {
+        const selected = selectedSegmentIndexes.map((index) => segmentRoutes[index]);
+        if (!selected.length) return;
+        const description = selected
+          .map((route) => `${route.name || "Strava 路段"}（ID ${route.segment_id}）`)
+          .join(" → ");
+        sendChat(`请按这个顺序使用当前路线已发现的 Strava 路段生成新候选：${description}`);
+      });
+      controls.appendChild(composeButton);
+    }
+
+    function drawSelected() {
+      layerGroup.remove();
+      layerGroup = L.featureGroup().addTo(map);
+      candidateButtons.forEach((button, index) => {
+        button.classList.toggle("active", index === selectedCandidateIndex);
+      });
+      segmentButtons.forEach((button, index) => {
+        button.classList.toggle("active", selectedSegmentIndexes.includes(index));
+      });
+      if (composeButton) {
+        composeButton.disabled = selectedSegmentIndexes.length === 0;
+        composeButton.textContent = selectedSegmentIndexes.length
+          ? `用所选 ${selectedSegmentIndexes.length} 条路段生成路线`
+          : "用所选路段生成路线";
+      }
+      const palette = ["#087f6c", "#d97706", "#2563eb", "#9333ea", "#dc2626", "#0891b2", "#65a30d"];
+      const visibleRoutes = [];
+      if (candidateRoutes[selectedCandidateIndex]) {
+        visibleRoutes.push({ route: candidateRoutes[selectedCandidateIndex], color: "#087f6c" });
+      }
+      selectedSegmentIndexes.forEach((segmentIndex, order) => {
+        const route = segmentRoutes[segmentIndex];
+        if (route) visibleRoutes.push({ route, color: palette[(order + 1) % palette.length] });
+      });
+      if (!visibleRoutes.length && segmentRoutes[0]) {
+        visibleRoutes.push({ route: segmentRoutes[0], color: "#d7438d" });
+      }
+      visibleRoutes.forEach(({ route, color }) => {
+        if (!route) return;
+        const coordinates = route.geometry?.coordinates;
+        if (!Array.isArray(coordinates) || coordinates.length < 2) return;
+        const isStravaSegment = route.kind === "strava_segment";
+        L.geoJSON(route.geometry, {
+          style: {
+            color,
+            weight: route.active ? 6 : 4,
+            opacity: route.active ? 0.95 : 0.85,
+            dashArray: isStravaSegment ? "7 5" : null,
+          },
+        }).addTo(layerGroup).bindPopup(leafletText(route.name || "路线候选"));
+        (Array.isArray(route.waypoints) ? route.waypoints : []).forEach((point, pointIndex) => {
+          const lat = Number(point.latitude);
+          const lon = Number(point.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+          L.circleMarker([lat, lon], {
+            radius: pointIndex === 0 ? 7 : 5,
+            color,
+            fillColor: "#fff",
+            fillOpacity: 1,
+            weight: 3,
+          }).addTo(layerGroup).bindTooltip(leafletText(point.name || `途经点 ${pointIndex + 1}`));
+        });
+      });
+      const bounds = layerGroup.getBounds();
+      if (bounds.isValid()) map.fitBounds(bounds.pad(0.08));
+    }
+
+    drawSelected();
   });
-  return container;
+  return wrapper;
 }
 
 function leafletText(value) {
@@ -668,6 +773,9 @@ function presentationColumnLabel(value) {
     candidate: "候选路线",
     stage: "行程阶段",
     segment_name: "Strava 路段",
+    segment_id: "路段 ID",
+    strava_segments: "经过路段",
+    kind: "候选类型",
     waypoints: "途经点",
     handoff_km: "衔接距离",
     provider: "算路服务",
@@ -678,6 +786,7 @@ function presentationColumnLabel(value) {
     route_overlap_ratio: "走廊内比例",
     mode: "模式",
     active: "当前使用",
+    confirmed: "已确认",
     elevation_m: "海拔",
     activity_count: "活动数量",
     intensity_factor: "强度因子",

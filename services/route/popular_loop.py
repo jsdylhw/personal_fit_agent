@@ -80,70 +80,81 @@ def create_popular_loop_plan(
         )
         route_connector = connector_router or _amap_connector(amap_key)
         last_candidate_error: Exception | None = None
+        candidates: list[dict[str, Any]] = []
+        target = float(target_distance_km) if target_distance_km is not None else None
         for selected in ranked_segments[:3]:
             try:
                 detail = fetch(int(selected["id"]))
                 feature = segment_detail_feature(detail)
                 coordinates = [list(point) for point in feature["geometry"]["coordinates"]]
                 closure_gap_m = haversine_m(coordinates[0], coordinates[-1])
-                if closure_gap_m > 1_000:
+                segment_distance_m = float(feature["properties"].get("distance_m") or detail.get("distance") or 0)
+                if closure_gap_m > 1_000 or closure_gap_m / max(1.0, segment_distance_m) > 0.10:
                     raise ValueError(f"选中的 Strava 路段不是闭合环线（缺口 {closure_gap_m:.0f} m）")
                 outbound = route_connector(origin_wgs, coordinates[0])
                 inbound = route_connector(coordinates[-1], origin_wgs)
-                break
+                geometry = _join_lines(
+                    outbound["geometry"]["coordinates"], coordinates, inbound["geometry"]["coordinates"],
+                )
+                distance_m = (
+                    float(outbound.get("distance_m") or 0)
+                    + segment_distance_m
+                    + float(inbound.get("distance_m") or 0)
+                )
+                duration_s = (
+                    float(outbound.get("duration_s") or 0)
+                    + segment_distance_m / 5.0
+                    + float(inbound.get("duration_s") or 0)
+                )
+                segment = _segment_summary(detail, feature, closure_gap_m)
+                candidates.append({
+                    "candidate_id": f"candidate_{len(candidates) + 1}",
+                    "candidate_kind": "popular_loop",
+                    "name": str(detail.get("name") or feature["properties"].get("name") or normalized_area),
+                    "route_type": "loop",
+                    "waypoint_queries": [normalized_origin, normalized_area],
+                    "waypoints": [origin_place, _segment_waypoint(normalized_area, area_place, coordinates[0]), dict(origin_place)],
+                    "provider": "amap+strava",
+                    "travel_mode": "BICYCLE",
+                    "distance_m": distance_m,
+                    "distance_km": round(distance_m / 1_000, 1),
+                    "duration_s": duration_s,
+                    "duration_min": round(duration_s / 60),
+                    "target_distance_km": target,
+                    "distance_delta_km": round(distance_m / 1_000 - target, 1) if target is not None else None,
+                    "geometry": {"type": "LineString", "coordinates": geometry},
+                    # Elevation is fetched only after the rider confirms one candidate.
+                    "elevation": None,
+                    "warnings": ["路线主体采用完整 Strava 热门环线；起点往返环线入口由高德骑行算路接驳。"],
+                    "strava_segments": [segment],
+                    "rationale": f"完整骑行 Strava 环线“{segment['name']}”",
+                    "segment_evidence": {
+                        "strategy": "complete_popular_loop",
+                        "selected_segment_id": segment["segment_id"],
+                        "selected_segment_name": segment["name"],
+                        "segment_distance_km": segment["distance_km"],
+                        "closure_gap_m": segment["closure_gap_m"],
+                        "approach_out_km": round(float(outbound.get("distance_m") or 0) / 1_000, 1),
+                        "approach_back_km": round(float(inbound.get("distance_m") or 0) / 1_000, 1),
+                        "search_bounds_wgs84": bounds,
+                    },
+                })
             except Exception as exc:
                 last_candidate_error = exc
-        else:
+        if not candidates:
             raise RuntimeError(f"Strava 闭合环线候选均不可用：{last_candidate_error}") from last_candidate_error
-        geometry = _join_lines(
-            outbound["geometry"]["coordinates"], coordinates, inbound["geometry"]["coordinates"],
-        )
-        segment_distance_m = float(feature["properties"].get("distance_m") or detail.get("distance") or 0)
-        distance_m = float(outbound.get("distance_m") or 0) + segment_distance_m + float(inbound.get("distance_m") or 0)
-        duration_s = (
-            float(outbound.get("duration_s") or 0)
-            + segment_distance_m / 5.0
-            + float(inbound.get("duration_s") or 0)
-        )
-        target = float(target_distance_km) if target_distance_km is not None else None
-        segment = _segment_summary(detail, feature, closure_gap_m)
-        warnings = ["路线主体采用完整 Strava 热门环线；起点往返环线入口由高德骑行算路接驳。"]
-        elevation = None
-        if include_elevation:
-            try:
-                elevation = (elevation_fetcher or _elevation_profile)(geometry, distance_m, cfg)
-            except (RuntimeError, ValueError) as exc:
-                warnings.append(f"海拔请求失败：{exc}")
-        candidate = {
-            "candidate_id": "candidate_1",
-            "name": str(detail.get("name") or feature["properties"].get("name") or normalized_area),
-            "route_type": "loop",
-            "waypoint_queries": [normalized_origin, normalized_area],
-            "waypoints": [origin_place, _segment_waypoint(normalized_area, area_place, coordinates[0]), dict(origin_place)],
-            "provider": "amap+strava",
-            "travel_mode": "BICYCLE",
-            "distance_m": distance_m,
-            "distance_km": round(distance_m / 1_000, 1),
-            "duration_s": duration_s,
-            "duration_min": round(duration_s / 60),
-            "target_distance_km": target,
-            "distance_delta_km": round(distance_m / 1_000 - target, 1) if target is not None else None,
-            "geometry": {"type": "LineString", "coordinates": geometry},
-            "elevation": elevation,
-            "warnings": warnings,
-            "strava_segments": [segment],
-            "segment_evidence": {
-                "strategy": "complete_popular_loop",
-                "selected_segment_id": segment["segment_id"],
-                "selected_segment_name": segment["name"],
-                "segment_distance_km": segment["distance_km"],
-                "closure_gap_m": segment["closure_gap_m"],
-                "approach_out_km": round(float(outbound.get("distance_m") or 0) / 1_000, 1),
-                "approach_back_km": round(float(inbound.get("distance_m") or 0) / 1_000, 1),
-                "search_bounds_wgs84": bounds,
-            },
+        if target is not None:
+            candidates.sort(key=lambda item: abs(float(item.get("distance_km") or 0) - target))
+        for index, candidate in enumerate(candidates, start=1):
+            candidate["candidate_id"] = f"candidate_{index}"
+        plan = _plan(workspace_id, title, candidates[0], fallback=False)
+        plan["candidates"] = candidates
+        plan["active_candidate_id"] = candidates[0]["candidate_id"]
+        plan["planning"] = {
+            "status": "awaiting_selection",
+            "confirmed_candidate_id": None,
+            "include_elevation": bool(include_elevation),
         }
-        plan = _plan(workspace_id, title, candidate, fallback=False)
         plan["popular_loop_request"] = {
             "origin": normalized_origin,
             "area": normalized_area,
@@ -171,10 +182,16 @@ def create_popular_loop_plan(
         fallback["segment_strategy"] = "complete_popular_loop"
         fallback["popular_loop_error"] = {"type": type(exc).__name__, "message": str(exc)}
         fallback_candidate = fallback["candidates"][0]
+        fallback_candidate["candidate_kind"] = "provider_fallback"
         fallback_candidate["warnings"] = [
             *(fallback_candidate.get("warnings") or []),
             f"未找到或无法连接完整 Strava 热门环线，已降级为普通地图往返路线：{exc}",
         ]
+        fallback["planning"] = {
+            "status": "awaiting_selection",
+            "confirmed_candidate_id": None,
+            "include_elevation": bool(include_elevation),
+        }
         return fallback
 
 
@@ -230,6 +247,11 @@ def reverse_popular_loop_plan(plan: dict[str, Any], *, candidate_id: str | None 
     return {
         **plan,
         "candidates": [updated if item is selected else item for item in candidates],
+        "planning": {
+            **(plan.get("planning") if isinstance(plan.get("planning"), dict) else {}),
+            "status": "awaiting_selection",
+            "confirmed_candidate_id": None,
+        },
     }
 
 
@@ -277,11 +299,11 @@ def _rank_closed_segments(
         if not (isinstance(start, list) and isinstance(end, list) and len(start) >= 2 and len(end) >= 2):
             continue
         gap = haversine_m((start[1], start[0]), (end[1], end[0]))
-        if gap > 1_000:
+        distance_km = float(segment.get("distance") or 0) / 1_000
+        if gap > 1_000 or gap / max(1.0, distance_km * 1_000) > 0.10:
             continue
         name = "".join(str(segment.get("name") or "").casefold().split())
         name_match = _name_match_score(normalized_hint, name)
-        distance_km = float(segment.get("distance") or 0) / 1_000
         connector_km = 0.0
         if origin is not None:
             connector_km = (

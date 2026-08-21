@@ -83,6 +83,7 @@ def enrich_route_plan_with_segments(
 
     selected_segments = sorted(discovered.values(), key=_rank_key)[: int(max_segments)]
     selected_ids = {int(item["segment_id"]) for item in selected_segments}
+    segment_pool = dict(updated.get("segment_pool") or {}) if isinstance(updated.get("segment_pool"), dict) else {}
     for target in targets:
         target_key = str(target.get("stage_id") or selected_id)
         target["strava_segments"] = [
@@ -95,6 +96,8 @@ def enrich_route_plan_with_segments(
             "segment_count": len(target["strava_segments"]),
             "discovery_limit": "Strava Explorer returns a popularity-ranked sample, not every nearby segment.",
         }
+        segment_pool[target_key] = [dict(item) for item in target["strava_segments"]]
+    updated["segment_pool"] = segment_pool
 
     compact_segments = [
         {key: value for key, value in item.items() if key != "geometry"}

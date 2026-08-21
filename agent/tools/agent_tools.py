@@ -314,27 +314,10 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         category=CATEGORY_COACHING,
     ),
     ToolDef(
-        name="generate_route_advice",
-        description="按位置、时长/距离、目标和可选训练状态推荐路线类型。",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "location": {"type": "string", "description": "位置/区域"},
-                "duration": {"type": "integer", "description": "时长(分钟)"},
-                "distance": {"type": "integer", "description": "距离(km)"},
-                "goal": {"type": "string", "description": "骑行目标"},
-                "terrain": {"type": "string", "description": "地形偏好"},
-                "scenery": {"type": "string", "description": "风景偏好"},
-                "preferences": {"type": "array", "items": {"type": "string"}},
-            },
-        },
-        category=CATEGORY_COACHING,
-    ),
-    ToolDef(
         name="create_popular_loop",
         description=(
-            "创建并持久化一条国内热门闭合骑行环线：从指定起点用高德接驳到完整 Strava 环线，"
-            "骑完整环线后再接驳返回起点。适合环陵、环湖、经典绕圈等明确区域或命名环线。"
+            "创建并持久化国内热门闭合骑行环线候选：从指定起点用高德接驳到完整 Strava 环线，"
+            "骑完整环线后再接驳返回起点。返回最多三个真实闭环候选，等待用户选择和确认。"
         ),
         input_schema={
             "type": "object",
@@ -375,7 +358,7 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "include_elevation": {"type": "boolean", "default": True},
                 "segment_strategy": {
                     "type": "string", "enum": ["auto", "ignore", "require"], "default": "auto",
-                    "description": "国内路线默认查询 Strava 路段；auto 失败时保留高德基准路线。",
+                    "description": "国内路线默认保留地图基准并建议独立 Strava 候选；auto 失败时仍保留基准路线。",
                 },
                 "segment_preferences": {
                     "type": "array", "items": {"type": "string"},
@@ -466,7 +449,8 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         description=(
             "更新最近或指定路线计划。replace_waypoints 更新单日路线，replace_stage "
             "更新完整阶段，replace_waypoint 替换一个途经点；reverse_candidate/reverse_stage "
-            "确定性反转路线方向，undo 恢复上一版本，select_candidate 切换当前候选。"
+            "确定性反转路线方向，select_candidate 切换预览候选，compose_segments 按已发现的 "
+            "Strava 路段顺序生成路线，confirm_candidate 确认最终路线，undo 恢复上一版本。"
         ),
         input_schema={
             "type": "object",
@@ -477,7 +461,8 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                     "type": "string",
                     "enum": [
                         "replace_waypoints", "replace_stage", "replace_waypoint",
-                        "reverse_candidate", "reverse_stage", "select_candidate", "undo",
+                        "reverse_candidate", "reverse_stage", "select_candidate",
+                        "compose_segments", "confirm_candidate", "undo",
                     ],
                 },
                 "candidate_id": {"type": "string"},
@@ -498,6 +483,20 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                     "description": "缺省时沿用当前路线计划的策略。",
                 },
                 "segment_preferences": {"type": "array", "items": {"type": "string"}},
+                "segments": {
+                    "type": "array", "minItems": 1, "maxItems": 3,
+                    "description": "compose_segments 使用；数组顺序就是骑行顺序，只能引用当前路线已发现的真实 Strava Segment ID。",
+                    "items": {
+                        "type": "object",
+                        "required": ["segment_id"],
+                        "properties": {
+                            "segment_id": {"type": "integer", "minimum": 1},
+                            "direction": {
+                                "type": "string", "enum": ["auto", "forward", "reverse"], "default": "auto",
+                            },
+                        },
+                    },
+                },
             },
         },
         category=CATEGORY_COACHING,

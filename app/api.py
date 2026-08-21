@@ -28,6 +28,8 @@ from operations.activity.service import (
 )
 from integrations.garmin import DEFAULT_OUTPUT_DIR
 from storage.repositories.activity import ActivityStore, file_content_key
+from storage.repositories.route import RoutePlanStore
+from services.route.single_day import compact_route_plan
 from operations.activity.strava import upload_activity_to_strava
 from fit.parser import parse_fit
 
@@ -60,6 +62,12 @@ class ChatRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     message: str = Field(min_length=1, max_length=20_000)
+
+
+class SelectRouteCandidateRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    plan_id: str = Field(min_length=1, max_length=128)
+    candidate_id: str = Field(min_length=1, max_length=128)
 
 
 @app.get("/")
@@ -191,6 +199,32 @@ def chat_endpoint(request: ChatRequest, http_request: Request) -> dict[str, Any]
         response = public_turn_dict(result)
         session.cache_response(request.request_id, request.message, response)
         return response
+
+
+@app.post("/api/route-plans/select")
+def select_route_candidate_endpoint(
+    request: SelectRouteCandidateRequest,
+    http_request: Request,
+) -> dict[str, Any]:
+    """Persist a deterministic preview selection without spending an LLM turn."""
+    _require_api_access(http_request)
+    session = chat_sessions.get_or_create(request.session_id)
+    with session.lock:
+        store = RoutePlanStore()
+        plan = store.get(request.plan_id)
+        if not plan:
+            raise HTTPException(status_code=404, detail="Route plan does not exist.")
+        workspace_id = str(session.context.workspace_id or session.context.session_id)
+        if str(plan.get("workspace_id") or "") != workspace_id:
+            raise HTTPException(status_code=403, detail="Route plan does not belong to this chat session.")
+        valid_ids = {
+            str(item.get("candidate_id") or "")
+            for item in plan.get("candidates") or [] if isinstance(item, dict)
+        }
+        if request.candidate_id not in valid_ids:
+            raise HTTPException(status_code=404, detail="Route candidate does not exist.")
+        stored = store.save({**plan, "active_candidate_id": request.candidate_id}, archive=False)
+        return compact_route_plan(stored)
 
 
 def _fit_output_dir(config: dict[str, Any]) -> Path:

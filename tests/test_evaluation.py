@@ -203,7 +203,7 @@ def test_report_writes_jsonl_summary_and_markdown(tmp_path):
 def test_skill_cases_are_versioned_evaluation_inputs():
     cases = load_cases("evaluation/cases/skills.jsonl")
 
-    assert len(cases) == 14
+    assert len(cases) == 15
     assert all(case.mode == "skill" for case in cases)
     assert {case.expected.get("skill_id") for case in cases} >= {
         None, "analyze-activity", "run-activity-workflow", "sync-garmin-activities",

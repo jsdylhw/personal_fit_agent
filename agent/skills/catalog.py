@@ -154,11 +154,11 @@ SKILL_CATALOG: tuple[SkillSpec, ...] = (
     SkillSpec(
         skill_id="discover-routes",
         description=(
-            "Recommend route ideas when the rider gives a region, time, distance, terrain, scenery, or training goal "
-            "but has not fixed a complete waypoint sequence. May turn selected ideas into persisted routes."
+            "Create real route candidates when the rider gives a start or region plus time, distance, direction, "
+            "terrain, scenery, or training intent but has not fixed a complete waypoint sequence."
         ),
         tool_names=(
-            "generate_route_advice", "create_popular_loop", "create_route_plan", "create_itinerary_plan",
+            "create_popular_loop", "create_route_plan", "create_itinerary_plan",
             "update_route_plan", "get_route_plan", "explore_route_segments",
         ),
         public_intent="route_advice",

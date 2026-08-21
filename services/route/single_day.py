@@ -100,7 +100,21 @@ def replace_candidate(
         include_elevation=include_elevation,
         config=load_config(),
     )
-    return {**plan, "candidates": [updated if index == selected_index else item for index, item in enumerate(candidates)]}
+    previous = candidates[selected_index]
+    updated.update({
+        "candidate_kind": "semantic_revision",
+        "parent_candidate_id": previous.get("parent_candidate_id") or previous.get("candidate_id"),
+        "rationale": "根据用户对当前候选的语义修改重新算路",
+    })
+    return {
+        **plan,
+        "candidates": [updated if index == selected_index else item for index, item in enumerate(candidates)],
+        "planning": {
+            **(plan.get("planning") if isinstance(plan.get("planning"), dict) else {}),
+            "status": "awaiting_selection",
+            "confirmed_candidate_id": None,
+        },
+    }
 
 
 def edit_candidate_waypoints(
@@ -204,6 +218,15 @@ def compact_route_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "segment_strategy": plan.get("segment_strategy") or "ignore",
         "segment_preferences": plan.get("segment_preferences") or [],
         "segment_aware_summary": plan.get("segment_aware_summary") or {},
+        "planning": plan.get("planning") or {},
+        "segment_pool": {
+            str(target_id): [
+                {key: value for key, value in segment.items() if key != "geometry"}
+                for segment in segments if isinstance(segment, dict)
+            ]
+            for target_id, segments in (plan.get("segment_pool") or {}).items()
+            if isinstance(segments, list)
+        } if isinstance(plan.get("segment_pool"), dict) else {},
         "active_candidate_id": plan.get("active_candidate_id"),
         "candidates": candidates,
     }
@@ -231,6 +254,9 @@ def _compact_route_segment(item: dict[str, Any], *, id_key: str) -> dict[str, An
             for segment in item.get("strava_segments") or [] if isinstance(segment, dict)
         ],
         "segment_evidence": item.get("segment_evidence") or {},
+        "candidate_kind": item.get("candidate_kind") or "baseline",
+        "parent_candidate_id": item.get("parent_candidate_id"),
+        "rationale": item.get("rationale"),
     }
     if id_key == "stage_id":
         result.update({

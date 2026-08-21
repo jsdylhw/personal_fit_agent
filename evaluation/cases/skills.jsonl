@@ -6,6 +6,7 @@
 {"case_id":"skill_combined_workflow","mode":"skill","tags":["workflow"],"input":"同步最新的三个活动，分析并上传 Strava","expected":{"skill_id":"run-activity-workflow","intent":"mixed"}}
 {"case_id":"skill_training_coach","mode":"skill","tags":["coaching"],"input":"根据最近训练给我下一次训练建议","expected":{"skill_id":"coach-training","intent":"training_advice"}}
 {"case_id":"skill_route_discovery","mode":"skill","tags":["route","discovery"],"input":"推荐一条青浦两小时的有氧骑行路线","expected":{"skill_id":"discover-routes","intent":"route_advice"}}
+{"case_id":"skill_route_discovery_unnamed_loop","mode":"skill","tags":["route","discovery","loop"],"input":"从青浦新城地铁站出发骑一圈50km再回来，沿途风景好一点","expected":{"skill_id":"discover-routes","intent":"route_advice"}}
 {"case_id":"skill_route_popular_loop","mode":"skill","tags":["route","popular-loop"],"input":"规划一条从夫子庙出发环陵的路线","expected":{"skill_id":"plan-popular-loop","intent":"route_advice"}}
 {"case_id":"skill_route_waypoints","mode":"skill","tags":["route","waypoints"],"input":"规划一条夫子庙到中山陵再到玄武湖的路线","expected":{"skill_id":"plan-waypoint-route","intent":"route_advice"}}
 {"case_id":"skill_sync_latest_analyze","mode":"skill","tags":["sync","workflow","paraphrase"],"input":"同步 Garmin 的最后一个活动并分析","expected":{"skill_id":"run-activity-workflow","intent":"mixed"}}

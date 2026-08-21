@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from agent.main_agent.context import AgentContext
 from agent.tools.handlers.route import create_popular_loop_tool, update_route_plan_tool
-from services.route.popular_loop import create_popular_loop_plan
+from services.route.popular_loop import _rank_closed_segments, create_popular_loop_plan
 from services.route.single_day import _encode_polyline
 from storage.repositories.route import RoutePlanStore
 
@@ -175,8 +175,29 @@ def test_popular_loop_target_distance_accounts_for_connectors():
         segment_explorer=explore, segment_fetcher=fetch, connector_router=_connector,
     )
 
-    assert fetched == [22]
+    assert fetched == [22, 30]
+    assert len(plan["candidates"]) == 2
     assert plan["candidates"][0]["strava_segments"][0]["segment_id"] == 22
+
+
+def test_short_open_climb_is_not_treated_as_a_closed_loop():
+    try:
+        _rank_closed_segments(
+            [{
+                "id": 1,
+                "name": "紫金山短爬坡",
+                "distance": 1_340,
+                "start_latlng": [32.061, 118.851],
+                "end_latlng": [32.067, 118.858],
+            }],
+            name_hint="紫金山环陵",
+            target_distance_km=30,
+            origin=[118.79, 32.02],
+        )
+    except ValueError as exc:
+        assert "没有返回闭合" in str(exc)
+    else:
+        raise AssertionError("a route with a closure gap near its own length is not a loop")
 
 
 def test_popular_loop_tool_persists_compact_result(monkeypatch):
@@ -229,7 +250,7 @@ def test_reverse_popular_loop_keeps_strava_route_instead_of_generic_reroute(monk
     )
     original = list(plan["candidates"][0]["geometry"]["coordinates"])
     monkeypatch.setattr(RoutePlanStore, "get_latest", lambda self, workspace_id: plan)
-    monkeypatch.setattr(RoutePlanStore, "save", lambda self, value: {**value, "revision": 2})
+    monkeypatch.setattr(RoutePlanStore, "save", lambda self, value, **kwargs: {**value, "revision": 2})
 
     output = update_route_plan_tool(
         AgentContext(session_id="session", workspace_id="workspace"),

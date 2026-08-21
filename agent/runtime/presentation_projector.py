@@ -53,6 +53,12 @@ def _route_plan_blocks(
     active_id = str(plan.get("active_candidate_id") or "")
     source = _source(execution, payload)
     blocks: list[PresentationBlock] = []
+    pool_blocks = _route_pool_blocks(execution, plan, source)
+    pool_routes = [
+        route
+        for block in pool_blocks if block.type == "route_map"
+        for route in block.data.get("routes") or [] if isinstance(route, dict)
+    ]
     has_stages = any(isinstance(item.get("stages"), list) for item in candidates)
     rows = []
     for item in candidates:
@@ -70,7 +76,16 @@ def _route_plan_blocks(
                 "handoff_km": segment.get("handoff_from_previous_km") if segment is not item else None,
                 "provider": segment.get("provider"),
                 "mode": segment.get("travel_mode"),
+                "kind": item.get("candidate_kind") or "baseline",
+                "strava_segments": " + ".join(
+                    str(value.get("name") or value.get("segment_id") or "")
+                    for value in segment.get("strava_segments") or [] if isinstance(value, dict)
+                ),
                 "active": item.get("candidate_id") == active_id,
+                "confirmed": item.get("candidate_id") == (
+                    (plan.get("planning") or {}).get("confirmed_candidate_id")
+                    if isinstance(plan.get("planning"), dict) else None
+                ),
             })
     if rows:
         blocks.append(PresentationBlock(
@@ -79,9 +94,9 @@ def _route_plan_blocks(
             title=str(plan.get("title") or "路线候选"),
             data={
                 "columns": (
-                    ["candidate", "stage", "waypoints", "distance_km", "duration_min", "handoff_km", "provider", "mode", "active"]
+                    ["candidate", "stage", "waypoints", "distance_km", "duration_min", "handoff_km", "provider", "mode", "kind", "strava_segments", "active", "confirmed"]
                     if has_stages
-                    else ["candidate", "waypoints", "distance_km", "duration_min", "provider", "mode", "active"]
+                    else ["candidate", "waypoints", "distance_km", "duration_min", "provider", "mode", "kind", "strava_segments", "active", "confirmed"]
                 ),
                 "rows": rows,
             },
@@ -98,6 +113,7 @@ def _route_plan_blocks(
             routes.append({
                 "candidate_id": item.get("candidate_id"),
                 "stage_id": segment.get("stage_id"),
+                "kind": "planned_route",
                 "name": (
                     f"{item.get('name')} · {segment.get('label')}"
                     if segment is not item else item.get("name")
@@ -113,12 +129,20 @@ def _route_plan_blocks(
                     for point in segment.get("waypoints") or [] if isinstance(point, dict)
                 ],
             })
+    routes.extend(pool_routes)
     if routes:
         blocks.append(PresentationBlock(
             presentation_id=f"execution-{execution.index}-route-map",
             type="route_map",
-            title="路线地图",
-            data={"routes": routes},
+            title="路线与 Strava 路段",
+            data={
+                "plan_id": plan.get("plan_id"),
+                "planning_status": (
+                    (plan.get("planning") or {}).get("status")
+                    if isinstance(plan.get("planning"), dict) else None
+                ),
+                "routes": routes,
+            },
             source=source,
         ))
     active = next((item for item in candidates if item.get("candidate_id") == active_id), None)
@@ -146,6 +170,75 @@ def _route_plan_blocks(
                 },
                 source=source,
             ))
+    blocks.extend(block for block in pool_blocks if block.type != "route_map")
+    return blocks
+
+
+def _route_pool_blocks(
+    execution: ToolExecution,
+    plan: dict[str, Any],
+    source: dict[str, Any],
+) -> list[PresentationBlock]:
+    pools = plan.get("segment_pool") if isinstance(plan.get("segment_pool"), dict) else {}
+    segments: dict[int, dict[str, Any]] = {}
+    for values in pools.values():
+        for segment in values if isinstance(values, list) else []:
+            if not isinstance(segment, dict):
+                continue
+            try:
+                segment_id = int(segment.get("segment_id"))
+            except (TypeError, ValueError):
+                continue
+            segments.setdefault(segment_id, segment)
+    if not segments:
+        return []
+    rows = []
+    routes = []
+    for segment_id, segment in segments.items():
+        rows.append({
+            "segment_id": segment_id,
+            "segment_name": segment.get("name"),
+            "distance_km": segment.get("distance_km"),
+            "average_grade_percent": segment.get("average_grade_percent"),
+            "elevation_difference_m": segment.get("elevation_difference_m"),
+            "distance_to_route_km": segment.get("distance_to_route_km"),
+            "route_overlap_ratio": segment.get("route_overlap_ratio"),
+        })
+        geometry = segment.get("geometry") if isinstance(segment.get("geometry"), dict) else {}
+        coordinates = geometry.get("coordinates") if isinstance(geometry.get("coordinates"), list) else []
+        if len(coordinates) >= 2:
+            routes.append({
+                "segment_id": segment_id,
+                "name": f"Strava · {segment.get('name') or segment_id}",
+                "kind": "strava_segment",
+                "active": False,
+                "geometry": {"type": "LineString", "coordinates": _bounded_coordinates(coordinates)},
+                "waypoints": [],
+            })
+    blocks = [PresentationBlock(
+        presentation_id=f"execution-{execution.index}-route-pool",
+        type="table",
+        title="可选 Strava 热门路段",
+        data={
+            "columns": [
+                "segment_id", "segment_name", "distance_km", "average_grade_percent",
+                "elevation_difference_m", "distance_to_route_km", "route_overlap_ratio",
+            ],
+            "rows": rows,
+        },
+        source=source,
+    )]
+    if routes:
+        blocks.append(PresentationBlock(
+            presentation_id=f"execution-{execution.index}-route-pool-map",
+            type="route_map",
+            title="Strava 路段地图",
+            data={
+                "plan_id": plan.get("plan_id"),
+                "routes": routes,
+            },
+            source=source,
+        ))
     return blocks
 
 
@@ -215,6 +308,7 @@ def _route_segment_blocks(
             )
             if len(segment_coordinates) >= 2:
                 routes.append({
+                    "segment_id": segment_id,
                     "name": f"Strava · {segment.get('name') or segment_id}",
                     "kind": "strava_segment",
                     "active": False,
@@ -246,7 +340,7 @@ def _route_segment_blocks(
             presentation_id=f"execution-{execution.index}-route-segment-map",
             type="route_map",
             title="计划路线与 Strava 路段",
-            data={"routes": routes},
+            data={"plan_id": plan.get("plan_id"), "routes": routes},
             source=source,
         ))
     return blocks

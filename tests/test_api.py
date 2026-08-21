@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 
 from fastapi.testclient import TestClient
+from storage.repositories.route import RoutePlanStore
 
 
 def _prepare_api(tmp_path, monkeypatch, *, web_api_token: str = ""):
@@ -86,6 +87,32 @@ def test_strava_upload_uses_activity_key(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert calls == [("a1", {"title": None, "wait": True, "force": True})]
+
+
+def test_route_candidate_click_persists_preview_without_archiving_chat_turn(tmp_path, monkeypatch):
+    api, client, _ = _prepare_api(tmp_path, monkeypatch)
+    session = api.chat_sessions.get_or_create("route-session")
+    workspace_id = str(session.context.workspace_id)
+    stored = RoutePlanStore().save({
+        "schema_version": "route_plan.v1",
+        "plan_id": "route-click",
+        "workspace_id": workspace_id,
+        "active_candidate_id": "candidate_1",
+        "candidates": [
+            {"candidate_id": "candidate_1", "name": "一"},
+            {"candidate_id": "candidate_2", "name": "二"},
+        ],
+    })
+
+    response = client.post("/api/route-plans/select", json={
+        "session_id": "route-session",
+        "plan_id": stored["plan_id"],
+        "candidate_id": "candidate_2",
+    })
+
+    assert response.status_code == 200
+    assert response.json()["active_candidate_id"] == "candidate_2"
+    assert RoutePlanStore().get("route-click")["active_candidate_id"] == "candidate_2"
 
 
 def test_garmin_download_delegates_to_activity_operation(tmp_path, monkeypatch):

@@ -4,7 +4,11 @@ from unittest.mock import patch
 
 import pytest
 
-from services.route.segment_aware import apply_segment_aware_routing
+from services.route.segment_aware import (
+    apply_segment_aware_routing,
+    compose_route_with_segments,
+    reverse_segment_candidate,
+)
 from services.route.single_day import _encode_polyline
 
 
@@ -127,6 +131,30 @@ def test_auto_falls_back_to_baseline_when_selector_fails():
     assert plan["segment_aware_summary"]["composed_target_count"] == 0
 
 
+def test_proposal_mode_uses_discovered_segments_when_selector_output_fails():
+    with patch("services.route.segment_aware.AmapCyclingRouter", _FakeRouter):
+        plan = apply_segment_aware_routing(
+            _baseline_plan(),
+            strategy="auto",
+            access_token="token",
+            amap_key="amap-key",
+            request_text="给我几个湖岸候选",
+            include_elevation=False,
+            explorer=_explorer,
+            detail_fetcher=_detail,
+            selector=lambda payload: (_ for _ in ()).throw(ValueError("invalid JSON")),
+            preserve_baseline=True,
+        )
+
+    assert len(plan["candidates"]) == 2
+    baseline, proposed = plan["candidates"]
+    assert baseline["provider"] == "amap"
+    assert proposed["candidate_kind"] == "segment_variant"
+    assert proposed["segment_evidence"]["segment_ids"] == [101]
+    assert proposed["name"] == "经过 热门湖岸段"
+    assert any("智能筛选不可用" in warning for warning in baseline["warnings"])
+
+
 def test_require_rejects_empty_model_selection():
     with pytest.raises(RuntimeError, match="usable selection"):
         apply_segment_aware_routing(
@@ -140,3 +168,103 @@ def test_require_rejects_empty_model_selection():
             detail_fetcher=_detail,
             selector=lambda payload: {"selections": []},
         )
+
+
+def test_proposal_mode_keeps_baseline_and_adds_separate_strava_candidate():
+    with patch("services.route.segment_aware.AmapCyclingRouter", _FakeRouter):
+        plan = apply_segment_aware_routing(
+            _baseline_plan(),
+            strategy="auto",
+            access_token="token",
+            amap_key="amap-key",
+            request_text="给我几个湖岸候选",
+            include_elevation=True,
+            explorer=_explorer,
+            detail_fetcher=_detail,
+            selector=lambda payload: {"proposals": [{
+                "target_id": "candidate_1",
+                "name": "热门湖岸候选",
+                "reason": "经过热门湖岸段",
+                "segments": [{"segment_id": 101, "direction": "forward"}],
+            }]},
+            elevation_builder=lambda coordinates, distance: {"summary": {"samples": 2}},
+            preserve_baseline=True,
+        )
+
+    assert len(plan["candidates"]) == 2
+    baseline, proposed = plan["candidates"]
+    assert baseline["provider"] == "amap"
+    assert baseline["candidate_kind"] == "baseline"
+    assert proposed["provider"] == "amap+strava"
+    assert proposed["candidate_kind"] == "segment_variant"
+    assert proposed["parent_candidate_id"] == "candidate_1"
+    assert proposed["name"] == "热门湖岸候选"
+    assert proposed["elevation"] is None
+    assert plan["planning"] == {
+        "status": "awaiting_selection",
+        "confirmed_candidate_id": None,
+        "include_elevation": True,
+    }
+    assert plan["segment_pool"]["candidate_1"][0]["segment_id"] == 101
+
+
+def test_proposal_mode_rejects_candidate_far_from_target_distance():
+    class LongConnectorRouter(_FakeRouter):
+        def route(self, origin, destination):
+            return {
+                "distance_m": 20_000,
+                "duration_s": 3_600,
+                "geometry": [(origin.lon, origin.lat), (destination.lon, destination.lat)],
+            }
+
+    with patch("services.route.segment_aware.AmapCyclingRouter", LongConnectorRouter):
+        plan = apply_segment_aware_routing(
+            _baseline_plan(), strategy="auto", access_token="token", amap_key="amap-key",
+            request_text="参考热门路段", include_elevation=False, explorer=_explorer,
+            detail_fetcher=_detail,
+            selector=lambda payload: {"proposals": [{
+                "target_id": "candidate_1",
+                "segments": [{"segment_id": 101, "direction": "forward"}],
+            }]},
+            preserve_baseline=True,
+        )
+
+    assert len(plan["candidates"]) == 1
+    assert plan["candidates"][0]["provider"] == "amap"
+    assert any("未通过真实算路校验" in warning for warning in plan["candidates"][0]["warnings"])
+
+
+def test_explicit_segment_composition_reuses_saved_pool_and_records_order():
+    plan = _baseline_plan()
+    plan["segment_pool"] = {"candidate_1": [{
+        "segment_id": 101,
+        "name": "热门湖岸段",
+        "distance_km": 6.0,
+        "route_position_ratio": 0.5,
+        "suggested_direction": "forward",
+        "geometry": {"type": "LineString", "coordinates": [[120.07, 30.0], [120.13, 30.0]]},
+    }]}
+
+    with patch("services.route.segment_aware.AmapCyclingRouter", _FakeRouter):
+        updated = compose_route_with_segments(
+            plan,
+            candidate_id="candidate_1",
+            segments=[{"segment_id": 101, "direction": "reverse"}],
+            amap_key="amap-key",
+            detail_fetcher=_detail,
+        )
+
+    assert len(updated["candidates"]) == 2
+    custom = updated["candidates"][1]
+    assert custom["candidate_kind"] == "segment_custom"
+    assert custom["strava_segments"][0]["direction"] == "reverse"
+    assert updated["active_candidate_id"] == custom["candidate_id"]
+    assert updated["planning"]["segment_constraints"]["required"] == [
+        {"segment_id": 101, "direction": "reverse", "order": 1},
+    ]
+
+    reversed_plan = reverse_segment_candidate(updated)
+    reversed_candidate = reversed_plan["candidates"][1]
+    assert reversed_candidate["geometry"]["coordinates"] == list(reversed(custom["geometry"]["coordinates"]))
+    assert reversed_candidate["strava_segments"][0]["direction"] == "forward"
+    assert reversed_plan["planning"]["status"] == "awaiting_selection"

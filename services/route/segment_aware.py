@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, Callable, Sequence
+from uuid import uuid4
 
 from demo.gaode_cycling_router.amap import AmapCyclingRouter, AmapPoint
 from demo.gaode_cycling_router.coordinates import gcj02_to_wgs84, wgs84_to_gcj02
@@ -33,6 +34,8 @@ def apply_segment_aware_routing(
     detail_fetcher: DetailFetcher,
     selector: Selector,
     elevation_builder: ElevationBuilder | None = None,
+    preserve_baseline: bool = False,
+    max_proposals: int = 2,
 ) -> dict[str, Any]:
     """Enrich and optionally replace each baseline target with a Segment route.
 
@@ -98,67 +101,105 @@ def apply_segment_aware_routing(
             ],
         })
 
+    updated["segment_pool"] = {
+        target_id: [deepcopy(segment) for segment in segments]
+        for target_id, segments in available.items()
+    }
     package = {
         "schema_version": "route_segment_selection_request.v1",
         "request": request_text,
         "preferences": updated["segment_preferences"],
         "rules": {
             "anchors_are_hard_constraints": True,
-            "maximum_segments_per_target": 3,
+            "maximum_proposals_per_target": max(1, min(2, int(max_proposals))),
+            "maximum_segments_per_proposal": 2,
             "do_not_invent_segment_ids": True,
         },
         "targets": selection_targets,
     }
     try:
-        selections = _selection_map(selector(package), available)
+        proposals = _proposal_map(selector(package), available)
     except Exception as exc:  # noqa: BLE001 - auto mode explicitly degrades to the verified baseline
         if normalized_strategy == "require":
             raise RuntimeError(f"Strava route selection failed: {exc}") from exc
-        selections = {}
+        proposals = (
+            _deterministic_proposals(available, max_proposals=max_proposals)
+            if preserve_baseline else {}
+        )
         for _, target in targets:
-            _append_warning(target, f"Strava 路段选择失败，保留高德基准路线：{type(exc).__name__}")
+            if proposals.get(str(target.get("candidate_id") or target.get("stage_id") or "")):
+                _append_warning(
+                    target,
+                    f"Strava 智能筛选不可用，已用真实路段排序生成候选：{type(exc).__name__}",
+                )
+            else:
+                _append_warning(target, f"Strava 路段选择失败，保留高德基准路线：{type(exc).__name__}")
 
     router = AmapCyclingRouter(amap_key)
     composed_count = 0
+    proposed_candidates: list[dict[str, Any]] = []
     for target_id, target in targets:
-        choices = selections.get(target_id) or []
-        if not choices:
+        target_proposals = proposals.get(target_id) or []
+        if not target_proposals:
             if normalized_strategy == "require":
                 raise RuntimeError(f"Strava did not produce a usable selection for {target_id}")
             _append_warning(target, "未选择到适合当前锚点顺序的 Strava 路段，保留高德基准路线")
             continue
-        selected = []
-        by_id = {int(item["segment_id"]): item for item in available.get(target_id) or []}
-        for choice in choices:
-            segment_id = int(choice["segment_id"])
-            summary = by_id.get(segment_id)
-            if not summary:
-                continue
+        successful: list[dict[str, Any]] = []
+        for proposal_index, proposal in enumerate(target_proposals[:max_proposals], start=1):
             try:
-                feature = segment_detail_feature(detail_fetcher(segment_id))
-            except Exception:  # Explorer geometry is a bounded fallback when detail temporarily fails.
-                feature = _summary_feature(summary)
-            selected.append({
-                "summary": summary,
-                "feature": feature,
-                "direction": str(choice.get("direction") or summary.get("suggested_direction") or "forward"),
-            })
-        try:
-            composed = _compose_target(target, selected, router=router)
-        except Exception as exc:  # noqa: BLE001 - retain a real provider baseline in auto mode
-            if normalized_strategy == "require":
-                raise RuntimeError(f"Strava route composition failed for {target_id}: {exc}") from exc
-            _append_warning(target, f"Strava 路段连接失败，保留高德基准路线：{type(exc).__name__}")
-            continue
-        target.clear()
-        target.update(composed)
-        composed_count += 1
+                selected = _selected_segments(
+                    proposal["segments"], available.get(target_id) or [], detail_fetcher,
+                )
+                composed = _compose_target(target, selected, router=router)
+                if preserve_baseline:
+                    _validate_automatic_candidate(target, composed)
+                if preserve_baseline:
+                    composed.update({
+                        "candidate_id": f"{target_id}_segment_{proposal_index}",
+                        "candidate_kind": "segment_variant",
+                        "parent_candidate_id": target_id,
+                        "name": str(proposal.get("name") or f"{target.get('name') or '路线'} · Strava {proposal_index}"),
+                        "rationale": str(proposal.get("reason") or "包含真实 Strava 热门路段"),
+                    })
+                successful.append(composed)
+            except Exception as exc:  # noqa: BLE001 - invalid proposals never replace the provider baseline
+                if normalized_strategy == "require" and not preserve_baseline:
+                    raise RuntimeError(f"Strava route composition failed for {target_id}: {exc}") from exc
+                _append_warning(target, f"一个 Strava 候选未通过真实算路校验：{type(exc).__name__}")
+        if preserve_baseline:
+            target["candidate_kind"] = target.get("candidate_kind") or "baseline"
+            proposed_candidates.extend(successful)
+            composed_count += int(bool(successful))
+        elif successful:
+            target.clear()
+            target.update(successful[0])
+            composed_count += 1
+        elif normalized_strategy == "require":
+            raise RuntimeError(f"Strava did not produce a usable selection for {target_id}")
+
+    if preserve_baseline:
+        if any(isinstance(candidate.get("stages"), list) for candidate in updated.get("candidates") or []):
+            raise ValueError("proposal mode currently supports single-day candidates only")
+        updated["candidates"] = [
+            *[candidate for candidate in updated.get("candidates") or [] if isinstance(candidate, dict)],
+            *proposed_candidates,
+        ][:3]
+        updated["planning"] = {
+            **(updated.get("planning") if isinstance(updated.get("planning"), dict) else {}),
+            "status": "awaiting_selection",
+            "confirmed_candidate_id": None,
+            "include_elevation": bool(include_elevation),
+        }
 
     updated["segment_aware_summary"] = {
         "target_count": len(targets),
         "composed_target_count": composed_count,
         "fallback_target_count": len(targets) - composed_count,
+        "proposed_candidate_count": len(proposed_candidates) if preserve_baseline else composed_count,
     }
+    if preserve_baseline:
+        return updated
     return _add_final_elevation(updated, include_elevation, elevation_builder)
 
 
@@ -175,17 +216,23 @@ def _plan_targets(plan: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     return [(identifier, target) for identifier, target in targets if identifier]
 
 
-def _selection_map(
+def _proposal_map(
     payload: Any,
     available: dict[str, list[dict[str, Any]]],
 ) -> dict[str, list[dict[str, Any]]]:
     if not isinstance(payload, dict):
         raise ValueError("route selector must return an object")
+    raw_proposals = payload.get("proposals")
+    if not isinstance(raw_proposals, list):
+        # Backwards-compatible shape used by older clients and deterministic tests.
+        raw_proposals = payload.get("selections") or []
     result: dict[str, list[dict[str, Any]]] = {}
-    for selection in payload.get("selections") or []:
+    for selection in raw_proposals:
         if not isinstance(selection, dict):
             continue
         target_id = str(selection.get("target_id") or "")
+        if len(result.get(target_id) or []) >= 2:
+            continue
         valid_ids = {int(item["segment_id"]) for item in available.get(target_id) or []}
         choices = []
         for item in selection.get("segments") or []:
@@ -196,13 +243,239 @@ def _selection_map(
             except (TypeError, ValueError):
                 continue
             direction = str(item.get("direction") or "forward").lower()
-            if segment_id in valid_ids and direction in {"forward", "reverse"}:
+            if segment_id in valid_ids and direction in {"auto", "forward", "reverse"}:
                 choices.append({"segment_id": segment_id, "direction": direction})
-            if len(choices) >= 3:
+            if len(choices) >= 2:
                 break
         if choices:
-            result[target_id] = choices
+            result.setdefault(target_id, []).append({
+                "name": str(selection.get("name") or ""),
+                "reason": str(selection.get("reason") or ""),
+                "segments": choices,
+            })
     return result
+
+
+def _deterministic_proposals(
+    available: dict[str, list[dict[str, Any]]], *, max_proposals: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Build bounded alternatives from discovered IDs when selector output is unusable.
+
+    Discovery already ranks Segments by overlap and distance to the baseline.
+    Keeping one real Segment per fallback proposal avoids guessing combinations;
+    normal connector and distance validation still decides whether it is shown.
+    """
+    limit = max(1, min(2, int(max_proposals)))
+    result: dict[str, list[dict[str, Any]]] = {}
+    for target_id, segments in available.items():
+        proposals = []
+        for segment in segments[:limit]:
+            try:
+                segment_id = int(segment["segment_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            proposals.append({
+                "name": f"经过 {segment.get('name') or f'Strava Segment {segment_id}'}",
+                "reason": "智能筛选输出不可用，按与基准路线的重合度和距离生成",
+                "segments": [{
+                    "segment_id": segment_id,
+                    "direction": str(segment.get("suggested_direction") or "forward"),
+                }],
+            })
+        if proposals:
+            result[target_id] = proposals
+    return result
+
+
+def _selection_map(
+    payload: Any,
+    available: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Compatibility view returning the first proposal for each target."""
+    proposals = _proposal_map(payload, available)
+    return {
+        target_id: values[0]["segments"]
+        for target_id, values in proposals.items() if values
+    }
+
+
+def _selected_segments(
+    choices: Sequence[dict[str, Any]],
+    available: Sequence[dict[str, Any]],
+    detail_fetcher: DetailFetcher,
+) -> list[dict[str, Any]]:
+    by_id = {int(item["segment_id"]): item for item in available}
+    selected = []
+    for choice in choices:
+        segment_id = int(choice["segment_id"])
+        summary = by_id.get(segment_id)
+        if not summary:
+            raise ValueError(f"Strava Segment {segment_id} is not in the discovered pool")
+        try:
+            feature = segment_detail_feature(detail_fetcher(segment_id))
+        except Exception:  # Explorer geometry is a bounded fallback when detail temporarily fails.
+            feature = _summary_feature(summary)
+        direction = str(choice.get("direction") or "auto").lower()
+        if direction == "auto":
+            direction = str(summary.get("suggested_direction") or "forward")
+        selected.append({"summary": summary, "feature": feature, "direction": direction})
+    if not selected:
+        raise ValueError("at least one discovered Strava Segment is required")
+    return selected
+
+
+def _validate_automatic_candidate(baseline: dict[str, Any], candidate: dict[str, Any]) -> None:
+    baseline_distance = float(baseline.get("distance_m") or 0)
+    distance = float(candidate.get("distance_m") or 0)
+    target = baseline.get("target_distance_km")
+    if target is not None:
+        tolerance_km = max(5.0, float(target) * 0.30)
+        if abs(distance / 1000 - float(target)) > tolerance_km:
+            raise RuntimeError("Strava candidate is too far from the requested distance")
+    elif baseline_distance > 0 and distance / baseline_distance > 1.5:
+        raise RuntimeError("Strava candidate is more than 1.5x the baseline route")
+    connector_ratio = float((candidate.get("segment_evidence") or {}).get("connector_ratio") or 0)
+    if connector_ratio > 0.75:
+        raise RuntimeError("Strava candidate requires too much connector distance")
+
+
+def compose_route_with_segments(
+    plan: dict[str, Any],
+    *,
+    candidate_id: str | None,
+    segments: Sequence[dict[str, Any]],
+    amap_key: str,
+    detail_fetcher: DetailFetcher,
+    target_distance_km: float | None = None,
+    name: str = "",
+) -> dict[str, Any]:
+    """Create a new draft candidate from explicit, already-discovered Segment IDs."""
+    updated = deepcopy(plan)
+    candidates = [item for item in updated.get("candidates") or [] if isinstance(item, dict)]
+    selected_id = str(candidate_id or updated.get("active_candidate_id") or "")
+    selected_candidate = next(
+        (item for item in candidates if str(item.get("candidate_id") or "") == selected_id), None,
+    )
+    if selected_candidate is None:
+        raise ValueError("route candidate does not exist")
+    baseline_id = str(selected_candidate.get("parent_candidate_id") or selected_candidate.get("candidate_id") or "")
+    baseline = next(
+        (item for item in candidates if str(item.get("candidate_id") or "") == baseline_id), selected_candidate,
+    )
+    pools = updated.get("segment_pool") if isinstance(updated.get("segment_pool"), dict) else {}
+    available = pools.get(baseline_id) if isinstance(pools.get(baseline_id), list) else []
+    if not available:
+        raise ValueError("当前路线没有可复用的 Strava 路段池，请先查询附近路段")
+    choices = []
+    for item in segments:
+        if not isinstance(item, dict):
+            continue
+        choices.append({
+            "segment_id": item.get("segment_id"),
+            "direction": str(item.get("direction") or "auto"),
+        })
+    selected = _selected_segments(choices, available, detail_fetcher)
+    composition_base = dict(baseline)
+    if target_distance_km is not None:
+        composition_base["target_distance_km"] = float(target_distance_km)
+    composed = _compose_target(composition_base, selected, router=AmapCyclingRouter(amap_key))
+    baseline_distance = float(baseline.get("distance_m") or 0)
+    distance_ratio = float(composed.get("distance_m") or 0) / max(1.0, baseline_distance)
+    if distance_ratio > 1.5:
+        _append_warning(composed, f"用户指定路段使路线达到基础路线的 {distance_ratio:.1f} 倍，请确认距离是否可接受")
+    if target_distance_km is not None:
+        delta = abs(float(composed.get("distance_km") or 0) - float(target_distance_km))
+        if delta > max(5.0, float(target_distance_km) * 0.30):
+            _append_warning(composed, f"用户指定路段组合与目标距离相差 {delta:.1f} km，请确认是否接受")
+    custom_id = f"candidate_custom_{uuid4().hex[:8]}"
+    composed.update({
+        "candidate_id": custom_id,
+        "candidate_kind": "segment_custom",
+        "parent_candidate_id": baseline_id,
+        "name": str(name or "自选 Strava 路段路线"),
+        "rationale": "按用户指定的 Strava 路段顺序生成",
+    })
+    retained = [
+        item for item in candidates
+        if str(item.get("candidate_id") or "") != selected_id or selected_id == baseline_id
+    ]
+    if len(retained) >= 3:
+        retained = [item for item in retained if item.get("candidate_kind") == "baseline"][:1] + retained[-1:]
+    updated["candidates"] = [*retained, composed][:3]
+    updated["active_candidate_id"] = custom_id
+    updated["planning"] = {
+        **(updated.get("planning") if isinstance(updated.get("planning"), dict) else {}),
+        "status": "awaiting_selection",
+        "confirmed_candidate_id": None,
+        "segment_constraints": {
+            "required": [
+                {"segment_id": int(item["summary"]["segment_id"]), "direction": item["direction"], "order": index}
+                for index, item in enumerate(selected, start=1)
+            ],
+        },
+    }
+    return updated
+
+
+def reverse_segment_candidate(
+    plan: dict[str, Any], *, candidate_id: str | None = None,
+) -> dict[str, Any]:
+    """Reverse a composed Segment route without rediscovery or provider rerouting."""
+    updated = deepcopy(plan)
+    candidates = [item for item in updated.get("candidates") or [] if isinstance(item, dict)]
+    selected_id = str(candidate_id or updated.get("active_candidate_id") or "")
+    selected = next(
+        (item for item in candidates if str(item.get("candidate_id") or "") == selected_id), None,
+    )
+    if selected is None:
+        raise ValueError("route candidate does not exist")
+    coordinates = _coordinates(selected.get("geometry"))
+    route_type = str(selected.get("route_type") or "point_to_point")
+    queries = [str(value) for value in selected.get("waypoint_queries") or []]
+    waypoints = [dict(value) for value in selected.get("waypoints") or [] if isinstance(value, dict)]
+    if route_type == "loop":
+        reversed_queries = [queries[0], *reversed(queries[1:])] if queries else []
+        core = waypoints[:-1] if len(waypoints) > 1 and waypoints[0] == waypoints[-1] else waypoints
+        reversed_core = [core[0], *reversed(core[1:])] if core else []
+        reversed_waypoints = [*reversed_core, dict(reversed_core[0])] if reversed_core else []
+    else:
+        reversed_queries = list(reversed(queries))
+        reversed_waypoints = list(reversed(waypoints))
+    reversed_segments = []
+    for segment in reversed([item for item in selected.get("strava_segments") or [] if isinstance(item, dict)]):
+        geometry = segment.get("geometry") if isinstance(segment.get("geometry"), dict) else {}
+        segment_coordinates = geometry.get("coordinates") if isinstance(geometry.get("coordinates"), list) else []
+        direction = str(segment.get("direction") or "forward")
+        reversed_segments.append({
+            **segment,
+            "direction": "reverse" if direction != "reverse" else "forward",
+            "geometry": {**geometry, "coordinates": list(reversed(segment_coordinates))},
+        })
+    elevation = selected.get("elevation") if isinstance(selected.get("elevation"), dict) else None
+    if elevation and isinstance(elevation.get("elevations_m"), list):
+        elevation = {**elevation, "elevations_m": list(reversed(elevation["elevations_m"]))}
+    evidence = dict(selected.get("segment_evidence") or {})
+    if isinstance(evidence.get("segment_ids"), list):
+        evidence["segment_ids"] = list(reversed(evidence["segment_ids"]))
+    reversed_candidate = {
+        **selected,
+        "waypoint_queries": reversed_queries,
+        "waypoints": reversed_waypoints,
+        "geometry": {"type": "LineString", "coordinates": list(reversed(coordinates))},
+        "strava_segments": reversed_segments,
+        "segment_evidence": evidence,
+        "elevation": elevation,
+        "warnings": [*(selected.get("warnings") or []), "已反转完整路线、Strava 路段顺序和方向。"],
+    }
+    updated["candidates"] = [
+        reversed_candidate if item is selected else item for item in candidates
+    ]
+    updated["planning"] = {
+        **(updated.get("planning") if isinstance(updated.get("planning"), dict) else {}),
+        "status": "awaiting_selection",
+        "confirmed_candidate_id": None,
+    }
+    return updated
 
 
 def _compose_target(
@@ -272,7 +545,9 @@ def _compose_target(
         raise RuntimeError("selected segments require too much connector distance")
     warnings = [
         warning for warning in baseline.get("warnings") or []
-        if not str(warning).startswith("未选择到适合")
+        if not str(warning).startswith((
+            "未选择到适合", "Strava 路段选择失败", "一个 Strava 候选未通过",
+        ))
     ]
     warnings.extend([
         "路线包含 Strava 热门路段，路段之间由高德骑行连接",

@@ -95,10 +95,18 @@ def build_state_preamble(context: AgentContext) -> str:
                 segment_count = len(active.get("strava_segments") or []) if isinstance(active, dict) else 0
             if segment_count:
                 route_state += f"；已保存 {segment_count} 个 Strava 路段样本"
+            candidate_state = "；".join(
+                _compact_route_candidate_state(index, candidate)
+                for index, candidate in enumerate(candidates[:3], start=1)
+            )
+            planning = route_plan.get("planning") if isinstance(route_plan.get("planning"), dict) else {}
+            planning_status = str(planning.get("status") or "legacy")
+            confirmed_id = str(planning.get("confirmed_candidate_id") or "-")
             parts.append(
                 f"当前路线计划: {route_plan.get('plan_id')} rev{route_plan.get('revision')}；"
                 f"当前候选 {active_id or '-'}；Strava策略 {route_plan.get('segment_strategy') or 'ignore'}；"
-                f"{route_state}"
+                f"状态 {planning_status}；已确认候选 {confirmed_id}；{route_state}；"
+                f"候选列表: {candidate_state or '-'}"
             )
     workflow = last_workflow_result(context)
     if workflow:
@@ -113,6 +121,19 @@ def build_state_preamble(context: AgentContext) -> str:
             f"{report_job.get('completed', 0)}/{report_job.get('total', 0)}）"
         )
     return "\n".join(["[本轮状态]", *parts]) if parts else ""
+
+
+def _compact_route_candidate_state(index: int, candidate: dict[str, Any]) -> str:
+    segments = [
+        str(item.get("name") or item.get("segment_id") or "")
+        for item in candidate.get("strava_segments") or [] if isinstance(item, dict)
+    ]
+    return (
+        f"{index}.{candidate.get('candidate_id') or '-'} "
+        f"{candidate.get('name') or '-'} {candidate.get('distance_km') or 0}km "
+        f"类型={candidate.get('candidate_kind') or 'baseline'} "
+        f"路段={'+'.join(segments) or '无'}"
+    )
 
 
 def _compact_route_stage_state(stage: dict[str, Any]) -> str:

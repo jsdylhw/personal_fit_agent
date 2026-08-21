@@ -15,7 +15,11 @@ from services.route.itinerary import (
     refresh_itinerary_plan,
     replace_itinerary_stage,
 )
-from services.route.segment_aware import apply_segment_aware_routing
+from services.route.segment_aware import (
+    apply_segment_aware_routing,
+    compose_route_with_segments,
+    reverse_segment_candidate,
+)
 from services.route.segments import enrich_route_plan_with_segments
 from services.route.popular_loop import create_popular_loop_plan, reverse_popular_loop_plan
 from services.route.single_day import (
@@ -105,7 +109,10 @@ def create_route_plan_tool(
             strategy=segment_strategy,
             preferences=args.get("segment_preferences") or [],
             include_elevation=bool(args.get("include_elevation", True)),
+            proposal_mode=True,
         )
+    else:
+        plan = _mark_route_proposed(plan, include_elevation=bool(args.get("include_elevation", True)))
     stored = RoutePlanStore().save(plan)
     compact = compact_route_plan(stored)
     return {
@@ -209,21 +216,59 @@ def update_route_plan_tool(
             "answer": _plan_answer(compact, prefix="已撤销到上一版"),
             "result": compact,
         }
-    if plan.get("route_mode") == "popular_loop" and operation not in {"reverse_candidate", "select_candidate"}:
+    if plan.get("route_mode") == "popular_loop" and operation not in {
+        "reverse_candidate", "select_candidate", "confirm_candidate",
+    }:
         raise ValueError("热门环线更换起点、区域或名称时请重新调用 create_popular_loop")
     segment_strategy = str(args.get("segment_strategy") or plan.get("segment_strategy") or "ignore").lower()
+    staged_plan = plan.get("schedule_type") in {"multi_day", "day_parts"}
     segment_active = (
         str(plan.get("country_code") or "").upper() == "CN"
         and segment_strategy != "ignore"
-        and operation != "select_candidate"
+        and operation not in {"select_candidate", "confirm_candidate", "compose_segments"}
+        and (staged_plan or "segment_strategy" in args)
     )
-    route_include_elevation = bool(args.get("include_elevation", True)) and not segment_active
+    planning = plan.get("planning") if isinstance(plan.get("planning"), dict) else {}
+    defer_elevation = not staged_plan and planning.get("status") == "awaiting_selection"
+    route_include_elevation = (
+        bool(args.get("include_elevation", True)) and not segment_active and not defer_elevation
+    )
     if operation == "select_candidate":
         selected_id = str(args.get("candidate_id") or "")
         valid_ids = {str(item.get("candidate_id")) for item in plan.get("candidates") or [] if isinstance(item, dict)}
         if selected_id not in valid_ids:
             raise ValueError("route candidate does not exist")
         plan = {**plan, "active_candidate_id": selected_id}
+    elif operation == "confirm_candidate":
+        selected_id = str(args.get("candidate_id") or plan.get("active_candidate_id") or "")
+        valid_ids = {str(item.get("candidate_id")) for item in plan.get("candidates") or [] if isinstance(item, dict)}
+        if selected_id not in valid_ids:
+            raise ValueError("route candidate does not exist")
+        include_elevation = (
+            bool(args["include_elevation"])
+            if "include_elevation" in args
+            else bool(planning.get("include_elevation", True))
+        )
+        plan = _confirm_route_candidate(plan, selected_id, include_elevation=include_elevation)
+    elif operation == "compose_segments":
+        if plan.get("schedule_type") in {"multi_day", "day_parts"}:
+            raise ValueError("compose_segments currently supports single-day routes only")
+        config = load_config()
+        amap = config.get("amap") if isinstance(config.get("amap"), dict) else {}
+        amap_key = str(amap.get("web_service_key") or "")
+        if not amap_key:
+            raise ValueError("amap.web_service_key is not configured")
+        sink = StravaSink(config)
+        segment_args = args.get("segments") if isinstance(args.get("segments"), list) else []
+        plan = compose_route_with_segments(
+            plan,
+            candidate_id=str(args.get("candidate_id") or "") or None,
+            segments=segment_args,
+            amap_key=amap_key,
+            detail_fetcher=lambda segment_id: sink.get_segment(segment_id),
+            target_distance_km=args.get("target_distance_km"),
+            name=str(args.get("candidate_name") or ""),
+        )
     elif operation == "replace_waypoints":
         if plan.get("schedule_type") in {"multi_day", "day_parts"}:
             raise ValueError("分段行程请使用 replace_stage")
@@ -260,12 +305,22 @@ def update_route_plan_tool(
             )
             segment_active = False
         else:
-            plan = edit_candidate_waypoints(
-                plan,
-                candidate_id=str(args.get("candidate_id") or "") or None,
-                operation="reverse",
-                include_elevation=route_include_elevation,
+            selected_id = str(args.get("candidate_id") or plan.get("active_candidate_id") or "")
+            selected = next(
+                (item for item in plan.get("candidates") or []
+                 if isinstance(item, dict) and str(item.get("candidate_id") or "") == selected_id),
+                None,
             )
+            if isinstance(selected, dict) and selected.get("strava_segments"):
+                plan = reverse_segment_candidate(plan, candidate_id=selected_id)
+                segment_active = False
+            else:
+                plan = edit_candidate_waypoints(
+                    plan,
+                    candidate_id=selected_id or None,
+                    operation="reverse",
+                    include_elevation=route_include_elevation,
+                )
     elif operation == "reverse_stage":
         if plan.get("schedule_type") not in {"multi_day", "day_parts"}:
             raise ValueError("reverse_stage requires a multi-day or day-parts plan")
@@ -295,7 +350,8 @@ def update_route_plan_tool(
     else:
         raise ValueError(
             "operation must be replace_waypoints, replace_stage, replace_waypoint, "
-            "reverse_candidate, reverse_stage, select_candidate or undo"
+            "reverse_candidate, reverse_stage, select_candidate, compose_segments, "
+            "confirm_candidate or undo"
         )
     if segment_active:
         plan = _apply_segment_strategy(
@@ -307,7 +363,11 @@ def update_route_plan_tool(
         )
         if plan.get("schedule_type") in {"multi_day", "day_parts"}:
             plan = refresh_itinerary_plan(plan)
-    stored = store.save(plan)
+    stored = (
+        store.save(plan, archive=False)
+        if operation == "select_candidate"
+        else store.save(plan)
+    )
     compact = compact_route_plan(stored)
     return {
         "step": name,
@@ -395,11 +455,17 @@ def _plan_answer(plan: dict[str, Any], *, prefix: str) -> str:
     candidates = [item for item in plan.get("candidates") or [] if isinstance(item, dict)]
     active_id = plan.get("active_candidate_id")
     active = next((item for item in candidates if item.get("candidate_id") == active_id), candidates[0] if candidates else {})
-    return (
+    answer = (
         f"{prefix}：{plan.get('title') or '单日路线'}；"
         f"当前候选 {active.get('name') or '-'}，{active.get('distance_km') or 0} km，"
         f"预计 {active.get('duration_min') or 0} 分钟。"
     )
+    planning = plan.get("planning") if isinstance(plan.get("planning"), dict) else {}
+    if planning.get("status") == "awaiting_selection":
+        answer += f" 当前共有 {len(candidates)} 条候选，尚未最终确认；可以选择候选或继续按语义修改。"
+    elif planning.get("status") == "confirmed":
+        answer += " 该候选已确认保存。"
+    return answer
 
 
 def _request_route_advice(system: str, user: str) -> str:
@@ -420,6 +486,7 @@ def _apply_segment_strategy(
     strategy: str,
     preferences: Any,
     include_elevation: bool,
+    proposal_mode: bool = False,
 ) -> dict[str, Any]:
     config = load_config()
     amap = config.get("amap") if isinstance(config.get("amap"), dict) else {}
@@ -439,6 +506,7 @@ def _apply_segment_strategy(
             detail_fetcher=lambda segment_id: sink.get_segment(segment_id),
             selector=_request_segment_selection,
             elevation_builder=elevation_builder,
+            preserve_baseline=proposal_mode,
         )
     except Exception as exc:  # noqa: BLE001 - auto deliberately retains the provider baseline
         if strategy == "require":
@@ -463,6 +531,8 @@ def _apply_segment_strategy(
             "fallback_target_count": 0,
             "error": type(exc).__name__,
         }
+        if proposal_mode:
+            fallback = _mark_route_proposed(fallback, include_elevation=include_elevation)
         for candidate in fallback.get("candidates") or []:
             targets = candidate.get("stages") or [candidate]
             for target in targets:
@@ -477,9 +547,12 @@ def _request_segment_selection(payload: dict[str, Any]) -> dict[str, Any]:
     response = AnthropicMessagesClient().create_message(
         system=(
             "You select a small set of real Strava cycling Segments for already resolved route anchors. "
-            "Return JSON only with schema {\"selections\":[{\"target_id\":str,"
-            "\"segments\":[{\"segment_id\":int,\"direction\":\"forward|reverse\"}]}]}. "
-            "Never invent ids. Select at most 3 per target. Prefer high route_overlap_ratio, low "
+            "Return JSON only with schema {\"proposals\":[{\"target_id\":str,\"name\":str,"
+            "\"reason\":str,\"segments\":[{\"segment_id\":int,"
+            "\"direction\":\"auto|forward|reverse\"}]}]}. "
+            "Never invent ids. Return at most 2 proposals per target and at most 2 coherent segments per proposal. "
+            "Each proposal is a separate route alternative; do not put every relevant segment into one route. "
+            "Prefer high route_overlap_ratio, low "
             "distance_to_route_km, coherent route_position_ratio, and the user's stated preferences. "
             "It is valid to return an empty segment list when evidence is weak."
         ),
@@ -488,6 +561,54 @@ def _request_segment_selection(payload: dict[str, Any]) -> dict[str, Any]:
         temperature=0.2,
     )
     return _json_object(extract_text(response))
+
+
+def _mark_route_proposed(plan: dict[str, Any], *, include_elevation: bool) -> dict[str, Any]:
+    candidates = []
+    for candidate in plan.get("candidates") or []:
+        if isinstance(candidate, dict):
+            candidates.append({**candidate, "candidate_kind": candidate.get("candidate_kind") or "baseline"})
+    return {
+        **plan,
+        "candidates": candidates,
+        "planning": {
+            **(plan.get("planning") if isinstance(plan.get("planning"), dict) else {}),
+            "status": "awaiting_selection",
+            "confirmed_candidate_id": None,
+            "include_elevation": bool(include_elevation),
+        },
+    }
+
+
+def _confirm_route_candidate(
+    plan: dict[str, Any], candidate_id: str, *, include_elevation: bool,
+) -> dict[str, Any]:
+    config = load_config()
+    candidates = []
+    for candidate in plan.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        updated = dict(candidate)
+        if str(candidate.get("candidate_id") or "") == candidate_id and include_elevation and not candidate.get("elevation"):
+            geometry = candidate.get("geometry") if isinstance(candidate.get("geometry"), dict) else {}
+            coordinates = geometry.get("coordinates") if isinstance(geometry.get("coordinates"), list) else []
+            try:
+                updated["elevation"] = _elevation_profile(
+                    coordinates, float(candidate.get("distance_m") or 0), config,
+                )
+            except (RuntimeError, ValueError) as exc:
+                updated["warnings"] = [*(candidate.get("warnings") or []), f"海拔请求失败：{exc}"]
+        candidates.append(updated)
+    return {
+        **plan,
+        "active_candidate_id": candidate_id,
+        "candidates": candidates,
+        "planning": {
+            **(plan.get("planning") if isinstance(plan.get("planning"), dict) else {}),
+            "status": "confirmed",
+            "confirmed_candidate_id": candidate_id,
+        },
+    }
 
 
 def _json_object(text: str) -> dict[str, Any]:
@@ -524,7 +645,6 @@ def _latest_user_message(context: AgentContext) -> str:
 
 
 HANDLERS = {
-    "generate_route_advice": generate_route_advice,
     "create_popular_loop": create_popular_loop,
     "create_route_plan": create_route_plan,
     "create_itinerary_plan": create_itinerary_plan,

@@ -53,9 +53,10 @@ button.primary:hover:not(:disabled) {
 }
 
 .shell {
-  width: min(1280px, calc(100vw - 32px));
+  width: 100%;
+  max-width: none;
   margin: 0 auto;
-  padding: 20px 0 32px;
+  padding: 8px 10px 20px;
 }
 
 .topbar,
@@ -157,13 +158,16 @@ p,
 
 .chat-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 0.9fr) minmax(420px, 1.1fr);
-  min-height: 420px;
+  grid-template-columns: minmax(300px, 0.75fr) minmax(480px, 1.25fr);
+  height: clamp(520px, calc(100vh - 220px), 760px);
+  max-height: 760px;
+  min-height: 0;
 }
 
 .conversation-column,
 .presentation-column {
   min-width: 0;
+  min-height: 0;
   padding: 14px;
 }
 
@@ -171,10 +175,15 @@ p,
   display: grid;
   grid-template-rows: minmax(260px, 1fr) auto;
   border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.presentation-column {
+  overflow: auto;
 }
 
 .chat-messages {
-  max-height: 520px;
+  min-height: 0;
   overflow: auto;
   padding-right: 4px;
 }
@@ -336,6 +345,35 @@ p,
   border-radius: 8px;
   overflow: hidden;
   background: #eef2f3;
+}
+
+.route-map-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.route-map-hint {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.route-map-choice {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 6px 12px;
+}
+
+.route-map-choice.active {
+  border-color: var(--accent);
+  background: #e7f5f2;
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .chart-series {
@@ -552,9 +590,19 @@ p,
     grid-template-columns: 1fr;
   }
 
+  .chat-layout {
+    height: auto;
+  }
+
   .conversation-column {
+    height: min(620px, calc(100vh - 120px));
+    min-height: 420px;
     border-right: 0;
     border-bottom: 1px solid var(--border);
+  }
+
+  .presentation-column {
+    overflow: visible;
   }
 
   .summary-grid {
@@ -564,7 +612,8 @@ p,
 
 @media (max-width: 560px) {
   .shell {
-    width: calc(100vw - 20px);
+    width: 100%;
+    padding-inline: 6px;
   }
 
   .topbar {
