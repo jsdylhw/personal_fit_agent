@@ -17,6 +17,7 @@ Use this Skill when the user asks for an actual route but has not supplied a com
 - When the selected idea spans days or morning/afternoon stages, call `create_itinerary_plan`.
 - Use plausible named landmarks as candidate hypotheses, but report only provider-resolved routes as actual candidates. Ask for a start point when it materially changes the route.
 - Offer at most three meaningfully different complete-route candidates and distinguish their actual distance, duration, terrain intent, provider warnings, and included Strava Segments. Users choose routes, while displayed Segments are reusable route material and evidence.
+- For the initial open-ended discovery, put all 2-3 alternatives in the `candidates` array of one `create_route_plan` call. Do not call `create_route_plan` once per alternative and do not repeat the tool merely to restate the same route.
 - The first route creation is a draft awaiting selection. After the user selects one candidate, edit that route incrementally instead of restarting broad discovery; restart only when the requested geography or route concept materially changes.
 
 Use `update_route_plan` for subsequent concrete edits, explicit Segment composition, selection, confirmation, and undo. Use `get_route_plan` to restore a saved draft or confirmed plan.

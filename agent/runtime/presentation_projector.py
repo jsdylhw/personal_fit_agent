@@ -112,6 +112,7 @@ def _route_plan_blocks(
                 continue
             routes.append({
                 "candidate_id": item.get("candidate_id"),
+                "parent_candidate_id": item.get("parent_candidate_id"),
                 "stage_id": segment.get("stage_id"),
                 "kind": "planned_route",
                 "name": (
@@ -137,6 +138,7 @@ def _route_plan_blocks(
             title="路线与 Strava 路段",
             data={
                 "plan_id": plan.get("plan_id"),
+                "country_code": plan.get("country_code"),
                 "planning_status": (
                     (plan.get("planning") or {}).get("status")
                     if isinstance(plan.get("planning"), dict) else None
@@ -181,7 +183,7 @@ def _route_pool_blocks(
 ) -> list[PresentationBlock]:
     pools = plan.get("segment_pool") if isinstance(plan.get("segment_pool"), dict) else {}
     segments: dict[int, dict[str, Any]] = {}
-    for values in pools.values():
+    for target_id, values in pools.items():
         for segment in values if isinstance(values, list) else []:
             if not isinstance(segment, dict):
                 continue
@@ -189,7 +191,11 @@ def _route_pool_blocks(
                 segment_id = int(segment.get("segment_id"))
             except (TypeError, ValueError):
                 continue
-            segments.setdefault(segment_id, segment)
+            if segment_id not in segments:
+                segments[segment_id] = {**segment, "candidate_ids": []}
+            candidate_ids = segments[segment_id]["candidate_ids"]
+            if str(target_id) not in candidate_ids:
+                candidate_ids.append(str(target_id))
     if not segments:
         return []
     rows = []
@@ -203,12 +209,14 @@ def _route_pool_blocks(
             "elevation_difference_m": segment.get("elevation_difference_m"),
             "distance_to_route_km": segment.get("distance_to_route_km"),
             "route_overlap_ratio": segment.get("route_overlap_ratio"),
+            "candidate_ids": segment.get("candidate_ids") or [],
         })
         geometry = segment.get("geometry") if isinstance(segment.get("geometry"), dict) else {}
         coordinates = geometry.get("coordinates") if isinstance(geometry.get("coordinates"), list) else []
         if len(coordinates) >= 2:
             routes.append({
                 "segment_id": segment_id,
+                "candidate_ids": segment.get("candidate_ids") or [],
                 "name": f"Strava · {segment.get('name') or segment_id}",
                 "kind": "strava_segment",
                 "active": False,
@@ -223,6 +231,7 @@ def _route_pool_blocks(
             "columns": [
                 "segment_id", "segment_name", "distance_km", "average_grade_percent",
                 "elevation_difference_m", "distance_to_route_km", "route_overlap_ratio",
+                "candidate_ids",
             ],
             "rows": rows,
         },

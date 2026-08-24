@@ -7,6 +7,8 @@ description: Create and edit routes with explicit endpoints, waypoint sequences,
 
 Use `create_route_plan` for a concrete single-day route with one to three meaningfully different waypoint sequences. Use `create_itinerary_plan` for multiple days or one day split into morning and afternoon.
 
+When alternatives are requested, submit them together in one tool call's `candidates` array. Never create one independent plan per candidate.
+
 - Mainland China uses AMap bicycling; other countries use Google Places and Google Routes.
 - A `loop` closes itself. Never repeat the first waypoint at the end.
 - Every landmark or corridor explicitly required by the user must be an explicit waypoint.

@@ -544,12 +544,16 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         input_schema={
             "type": "object",
             "properties": {
-                "count": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                "count": {
+                    "type": "integer", "minimum": 1, "maximum": 20,
+                    "description": "必须严格等于用户要求的活动数量；最新一个/最后一个/最新一条必须为 1。",
+                },
                 "force_download": {
                     "type": "boolean", "default": False,
                     "description": "仅当用户明确要求刷新同一条 Garmin 活动的原始 FIT 时使用；新增活动不需要。",
                 },
             },
+            "required": ["count"],
         },
         category=CATEGORY_OPERATION,
     ),
@@ -564,7 +568,10 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
         input_schema={
             "type": "object",
             "properties": {
-                "count": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                "count": {
+                    "type": "integer", "minimum": 1, "maximum": 20,
+                    "description": "必须严格等于用户要求的活动数量；最新一个/最后一个/最新一条必须为 1。",
+                },
                 "force_download": {
                     "type": "boolean", "default": False,
                     "description": "重新下载本地已有的同一 Garmin 活动；不要把普通的新活动同步设为 true。",
@@ -576,6 +583,7 @@ MAIN_AGENT_TOOLS: tuple[ToolDef, ...] = (
                 "force": {"type": "boolean", "default": False},
                 "force_upload": {"type": "boolean", "default": False},
             },
+            "required": ["count", "goals"],
         },
         category=CATEGORY_WORKFLOW,
     ),

@@ -268,3 +268,48 @@ def test_explicit_segment_composition_reuses_saved_pool_and_records_order():
     assert reversed_candidate["geometry"]["coordinates"] == list(reversed(custom["geometry"]["coordinates"]))
     assert reversed_candidate["strava_segments"][0]["direction"] == "forward"
     assert reversed_plan["planning"]["status"] == "awaiting_selection"
+
+
+def test_explicit_segment_composition_preserves_requested_order_not_route_position():
+    plan = _baseline_plan()
+    plan["segment_pool"] = {"candidate_1": [{
+        "segment_id": 101,
+        "name": "后半程路段",
+        "distance_km": 2.0,
+        "route_position_ratio": 0.8,
+        "suggested_direction": "forward",
+        "geometry": {"type": "LineString", "coordinates": [[120.14, 30.0], [120.16, 30.0]]},
+    }, {
+        "segment_id": 202,
+        "name": "前半程路段",
+        "distance_km": 2.0,
+        "route_position_ratio": 0.2,
+        "suggested_direction": "forward",
+        "geometry": {"type": "LineString", "coordinates": [[120.04, 30.0], [120.06, 30.0]]},
+    }]}
+
+    def detail(segment_id):
+        coordinates = (
+            [(120.14, 30.0), (120.16, 30.0)]
+            if segment_id == 101 else [(120.04, 30.0), (120.06, 30.0)]
+        )
+        return {
+            "id": segment_id,
+            "name": str(segment_id),
+            "distance": 2_000,
+            "map": {"polyline": _encode_polyline(coordinates)},
+        }
+
+    with patch("services.route.segment_aware.AmapCyclingRouter", _FakeRouter):
+        updated = compose_route_with_segments(
+            plan,
+            candidate_id="candidate_1",
+            segments=[{"segment_id": 101}, {"segment_id": 202}],
+            amap_key="amap-key",
+            detail_fetcher=detail,
+        )
+
+    custom = next(item for item in updated["candidates"] if item.get("candidate_kind") == "segment_custom")
+    assert [item["segment_id"] for item in custom["strava_segments"]] == [101, 202]
+    geometry = custom["geometry"]["coordinates"]
+    assert geometry.index([120.14, 30.0]) < geometry.index([120.04, 30.0])

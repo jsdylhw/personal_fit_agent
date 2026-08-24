@@ -18,6 +18,13 @@ from pydantic import BaseModel, Field
 
 from agent.main_agent.loop import run_tool_loop
 from agent.runtime.models import public_turn_dict
+from agent.runtime.models import ToolExecution
+from agent.runtime.presentation_projector import project_presentations
+from agent.tools.handlers.route import (
+    explore_route_segments_tool,
+    get_route_plan_tool,
+    update_route_plan_tool,
+)
 from app.chat_sessions import ChatSessionStore
 from settings import cfg_get, load_config
 from domain.analysis.artifacts import get_analysis_summary, summary_schema_version
@@ -68,6 +75,18 @@ class SelectRouteCandidateRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     plan_id: str = Field(min_length=1, max_length=128)
     candidate_id: str = Field(min_length=1, max_length=128)
+
+
+class RoutePlanCommandRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    plan_id: str | None = Field(default=None, max_length=128)
+    operation: str = Field(min_length=1, max_length=64)
+    candidate_id: str | None = Field(default=None, max_length=128)
+    candidate_name: str | None = Field(default=None, max_length=200)
+    target_distance_km: float | None = Field(default=None, gt=0)
+    segments: list[dict[str, Any]] = Field(default_factory=list, max_length=3)
+    corridor_km: float = Field(default=5.0, ge=0.1, le=20)
+    max_segments: int = Field(default=12, ge=1, le=20)
 
 
 @app.get("/")
@@ -225,6 +244,68 @@ def select_route_candidate_endpoint(
             raise HTTPException(status_code=404, detail="Route candidate does not exist.")
         stored = store.save({**plan, "active_candidate_id": request.candidate_id}, archive=False)
         return compact_route_plan(stored)
+
+
+@app.post("/api/route-plans/command")
+def route_plan_command_endpoint(
+    request: RoutePlanCommandRequest,
+    http_request: Request,
+) -> dict[str, Any]:
+    """Run a deterministic, allowlisted route operation for a durable session."""
+    _require_api_access(http_request)
+    session = chat_sessions.get_or_create(request.session_id)
+    with session.lock:
+        try:
+            return _run_route_plan_command(session.context, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _run_route_plan_command(context: Any, request: RoutePlanCommandRequest) -> dict[str, Any]:
+    args: dict[str, Any] = {
+        "plan_id": request.plan_id or "",
+        "candidate_id": request.candidate_id or "",
+    }
+    operation = request.operation.strip().lower()
+    if operation == "get":
+        primary = get_route_plan_tool(context, args=args)
+    elif operation == "explore_segments":
+        primary = explore_route_segments_tool(context, args={
+            **args,
+            "corridor_km": request.corridor_km,
+            "max_segments": request.max_segments,
+        })
+    else:
+        mapped = {
+            "select": "select_candidate",
+            "confirm": "confirm_candidate",
+            "reverse": "reverse_candidate",
+            "undo": "undo",
+            "compose_segments": "compose_segments",
+        }.get(operation)
+        if not mapped:
+            raise HTTPException(status_code=400, detail="Unsupported route operation.")
+        if mapped == "compose_segments" and not request.segments:
+            raise HTTPException(status_code=400, detail="segments are required for compose_segments.")
+        primary = update_route_plan_tool(context, args={
+            **args,
+            "operation": mapped,
+            "include_elevation": False,
+            "candidate_name": request.candidate_name or "",
+            "target_distance_km": request.target_distance_km,
+            "segments": request.segments,
+        })
+    plan_result = get_route_plan_tool(context, args={"plan_id": request.plan_id or ""})
+    presentations = project_presentations([ToolExecution(
+        index=0,
+        tool="get_route_plan",
+        result=plan_result,
+    )])
+    return {
+        "answer": primary.get("answer") or "",
+        "result": plan_result.get("result") or {},
+        "presentations": [item.to_dict() for item in presentations],
+    }
 
 
 def _fit_output_dir(config: dict[str, Any]) -> Path:

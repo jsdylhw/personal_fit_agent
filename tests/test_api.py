@@ -115,6 +115,60 @@ def test_route_candidate_click_persists_preview_without_archiving_chat_turn(tmp_
     assert RoutePlanStore().get("route-click")["active_candidate_id"] == "candidate_2"
 
 
+def test_route_command_get_and_confirm_return_full_presentations(tmp_path, monkeypatch):
+    api, client, _ = _prepare_api(tmp_path, monkeypatch)
+    session = api.chat_sessions.get_or_create("route-command")
+    stored = RoutePlanStore().save({
+        "schema_version": "route_plan.v1",
+        "plan_id": "route-command-plan",
+        "workspace_id": str(session.context.workspace_id),
+        "title": "虚拟路线",
+        "schedule_type": "single_day",
+        "active_candidate_id": "candidate_1",
+        "planning": {"status": "awaiting_selection", "include_elevation": False},
+        "candidates": [{
+            "candidate_id": "candidate_1",
+            "name": "候选一",
+            "distance_km": 20,
+            "duration_min": 60,
+            "provider": "Google",
+            "travel_mode": "BICYCLE",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[121.0, 31.0], [121.1, 31.1]],
+            },
+            "waypoints": [],
+        }],
+    })
+
+    current = client.post("/api/route-plans/command", json={
+        "session_id": "route-command",
+        "plan_id": stored["plan_id"],
+        "operation": "get",
+    })
+    confirmed = client.post("/api/route-plans/command", json={
+        "session_id": "route-command",
+        "plan_id": stored["plan_id"],
+        "candidate_id": "candidate_1",
+        "operation": "confirm",
+    })
+
+    assert current.status_code == 200
+    assert {item["type"] for item in current.json()["presentations"]} == {"table", "route_map"}
+    assert confirmed.status_code == 200
+    assert confirmed.json()["result"]["planning"]["status"] == "confirmed"
+    assert RoutePlanStore().get(stored["plan_id"])["planning"]["confirmed_candidate_id"] == "candidate_1"
+
+
+def test_route_command_rejects_unsupported_operation(tmp_path, monkeypatch):
+    _, client, _ = _prepare_api(tmp_path, monkeypatch)
+    response = client.post("/api/route-plans/command", json={
+        "session_id": "route-command",
+        "operation": "delete_everything",
+    })
+    assert response.status_code == 400
+
+
 def test_garmin_download_delegates_to_activity_operation(tmp_path, monkeypatch):
     api, client, fit_dir = _prepare_api(tmp_path, monkeypatch)
     calls = []

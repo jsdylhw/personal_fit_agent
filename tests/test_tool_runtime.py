@@ -150,6 +150,15 @@ def test_main_agent_exposes_explicit_detail_query_instead_of_implicit_targeted_a
     assert "user_request" not in next(tool for tool in MAIN_AGENT_TOOLS if tool.name == "analyze_activity").input_schema["properties"]
 
 
+def test_garmin_sync_tools_require_structured_activity_count_and_workflow_goals():
+    schemas = {tool.name: tool.input_schema for tool in MAIN_AGENT_TOOLS}
+
+    assert schemas["sync_garmin_activities"]["required"] == ["count"]
+    assert "default" not in schemas["sync_garmin_activities"]["properties"]["count"]
+    assert schemas["sync_and_run_activity_workflow"]["required"] == ["count", "goals"]
+    assert "default" not in schemas["sync_and_run_activity_workflow"]["properties"]["count"]
+
+
 def test_history_metrics_handler_uses_selected_activities(monkeypatch):
     captured = {}
 
