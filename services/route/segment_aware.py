@@ -378,7 +378,12 @@ def compose_route_with_segments(
     composition_base = dict(baseline)
     if target_distance_km is not None:
         composition_base["target_distance_km"] = float(target_distance_km)
-    composed = _compose_target(composition_base, selected, router=AmapCyclingRouter(amap_key))
+    composed = _compose_target(
+        composition_base,
+        selected,
+        router=AmapCyclingRouter(amap_key),
+        preserve_segment_order=True,
+    )
     baseline_distance = float(baseline.get("distance_m") or 0)
     distance_ratio = float(composed.get("distance_m") or 0) / max(1.0, baseline_distance)
     if distance_ratio > 1.5:
@@ -483,14 +488,15 @@ def _compose_target(
     selected: list[dict[str, Any]],
     *,
     router: AmapCyclingRouter,
+    preserve_segment_order: bool = False,
 ) -> dict[str, Any]:
     if not selected:
         raise ValueError("at least one selected segment is required")
     baseline_geometry = _coordinates(baseline.get("geometry"))
     anchors = _anchor_events(baseline, baseline_geometry)
-    events: list[tuple[float, int, str, Any]] = [
-        (ratio, 1, "anchor", point) for ratio, point in anchors[1:]
-    ]
+    events: list[tuple[float, int, str, Any]] = []
+    if not preserve_segment_order:
+        events.extend((ratio, 1, "anchor", point) for ratio, point in anchors[1:])
     persisted_segments = []
     for item in selected:
         summary = item["summary"]
@@ -499,7 +505,11 @@ def _compose_target(
         direction = item["direction"]
         if direction == "reverse":
             coordinates = list(reversed(coordinates))
-        position = float(summary.get("route_position_ratio") or 0)
+        position = (
+            float(len(events))
+            if preserve_segment_order
+            else float(summary.get("route_position_ratio") or 0)
+        )
         events.append((position, 0, "segment", coordinates))
         properties = feature.get("properties") if isinstance(feature.get("properties"), dict) else {}
         persisted_segments.append({
@@ -508,7 +518,10 @@ def _compose_target(
             "distance_km": round(float(properties.get("distance_m") or summary.get("distance_km", 0) * 1000) / 1000, 2),
             "geometry": {"type": "LineString", "coordinates": coordinates},
         })
-    events.sort(key=lambda item: (item[0], item[1]))
+    if preserve_segment_order:
+        events.append((float(len(events)), 1, "anchor", anchors[-1][1]))
+    else:
+        events.sort(key=lambda item: (item[0], item[1]))
 
     geometry: list[list[float]] = []
     connector_distance_m = connector_duration_s = segment_distance_m = 0.0
@@ -542,7 +555,7 @@ def _compose_target(
     duration_s = connector_duration_s + segment_distance_m / max(2.5, speed_mps)
     connector_ratio = connector_distance_m / max(1.0, distance_m)
     if connector_ratio > 0.9:
-        raise RuntimeError("selected segments require too much connector distance")
+        raise ValueError("selected segments require too much connector distance")
     warnings = [
         warning for warning in baseline.get("warnings") or []
         if not str(warning).startswith((
